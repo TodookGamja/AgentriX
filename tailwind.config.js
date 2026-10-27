@@ -4,6 +4,7 @@
 const slateVar = (shade) => `rgb(var(--slate-${shade}) / <alpha-value>)`;
 
 export default {
+  darkMode: "class",
   content: ["./index.html", "./src/**/*.{js,ts,jsx,tsx}"],
   theme: {
     extend: {

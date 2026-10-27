@@ -120,7 +120,25 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
     return item.name.toLowerCase().includes(filterText.toLowerCase());
   });
 
-  const getQuickIcon = (kind: string) => {
+  const getQuickIcon = (kind: string, isActive: boolean = false) => {
+    if (isActive) {
+      switch (kind) {
+        case "desktop":
+          return <Monitor className="w-3.5 h-3.5 text-white" />;
+        case "documents":
+          return <FileText className="w-3.5 h-3.5 text-white" />;
+        case "downloads":
+          return <Download className="w-3.5 h-3.5 text-white" />;
+        case "home":
+          return <Home className="w-3.5 h-3.5 text-white" />;
+        case "drive":
+          return <HardDrive className="w-3.5 h-3.5 text-white" />;
+        case "project":
+          return <Clock className="w-3.5 h-3.5 text-white" />;
+        default:
+          return <Folder className="w-3.5 h-3.5 text-white" />;
+      }
+    }
     switch (kind) {
       case "desktop":
         return <Monitor className="w-3.5 h-3.5 text-blue-500" />;
@@ -151,7 +169,7 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
             <div>
               <h2 className="text-sm font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
                 작업 프로젝트 폴더 선택
-                <span className="px-2 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800 text-[10px] font-semibold">
+                <span className="px-2 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-700 text-[10px] font-semibold">
                   AgentriX Explorer
                 </span>
               </h2>
@@ -223,21 +241,24 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
               <div className="space-y-0.5">
                 {(listing?.quick_access || [])
                   .filter((q) => q.kind !== "drive" && q.kind !== "project")
-                  .map((item) => (
-                    <button
-                      key={item.path}
-                      type="button"
-                      onClick={() => handleNavigate(item.path)}
-                      className={`w-full px-2.5 py-1.5 rounded-lg text-xs font-medium text-left flex items-center gap-2 transition ${
-                        currentPath === item.path
-                          ? "bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 font-bold"
-                          : "text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/60"
-                      }`}
-                    >
-                      {getQuickIcon(item.kind)}
-                      <span className="truncate">{item.name}</span>
-                    </button>
-                  ))}
+                  .map((item) => {
+                    const isActive = currentPath === item.path;
+                    return (
+                      <button
+                        key={item.path}
+                        type="button"
+                        onClick={() => handleNavigate(item.path)}
+                        className={`w-full px-2.5 py-1.5 rounded-lg text-xs text-left flex items-center gap-2 transition ${
+                          isActive
+                            ? "bg-indigo-600 text-white font-bold shadow-sm"
+                            : "text-slate-700 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-800/60 font-medium"
+                        }`}
+                      >
+                        {getQuickIcon(item.kind, isActive)}
+                        <span className="truncate">{item.name}</span>
+                      </button>
+                    );
+                  })}
               </div>
             </div>
 
@@ -249,21 +270,24 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
               <div className="space-y-0.5">
                 {(listing?.quick_access || [])
                   .filter((q) => q.kind === "drive")
-                  .map((item) => (
-                    <button
-                      key={item.path}
-                      type="button"
-                      onClick={() => handleNavigate(item.path)}
-                      className={`w-full px-2.5 py-1.5 rounded-lg text-xs font-medium text-left flex items-center gap-2 transition ${
-                        currentPath.startsWith(item.path)
-                          ? "bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 font-bold"
-                          : "text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/60"
-                      }`}
-                    >
-                      {getQuickIcon("drive")}
-                      <span className="truncate">{item.name}</span>
-                    </button>
-                  ))}
+                  .map((item) => {
+                    const isActive = currentPath.startsWith(item.path);
+                    return (
+                      <button
+                        key={item.path}
+                        type="button"
+                        onClick={() => handleNavigate(item.path)}
+                        className={`w-full px-2.5 py-1.5 rounded-lg text-xs text-left flex items-center gap-2 transition ${
+                          isActive
+                            ? "bg-indigo-600 text-white font-bold shadow-sm"
+                            : "text-slate-700 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-800/60 font-medium"
+                        }`}
+                      >
+                        {getQuickIcon("drive", isActive)}
+                        <span className="truncate">{item.name}</span>
+                      </button>
+                    );
+                  })}
               </div>
             </div>
 
@@ -276,22 +300,25 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
                 <div className="space-y-0.5">
                   {(listing?.quick_access || [])
                     .filter((q) => q.kind === "project")
-                    .map((item) => (
-                      <button
-                        key={item.path}
-                        type="button"
-                        onClick={() => handleNavigate(item.path)}
-                        className={`w-full px-2.5 py-1.5 rounded-lg text-xs font-medium text-left flex items-center gap-2 transition ${
-                          currentPath === item.path
-                            ? "bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 font-bold"
-                            : "text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/60"
-                        }`}
-                        title={item.path}
-                      >
-                        {getQuickIcon("project")}
-                        <span className="truncate">{item.name}</span>
-                      </button>
-                    ))}
+                    .map((item) => {
+                      const isActive = currentPath === item.path;
+                      return (
+                        <button
+                          key={item.path}
+                          type="button"
+                          onClick={() => handleNavigate(item.path)}
+                          className={`w-full px-2.5 py-1.5 rounded-lg text-xs text-left flex items-center gap-2 transition ${
+                            isActive
+                              ? "bg-indigo-600 text-white font-bold shadow-sm"
+                              : "text-slate-700 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-800/60 font-medium"
+                          }`}
+                          title={item.path}
+                        >
+                          {getQuickIcon("project", isActive)}
+                          <span className="truncate">{item.name}</span>
+                        </button>
+                      );
+                    })}
                 </div>
               </div>
             )}
