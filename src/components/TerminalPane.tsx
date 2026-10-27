@@ -4,8 +4,10 @@ import { FitAddon } from "xterm-addon-fit";
 import {
   CornerDownLeft,
   FolderOpen,
+  Image as ImageIcon,
   KeyRound,
   LogIn,
+  Paperclip,
   RefreshCw,
   RotateCcw,
   Send,
@@ -19,6 +21,7 @@ import type { CliDefinition, SessionInfo } from "../types/types";
 import {
   apiReadSessionOutput,
   apiResizeSession,
+  apiSaveClipboardImage,
   apiWriteToSession,
 } from "../lib/tauriBridge";
 
@@ -71,6 +74,8 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
   const termRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const cursorRef = useRef<number>(0);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [isDraggingOver, setIsDraggingOver] = useState(false);
 
   // 하단 전용 채팅창 상태
   const [promptText, setPromptText] = useState("");
@@ -111,6 +116,42 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       termRef.current.options.fontSize = 13.5;
       setTimeout(() => fitAddonRef.current?.fit(), 10);
     }
+  };
+
+  // 첨부 파일 선택 창에서 파일/이미지가 선택되었을 때
+  const handleFileInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      if (file.type.startsWith("image/")) {
+        const reader = new FileReader();
+        reader.onload = async () => {
+          const b64 = reader.result as string;
+          try {
+            const savedPath = await apiSaveClipboardImage(b64, session.cwd, "png");
+            const payload = `"${savedPath}" `;
+            await apiWriteToSession(session.id, payload);
+            if (termRef.current) {
+              termRef.current.write(payload);
+            }
+          } catch (err) {
+            console.error("이미지 첨부 저장 오류:", err);
+          }
+        };
+        reader.readAsDataURL(file);
+      } else {
+        const anyF = file as any;
+        const filePath = anyF.path || file.name;
+        const payload = `"${filePath}" `;
+        await apiWriteToSession(session.id, payload);
+        if (termRef.current) {
+          termRef.current.write(payload);
+        }
+      }
+    }
+    e.target.value = "";
   };
 
   // 포커스 진입 시 xterm 자동 포커스
@@ -276,6 +317,106 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     });
     resizeObserver.observe(container);
 
+    // 클립보드 이미지 / 파일 붙여넣기 (Ctrl + V) 핸들러
+    const handlePaste = async (e: ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (items) {
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i];
+          if (item.type.startsWith("image/")) {
+            e.preventDefault();
+            e.stopPropagation();
+            const file = item.getAsFile();
+            if (file) {
+              const reader = new FileReader();
+              reader.onload = async () => {
+                const b64 = reader.result as string;
+                try {
+                  const savedPath = await apiSaveClipboardImage(b64, session.cwd, "png");
+                  const payload = `"${savedPath}" `;
+                  await apiWriteToSession(session.id, payload);
+                  if (termRef.current) {
+                    termRef.current.write(payload);
+                  }
+                } catch (err) {
+                  console.error("클립보드 이미지 저장 오류:", err);
+                }
+              };
+              reader.readAsDataURL(file);
+              return;
+            }
+          }
+        }
+      }
+
+      const files = e.clipboardData?.files;
+      if (files && files.length > 0) {
+        const filePaths: string[] = [];
+        for (let i = 0; i < files.length; i++) {
+          const f = files[i] as any;
+          if (f.path) {
+            filePaths.push(`"${f.path}"`);
+          }
+        }
+        if (filePaths.length > 0) {
+          e.preventDefault();
+          e.stopPropagation();
+          const payload = filePaths.join(" ") + " ";
+          await apiWriteToSession(session.id, payload);
+          if (termRef.current) {
+            termRef.current.write(payload);
+          }
+          return;
+        }
+      }
+    };
+
+    // 파일 드래그 앤 드롭 핸들러
+    const handleDragOver = (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.dataTransfer) {
+        e.dataTransfer.dropEffect = "copy";
+      }
+      setIsDraggingOver(true);
+    };
+
+    const handleDragLeave = (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsDraggingOver(false);
+    };
+
+    const handleDrop = async (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsDraggingOver(false);
+
+      const files = e.dataTransfer?.files;
+      if (!files || files.length === 0) return;
+
+      const paths: string[] = [];
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i] as any;
+        if (f.path) {
+          paths.push(`"${f.path}"`);
+        }
+      }
+
+      if (paths.length > 0) {
+        const payload = paths.join(" ") + " ";
+        await apiWriteToSession(session.id, payload);
+        if (termRef.current) {
+          termRef.current.write(payload);
+        }
+      }
+    };
+
+    container.addEventListener("paste", handlePaste);
+    container.addEventListener("dragover", handleDragOver);
+    container.addEventListener("dragleave", handleDragLeave);
+    container.addEventListener("drop", handleDrop);
+
     setTimeout(() => {
       try {
         fitAddon.fit();
@@ -291,6 +432,10 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       active = false;
       window.clearInterval(pollInterval);
       resizeObserver.disconnect();
+      container.removeEventListener("paste", handlePaste);
+      container.removeEventListener("dragover", handleDragOver);
+      container.removeEventListener("dragleave", handleDragLeave);
+      container.removeEventListener("drop", handleDrop);
       dataDisposable.dispose();
       term.dispose();
     };
@@ -487,6 +632,23 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
             </button>
           )}
 
+          {/* 파일 / 이미지 첨부 (클립보드 Ctrl+V 및 드래그 앤 드롭 지원) */}
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileInputChange}
+            className="hidden"
+            multiple
+          />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="inline-flex items-center gap-1 px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition text-[11px] font-semibold whitespace-nowrap shrink-0"
+            title="이미지 또는 파일 선택 (경로가 터미널에 자동 입력됩니다 / Ctrl+V 붙여넣기 및 드래그 앤 드롭 지원)"
+          >
+            <Paperclip className="w-3 h-3 text-indigo-400 shrink-0" />
+            <span className="hidden sm:inline">파일/이미지 첨부</span>
+          </button>
+
           <button
             onClick={() => apiWriteToSession(session.id, "\x03")}
             className="inline-flex items-center gap-1 px-2 py-1 rounded bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 transition text-[11px] whitespace-nowrap shrink-0"
@@ -538,12 +700,22 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
         </div>
       </div>
 
-      {/* 2. xterm.js 캔버스 컨테이너 */}
-      <div
-        ref={containerRef}
-        className="flex-1 w-full min-h-0 p-2 overflow-hidden"
-        onClick={() => termRef.current?.focus()}
-      />
+      {/* 2. xterm.js 캔버스 컨테이너 (클립보드 이미지/파일 붙여넣기 및 드래그 앤 드롭 지원) */}
+      <div className="relative flex-1 w-full min-h-0 overflow-hidden">
+        <div
+          ref={containerRef}
+          className="w-full h-full p-2 overflow-hidden"
+          onClick={() => termRef.current?.focus()}
+        />
+        {/* 드래그 오버 피드백 오버레이 */}
+        {isDraggingOver && (
+          <div className="absolute inset-0 z-30 bg-indigo-950/85 backdrop-blur-sm border-2 border-dashed border-indigo-400 flex flex-col items-center justify-center pointer-events-none animate-in fade-in duration-100">
+            <ImageIcon className="w-10 h-10 text-indigo-400 mb-2 animate-bounce" />
+            <div className="text-sm font-bold text-white">파일 또는 이미지를 놓으세요</div>
+            <div className="text-xs text-indigo-200 mt-1">경로가 터미널 프롬프트에 자동으로 입력됩니다</div>
+          </div>
+        )}
+      </div>
 
       {/* 3. 하단 전용 채팅 / 프롬프트 입력창 (한글 입력 · 멀티라인 · 슬래시 명령어 · 동시 전송 지원) */}
       <div className="shrink-0 bg-slate-900/95 border-t border-slate-800 p-2.5 space-y-2">
@@ -611,7 +783,45 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
               value={promptText}
               onChange={(e) => setPromptText(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={`[${folderName}] ${session.name}에게 보낼 메시지나 명령어를 입력하세요... (한글/여러 줄 붙여넣기 지원)`}
+              onPaste={async (e) => {
+                const items = e.clipboardData?.items;
+                if (items) {
+                  for (let i = 0; i < items.length; i++) {
+                    const item = items[i];
+                    if (item.type.startsWith("image/")) {
+                      e.preventDefault();
+                      const file = item.getAsFile();
+                      if (file) {
+                        const reader = new FileReader();
+                        reader.onload = async () => {
+                          const b64 = reader.result as string;
+                          try {
+                            const savedPath = await apiSaveClipboardImage(b64, session.cwd, "png");
+                            setPromptText((prev) => (prev ? `${prev} "${savedPath}" ` : `"${savedPath}" `));
+                          } catch (err) {
+                            console.error("채팅창 이미지 붙여넣기 실패:", err);
+                          }
+                        };
+                        reader.readAsDataURL(file);
+                        return;
+                      }
+                    }
+                  }
+                }
+                const files = e.clipboardData?.files;
+                if (files && files.length > 0) {
+                  const paths: string[] = [];
+                  for (let i = 0; i < files.length; i++) {
+                    const f = files[i] as any;
+                    if (f.path) paths.push(`"${f.path}"`);
+                  }
+                  if (paths.length > 0) {
+                    e.preventDefault();
+                    setPromptText((prev) => (prev ? `${prev} ${paths.join(" ")} ` : `${paths.join(" ")} `));
+                  }
+                }
+              }}
+              placeholder={`[${folderName}] ${session.name}에게 보낼 메시지나 파일/이미지 붙여넣기(Ctrl+V)...`}
               className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700/90 focus:border-indigo-500 focus:outline-none text-xs text-slate-100 placeholder-slate-500 resize-none leading-relaxed"
             />
           </div>

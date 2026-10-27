@@ -337,6 +337,14 @@ impl PtyManager {
     pub fn stop_session(&self, session_id: &str) -> Result<(), String> {
         let mut sessions = self.sessions.lock().unwrap();
         if let Some(mut session) = sessions.remove(session_id) {
+            #[cfg(target_os = "windows")]
+            if let Some(pid) = session.child.process_id() {
+                // Windows 환경에서 cmd/powershell 자식 프로세스 트리(/T) 전체를 강제 종료하여
+                // 고아 프로세스 잔존으로 인한 "Conversation already open in another instance" 충돌 원천 방지
+                let _ = std::process::Command::new("taskkill")
+                    .args(["/F", "/T", "/PID", &pid.to_string()])
+                    .output();
+            }
             let _ = session.child.kill();
         }
         Ok(())

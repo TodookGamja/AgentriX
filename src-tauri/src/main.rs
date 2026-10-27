@@ -408,6 +408,51 @@ fn save_session_handoff(
 }
 
 #[tauri::command]
+fn save_clipboard_image(
+    project_path: Option<String>,
+    base64_data: String,
+    ext: Option<String>,
+) -> Result<String, String> {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+
+    let clean_b64 = if let Some(idx) = base64_data.find(',') {
+        &base64_data[idx + 1..]
+    } else {
+        &base64_data
+    };
+
+    let bytes = B64.decode(clean_b64.trim()).map_err(|e| format!("Base64 디코딩 실패: {}", e))?;
+
+    let file_ext = ext.unwrap_or_else(|| "png".to_string());
+    let filename = format!("pasted_image_{}.{}", chrono::Utc::now().format("%Y%m%d_%H%M%S"), file_ext);
+
+    let target_dir = if let Some(ref p) = project_path {
+        let p_obj = std::path::Path::new(p);
+        if p_obj.exists() && p_obj.is_dir() {
+            let attach_dir = p_obj.join(".attachments");
+            let _ = std::fs::create_dir_all(&attach_dir);
+            attach_dir
+        } else {
+            dirs::data_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join("AI_CLI_Manager")
+                .join("pasted_images")
+        }
+    } else {
+        dirs::data_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join("AI_CLI_Manager")
+            .join("pasted_images")
+    };
+
+    std::fs::create_dir_all(&target_dir).map_err(|e| e.to_string())?;
+    let file_path = target_dir.join(&filename);
+    std::fs::write(&file_path, &bytes).map_err(|e| e.to_string())?;
+
+    Ok(file_path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
 fn analyze_project_workspace(project_path: String) -> Result<ProjectAnalysisResult, String> {
     db::analyze_project_workspace(&project_path).map_err(|e| e.to_string())
 }
@@ -1134,6 +1179,7 @@ fn main() {
             app_window_is_maximized,
             check_app_update,
             reset_app_data,
+            save_clipboard_image,
         ])
         .run(tauri::generate_context!())
         .expect("Tauri 애플리케이션 실행 중 오류 발생");

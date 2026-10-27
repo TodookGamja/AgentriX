@@ -536,3 +536,18 @@ export async function apiResetAppData(): Promise<void> {
     return invoke<void>("reset_app_data");
   }
 }
+
+export async function apiSaveClipboardImage(
+  base64Data: string,
+  projectPath?: string,
+  ext?: string
+): Promise<string> {
+  if (isTauriRuntime()) {
+    return invoke<string>("save_clipboard_image", {
+      projectPath: projectPath || null,
+      base64Data,
+      ext: ext || "png",
+    });
+  }
+  return "pasted_mock_image.png";
+}
