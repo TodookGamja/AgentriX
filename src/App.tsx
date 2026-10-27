@@ -1944,8 +1944,24 @@ ${recentSnippet || "진행 내역 기록 없음"}
           </button>
         </div>
 
-        {/* 우: 내 프로필 + 테마 스위처 + 창 제어 컨트롤 (최소화, 최대화, 닫기) */}
+        {/* 우: 업데이트 확인 + 내 프로필 + 테마 스위처 + 창 제어 컨트롤 (최소화, 최대화, 닫기) */}
         <div className="flex items-center justify-end gap-2 shrink-0 z-10">
+          {/* 최신 버전 업데이트 확인 명시적 버튼 (사용자가 한눈에 바로 찾을 수 있는 고대비 버튼) */}
+          <button
+            type="button"
+            disabled={isCheckingUpdate}
+            onClick={() => handleCheckUpdate(true)}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/40 text-[11px] font-bold text-indigo-700 dark:text-indigo-300 transition cursor-pointer select-none active:scale-95 disabled:opacity-50"
+            title="AgentriX 최신 버전 업데이트 확인"
+          >
+            <ArrowUpCircle className={`w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0 ${isCheckingUpdate ? "animate-spin" : ""}`} />
+            <span className="hidden sm:inline">{isCheckingUpdate ? "확인 중..." : "업데이트 확인"}</span>
+            <span className="font-mono text-[10px] px-1 py-0.2 rounded bg-indigo-500/20 text-indigo-600 dark:text-indigo-300">v1.0.0</span>
+            {updateInfo?.has_update && (
+              <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
+            )}
+          </button>
+
           {/* 내 프로필 미니 버튼 (클릭 시 언제든 프로필 설정 모달 열기) */}
           <button
             type="button"
@@ -2470,6 +2486,20 @@ ${recentSnippet || "진행 내역 기록 없음"}
                 Caveman {cavemanEnabled ? "ON" : "OFF"}
               </span>
             </div>
+
+            {/* 앱 버전 및 업데이트 확인 버튼 (사이드바 최하단 항시 노출) */}
+            <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-[11px] select-none">
+              <span className="font-mono text-slate-400 font-bold">AgentriX v1.0.0</span>
+              <button
+                type="button"
+                disabled={isCheckingUpdate}
+                onClick={() => handleCheckUpdate(true)}
+                className="text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 font-bold flex items-center gap-1 transition cursor-pointer disabled:opacity-50"
+              >
+                <ArrowUpCircle className={`w-3.5 h-3.5 ${isCheckingUpdate ? "animate-spin" : ""}`} />
+                <span>{isCheckingUpdate ? "확인 중..." : "업데이트 확인"}</span>
+              </button>
+            </div>
           </div>
         </aside>
       )}
@@ -2968,6 +2998,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
               onAddCustomCli={handleAddCustomCli}
               onDeleteCustomCli={handleDeleteCustomCli}
               onResetAppData={handleResetAllAppData}
+              onCheckUpdate={() => handleCheckUpdate(true)}
             />
           )}
 

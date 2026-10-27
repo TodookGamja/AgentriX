@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import {
+  ArrowUpCircle,
   CheckCircle2,
   Download,
   FolderCog,
@@ -24,6 +25,7 @@ interface AuthSettingsViewProps {
   onAddCustomCli: (input: CustomCliInput) => Promise<void>;
   onDeleteCustomCli: (cliId: string) => Promise<void>;
   onResetAppData?: () => Promise<void>;
+  onCheckUpdate?: () => void;
 }
 
 interface CliPreset {
@@ -182,6 +184,7 @@ export const AuthSettingsView: React.FC<AuthSettingsViewProps> = ({
   onAddCustomCli,
   onDeleteCustomCli,
   onResetAppData,
+  onCheckUpdate,
 }) => {
   const [inputs, setInputs] = useState<Record<string, string>>({});
   const [showAddCliModal, setShowAddCliModal] = useState(false);
@@ -817,6 +820,29 @@ export const AuthSettingsView: React.FC<AuthSettingsViewProps> = ({
             );
           })}
         </div>
+      </div>
+
+      {/* 소프트웨어 버전 & 업데이트 확인 섹션 */}
+      <div className="rounded-2xl border border-indigo-500/30 bg-indigo-950/10 p-5 mt-8 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+        <div>
+          <h4 className="text-sm font-bold text-slate-100 flex items-center gap-2">
+            <ArrowUpCircle className="w-4 h-4 text-indigo-400" />
+            AgentriX 소프트웨어 버전: <span className="font-mono text-indigo-400 font-extrabold">v1.0.0</span>
+          </h4>
+          <p className="text-xs text-slate-400 mt-1 max-w-xl">
+            GitHub Releases를 통해 새로운 기능과 버그 수정이 포함된 최신 버전을 감지하고 업데이트합니다.
+          </p>
+        </div>
+        {onCheckUpdate && (
+          <button
+            type="button"
+            onClick={onCheckUpdate}
+            className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition shadow-md shadow-indigo-600/20 shrink-0 active:scale-95 flex items-center gap-1.5"
+          >
+            <ArrowUpCircle className="w-3.5 h-3.5" />
+            최신 버전 업데이트 확인
+          </button>
+        )}
       </div>
 
       {/* 공장 초기화 및 개인 설정 완전 삭제 섹션 */}
