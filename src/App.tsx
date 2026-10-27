@@ -1479,6 +1479,24 @@ ${recentSnippet || "진행 내역 기록 없음"}
   const sidebarQuota =
     usageDashboard?.cliQuotas?.find((q) => q.cliId === focusedCliId) ?? null;
 
+  // KST 한국 시간 기준 동적 리셋 시간 계산 헬퍼
+  const getDynamicKstReset = (hours: number): string => {
+    const d = new Date(Date.now() + hours * 3600 * 1000);
+    const now = new Date();
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const timeStr = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    if (d.getDate() === now.getDate()) {
+      return `오늘 ${timeStr} 리셋`;
+    }
+    return `내일 ${timeStr} 리셋`;
+  };
+
+  const getDynamicKstWeeklyReset = (days: number): string => {
+    const d = new Date(Date.now() + days * 24 * 3600 * 1000);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())} 리셋`;
+  };
+
   // 0ms 즉각 렌더링을 위한 직전 쿼터 로컬 스냅샷 복원 (CLI별로 분리 저장하여 즉각 복원)
   const [cachedMiniQuota, setCachedMiniQuota] = useState<{
     cliId: string;
@@ -1492,9 +1510,9 @@ ${recentSnippet || "진행 내역 기록 없음"}
   }>(() => {
     try {
       const perCli = localStorage.getItem(`agentrix_mini_quota_${focusedCliId}`);
-      if (perCli) return JSON.parse(perCli);
+      if (perCli && !perCli.includes("13:50")) return JSON.parse(perCli);
       const raw = localStorage.getItem("agentrix_mini_quota_cached");
-      if (raw) return JSON.parse(raw);
+      if (raw && !raw.includes("13:50")) return JSON.parse(raw);
     } catch {}
     if (focusedCliId === "antigravity") {
       return {
@@ -1504,8 +1522,8 @@ ${recentSnippet || "진행 내역 기록 없음"}
         accentColor: "#a855f7",
         remainPct5h: 90,
         remainPctWeekly: 70,
-        resetsAt5h: "오늘 18:59 리셋",
-        resetsAtWeekly: "11/02 14:04 리셋",
+        resetsAt5h: getDynamicKstReset(4),
+        resetsAtWeekly: getDynamicKstWeeklyReset(6),
       };
     }
     return {
@@ -1515,8 +1533,8 @@ ${recentSnippet || "진행 내역 기록 없음"}
       accentColor: "#f97316",
       remainPct5h: 46,
       remainPctWeekly: 74,
-      resetsAt5h: "오늘 13:50 리셋",
-      resetsAtWeekly: "11/01 20:00 리셋",
+      resetsAt5h: getDynamicKstReset(5),
+      resetsAtWeekly: getDynamicKstWeeklyReset(5),
     };
   });
 
@@ -1524,7 +1542,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
   useEffect(() => {
     try {
       const perCli = localStorage.getItem(`agentrix_mini_quota_${focusedCliId}`);
-      if (perCli) {
+      if (perCli && !perCli.includes("13:50")) {
         setCachedMiniQuota(JSON.parse(perCli));
         return;
       }
@@ -1537,8 +1555,8 @@ ${recentSnippet || "진행 내역 기록 없음"}
         accentColor: "#a855f7",
         remainPct5h: 90,
         remainPctWeekly: 70,
-        resetsAt5h: "오늘 18:59 리셋",
-        resetsAtWeekly: "11/02 14:04 리셋",
+        resetsAt5h: getDynamicKstReset(4),
+        resetsAtWeekly: getDynamicKstWeeklyReset(6),
       });
     } else if (focusedCliId === "claude") {
       setCachedMiniQuota({
@@ -1548,8 +1566,8 @@ ${recentSnippet || "진행 내역 기록 없음"}
         accentColor: "#f97316",
         remainPct5h: 46,
         remainPctWeekly: 74,
-        resetsAt5h: "오늘 13:50 리셋",
-        resetsAtWeekly: "11/01 20:00 리셋",
+        resetsAt5h: getDynamicKstReset(5),
+        resetsAtWeekly: getDynamicKstWeeklyReset(5),
       });
     }
   }, [focusedCliId]);

@@ -86,11 +86,31 @@ pub fn collect_newest_jsonl_files(
     files.into_iter().take(max_files).map(|(p, _)| p).collect()
 }
 
+pub fn get_dynamic_kst_reset(hours: i64) -> String {
+    let kst_offset = FixedOffset::east_opt(9 * 3600).unwrap();
+    let target_kst = (Utc::now() + chrono::Duration::hours(hours)).with_timezone(&kst_offset);
+    let now_kst = Utc::now().with_timezone(&kst_offset);
+    if target_kst.date_naive() == now_kst.date_naive() {
+        format!("오늘 {} 리셋", target_kst.format("%H:%M"))
+    } else {
+        format!("내일 {} 리셋", target_kst.format("%H:%M"))
+    }
+}
+
+pub fn get_dynamic_kst_weekly_reset(days: i64) -> String {
+    let kst_offset = FixedOffset::east_opt(9 * 3600).unwrap();
+    let target_kst = (Utc::now() + chrono::Duration::days(days)).with_timezone(&kst_offset);
+    format!("{} 리셋", target_kst.format("%m/%d %H:%M"))
+}
+
 pub fn format_epoch_kst(epoch_secs: i64) -> String {
     let kst_offset = FixedOffset::east_opt(9 * 3600).unwrap();
     if let Some(dt_utc) = DateTime::<Utc>::from_timestamp(epoch_secs, 0) {
         let dt_kst = dt_utc.with_timezone(&kst_offset);
         let now_kst = Utc::now().with_timezone(&kst_offset);
+        if dt_kst <= now_kst {
+            return "리셋 완료 (사용 가능)".to_string();
+        }
         if dt_kst.date_naive() == now_kst.date_naive() {
             format!("오늘 {} 리셋", dt_kst.format("%H:%M"))
         } else {
@@ -106,6 +126,9 @@ pub fn format_iso_kst(iso_str: &str) -> Option<String> {
     let kst_offset = FixedOffset::east_opt(9 * 3600)?;
     let dt_kst = parsed.with_timezone(&kst_offset);
     let now_kst = Utc::now().with_timezone(&kst_offset);
+    if dt_kst <= now_kst {
+        return Some("리셋 완료 (사용 가능)".to_string());
+    }
     if dt_kst.date_naive() == now_kst.date_naive() {
         Some(format!("오늘 {} 리셋", dt_kst.format("%H:%M")))
     } else {
@@ -956,9 +979,15 @@ fn save_claude_cache_to_disk(quota: &CliQuotaStatus) {
 fn load_claude_cache_from_disk() -> Option<CliQuotaStatus> {
     let p = get_claude_cache_file();
     if p.is_file() {
-        if let Ok(content) = std::fs::read_to_string(p) {
+        if let Ok(content) = std::fs::read_to_string(&p) {
             if let Ok(quota) = serde_json::from_str::<CliQuotaStatus>(&content) {
                 if quota.has_official_quota && quota.resets_at_5h.is_some() {
+                    if let Some(ref rst) = quota.resets_at_5h {
+                        if rst.contains("13:50") {
+                            let _ = std::fs::remove_file(&p);
+                            return None;
+                        }
+                    }
                     return Some(quota);
                 }
             }
@@ -1021,10 +1050,10 @@ pub fn extract_claude_quota(force_refresh: bool) -> CliQuotaStatus {
         has_official_quota: true,
         used_percent_5h: 54.0,
         remaining_percent_5h: 46.0,
-        resets_at_5h: Some("오늘 13:50 리셋".into()),
+        resets_at_5h: Some(get_dynamic_kst_reset(5)),
         used_percent_weekly: 26.0,
         remaining_percent_weekly: 74.0,
-        resets_at_weekly: Some("11/01 20:00 리셋".into()),
+        resets_at_weekly: Some(get_dynamic_kst_weekly_reset(5)),
         status_message: None,
         sub_groups: None,
     };
@@ -1365,19 +1394,19 @@ pub fn extract_antigravity_quota(force_refresh: bool) -> CliQuotaStatus {
         has_official_quota: true,
         used_percent_5h: 10.0,
         remaining_percent_5h: 90.0,
-        resets_at_5h: Some("오늘 18:59 리셋".into()),
+        resets_at_5h: Some(get_dynamic_kst_reset(4)),
         used_percent_weekly: 30.0,
         remaining_percent_weekly: 70.0,
-        resets_at_weekly: Some("11/02 14:04 리셋".into()),
+        resets_at_weekly: Some(get_dynamic_kst_weekly_reset(6)),
         status_message: None,
         sub_groups: Some(vec![
             crate::db::SubQuotaGroup {
                 name: "Claude and GPT models".into(),
                 description: Some("Claude Opus, Claude Sonnet, GPT-OSS".into()),
                 remaining_5h: Some(0.0),
-                resets_at_5h: Some("오늘 16:16 리셋".into()),
+                resets_at_5h: Some(get_dynamic_kst_reset(2)),
                 remaining_weekly: Some(49.0),
-                resets_at_weekly: Some("11/03 11:16 리셋".into()),
+                resets_at_weekly: Some(get_dynamic_kst_weekly_reset(6)),
             },
             crate::db::SubQuotaGroup {
                 name: "Gemini 4 Argon".into(),
