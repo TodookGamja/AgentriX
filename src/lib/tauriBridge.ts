@@ -505,3 +505,34 @@ export async function apiWindowIsMaximized(): Promise<boolean> {
   }
   return false;
 }
+
+export interface AppUpdateInfo {
+  current_version: string;
+  latest_version: string;
+  has_update: boolean;
+  release_notes: string;
+  release_url: string;
+  download_url: string | null;
+  published_at: string;
+}
+
+export async function apiCheckAppUpdate(): Promise<AppUpdateInfo> {
+  if (isTauriRuntime()) {
+    return invoke<AppUpdateInfo>("check_app_update");
+  }
+  return {
+    current_version: "v1.0.0",
+    latest_version: "v1.0.0",
+    has_update: false,
+    release_notes: "",
+    release_url: "https://github.com/TodookGamja/AgentriX/releases",
+    download_url: null,
+    published_at: "",
+  };
+}
+
+export async function apiResetAppData(): Promise<void> {
+  if (isTauriRuntime()) {
+    return invoke<void>("reset_app_data");
+  }
+}

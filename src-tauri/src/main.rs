@@ -77,6 +77,12 @@ fn delete_project_folder(
     db::delete_project_folder(&conn, &path).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn reset_app_data(state: State<'_, AppState>) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    db::reset_all_user_data(&conn).map_err(|e| e.to_string())
+}
+
 #[cfg(target_os = "windows")]
 fn apply_dialog_theme_mode(theme: Option<&str>, hwnd_opt: Option<*mut std::ffi::c_void>) {
     unsafe {
@@ -867,6 +873,87 @@ fn app_window_is_maximized(window: tauri::WebviewWindow) -> Result<bool, String>
     window.is_maximized().map_err(|e| e.to_string())
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct AppUpdateInfo {
+    pub current_version: String,
+    pub latest_version: String,
+    pub has_update: bool,
+    pub release_notes: String,
+    pub release_url: String,
+    pub download_url: Option<String>,
+    pub published_at: String,
+}
+
+fn is_newer_version(latest: &str, current: &str) -> bool {
+    let parse_semver = |s: &str| -> Vec<u64> {
+        s.split('.')
+            .filter_map(|p| p.split('-').next().and_then(|x| x.parse::<u64>().ok()))
+            .collect()
+    };
+    let l_parts = parse_semver(latest);
+    let c_parts = parse_semver(current);
+    l_parts > c_parts
+}
+
+#[tauri::command]
+fn check_app_update() -> Result<AppUpdateInfo, String> {
+    let current_version = "1.0.0".to_string();
+    let url = "https://api.github.com/repos/TodookGamja/AgentriX/releases/latest";
+    let resp = match ureq::get(url)
+        .set("User-Agent", "AgentriX-Updater/1.0.0")
+        .timeout(std::time::Duration::from_secs(5))
+        .call()
+    {
+        Ok(r) => r,
+        Err(_e) => {
+            return Ok(AppUpdateInfo {
+                current_version: format!("v{}", current_version),
+                latest_version: format!("v{}", current_version),
+                has_update: false,
+                release_notes: String::new(),
+                release_url: "https://github.com/TodookGamja/AgentriX/releases".to_string(),
+                download_url: None,
+                published_at: String::new(),
+            });
+        }
+    };
+
+    let json: serde_json::Value = resp.into_json().map_err(|e| e.to_string())?;
+    let tag = json.get("tag_name").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let release_notes = json.get("body").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let release_url = json.get("html_url").and_then(|v| v.as_str()).unwrap_or("https://github.com/TodookGamja/AgentriX/releases").to_string();
+    let published_at = json.get("published_at").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+    let mut download_url = None;
+    if let Some(assets) = json.get("assets").and_then(|v| v.as_array()) {
+        for asset in assets {
+            if let Some(name) = asset.get("name").and_then(|v| v.as_str()) {
+                if name.ends_with(".zip") || name.ends_with(".exe") {
+                    if let Some(durl) = asset.get("browser_download_url").and_then(|v| v.as_str()) {
+                        download_url = Some(durl.to_string());
+                        if name.ends_with(".zip") {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let clean_tag = tag.trim_start_matches('v');
+    let has_update = !clean_tag.is_empty() && clean_tag != current_version && is_newer_version(clean_tag, &current_version);
+
+    Ok(AppUpdateInfo {
+        current_version: format!("v{}", current_version),
+        latest_version: if tag.is_empty() { format!("v{}", current_version) } else { tag },
+        has_update,
+        release_notes,
+        release_url,
+        download_url,
+        published_at,
+    })
+}
+
 fn main() {
     std::panic::set_hook(Box::new(|info| {
         let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
@@ -1045,6 +1132,8 @@ fn main() {
             app_window_show,
             app_window_exit,
             app_window_is_maximized,
+            check_app_update,
+            reset_app_data,
         ])
         .run(tauri::generate_context!())
         .expect("Tauri 애플리케이션 실행 중 오류 발생");

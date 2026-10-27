@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Activity,
   AlertTriangle,
+  ArrowUpCircle,
   ArrowUpDown,
   Blocks,
   Bot,
@@ -11,6 +12,7 @@ import {
   ClipboardList,
   Columns2,
   Copy,
+  ExternalLink,
   FolderOpen,
   FolderPlus,
   FolderTree,
@@ -75,6 +77,9 @@ import {
   apiWindowHide,
   apiWindowExit,
   apiWindowIsMaximized,
+  apiCheckAppUpdate,
+  apiResetAppData,
+  type AppUpdateInfo,
 } from "./lib/tauriBridge";
 import { listen } from "@tauri-apps/api/event";
 import { TerminalPane } from "./components/TerminalPane";
@@ -278,6 +283,38 @@ export const App: React.FC = () => {
     showToast(`'${groupName}' 그룹이 삭제되었습니다.`, "info");
   };
 
+  // 자동 업데이트 상태 (실행 시 GitHub Releases 자동 감지)
+  const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null);
+  const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
+
+  const handleCheckUpdate = useCallback(async (manual = false) => {
+    setIsCheckingUpdate(true);
+    try {
+      const info = await apiCheckAppUpdate();
+      setUpdateInfo(info);
+      if (info.has_update) {
+        setIsUpdateModalOpen(true);
+      } else if (manual) {
+        showToast(`현재 최신 버전(${info.current_version})을 사용 중입니다.`, "success");
+      }
+    } catch (err) {
+      if (manual) {
+        showToast(`업데이트 확인 실패: ${String(err)}`, "error");
+      }
+    } finally {
+      setIsCheckingUpdate(false);
+    }
+  }, []);
+
+  // 앱 마운트 시 자동 업데이트 검사 실행 (1회 백그라운드)
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      handleCheckUpdate(false);
+    }, 2500);
+    return () => clearTimeout(timer);
+  }, [handleCheckUpdate]);
+
   const allGroupNames = useMemo(() => {
     const set = new Set<string>(["기본 프로젝트"]);
     for (const g of customGroups) {
@@ -304,27 +341,101 @@ export const App: React.FC = () => {
     return map;
   }, [projectFolders, projectGroups, allGroupNames]);
 
-  // 내 프로필 상태 (로컬 스토리지에 영속화)
+  // 내 프로필 상태 (로컬 스토리지에 영속화, 기본값은 누구나 사용하기 좋은 표준 개발자 프로필)
   const [userProfile, setUserProfile] = useState<UserProfile>(() => {
     try {
       const saved = localStorage.getItem("ai_cli_user_profile");
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        // 이전 하드코딩 테스트 값인 "토큰 도둑 감자"가 저장된 경우 완전 파기하고 표준 기본값으로 초기화
+        if (parsed.name === "토큰 도둑 감자") {
+          localStorage.removeItem("ai_cli_user_profile");
+          localStorage.removeItem("ai_cli_profile_customized");
+          return {
+            name: "개발자",
+            role: "Software Engineer",
+            department: "Engineering",
+            favoriteCli: "antigravity",
+            avatarEmoji: "👨‍💻",
+          };
+        }
+        return parsed;
+      }
     } catch {}
     return {
-      name: "나 (내 프로필)",
-      role: "Lead Architect & Developer",
-      department: "Platform Engineering",
-      favoriteCli: "claude",
+      name: "개발자",
+      role: "Software Engineer",
+      department: "Engineering",
+      favoriteCli: "antigravity",
       avatarEmoji: "👨‍💻",
     };
   });
+
+  // 최초 기동 시 신규 사용자 프로필 온보딩 모달 표시 여부
+  const [isOnboardingProfileOpen, setIsOnboardingProfileOpen] = useState<boolean>(() => {
+    try {
+      return !localStorage.getItem("ai_cli_profile_configured");
+    } catch {
+      return false;
+    }
+  });
+
+  // 온보딩 프로필 폼 상태
+  const [onboardName, setOnboardName] = useState(userProfile.name);
+  const [onboardRole, setOnboardRole] = useState(userProfile.role);
+  const [onboardDept, setOnboardDept] = useState(userProfile.department);
+  const [onboardCli, setOnboardCli] = useState(userProfile.favoriteCli);
+  const [onboardEmoji, setOnboardEmoji] = useState(userProfile.avatarEmoji);
 
   const handleUpdateUserProfile = (p: UserProfile) => {
     setUserProfile(p);
     try {
       localStorage.setItem("ai_cli_user_profile", JSON.stringify(p));
+      localStorage.setItem("ai_cli_profile_customized", "true");
+      localStorage.setItem("ai_cli_profile_configured", "true");
     } catch {}
-    showToast("내 프로필이 업데이트되었습니다.", "success");
+    showToast("내 프로필이 저장되었습니다.", "success");
+  };
+
+  const handleSaveOnboardingProfile = () => {
+    const finalProfile: UserProfile = {
+      name: onboardName.trim() || "개발자",
+      role: onboardRole.trim() || "Software Engineer",
+      department: onboardDept.trim() || "Engineering",
+      favoriteCli: onboardCli || "antigravity",
+      avatarEmoji: onboardEmoji || "👨‍💻",
+    };
+    handleUpdateUserProfile(finalProfile);
+    setIsOnboardingProfileOpen(false);
+  };
+
+  const handleSkipOnboardingProfile = () => {
+    try {
+      localStorage.setItem("ai_cli_profile_configured", "true");
+    } catch {}
+    setIsOnboardingProfileOpen(false);
+    showToast("기본 프로필로 시작합니다. 언제든 프로필을 변경할 수 있습니다.", "info");
+  };
+
+  // 모든 로컬 설정 및 백엔드 데이터(프로젝트, 사용량 통계, 캐시) 공장 초기화
+  const handleResetAllAppData = async () => {
+    if (
+      !window.confirm(
+        "정말로 모든 로컬 설정, 프로젝트 목록, 사용량 기록을 초기화하시겠습니까?\n\n이 작업은 모든 프로젝트 목록과 토큰 사용 기록을 깨끗한 첫 실행 상태로 되돌립니다."
+      )
+    ) {
+      return;
+    }
+    try {
+      await apiResetAppData();
+      localStorage.clear();
+      showToast("모든 설정과 데이터가 공장 초기화되었습니다. 앱을 새로고침합니다.", "success");
+      window.setTimeout(() => {
+        window.location.reload();
+      }, 700);
+    } catch (err) {
+      showToast(`초기화 실패: ${String(err)}`, "error");
+    }
   };
 
   // 5. 테마 모드 상태 및 적용 (자동 / 다크 / 라이트)
@@ -646,6 +757,16 @@ export const App: React.FC = () => {
       showToast("좌측 패널에서 먼저 프로젝트를 선택하거나 추가해 주세요.", "error");
       return;
     }
+
+    const cliDef = clis.find((c) => c.id === cliId);
+    if (cliDef && !cliDef.installed) {
+      showToast(
+        `[${cliDef.name}] CLI가 현재 PC에 설치되어 있지 않습니다. 설치된 Antigravity를 사용하시거나 CLI 관리 탭에서 확인해 주세요.`,
+        "error"
+      );
+      return;
+    }
+
     try {
       const session = await apiStartSession(cliId, targetCwd, initialCommand);
       addSession(session);
@@ -664,6 +785,14 @@ export const App: React.FC = () => {
   // 프로젝트 전담 에이전트 출근(실행) -> 터미널 뷰로 전환
   const handleSpawnAgentSession = async (agent: ProjectAgentRecord) => {
     const cliDef = clis.find((c) => c.id === agent.cliId);
+    if (cliDef && !cliDef.installed) {
+      showToast(
+        `[${agent.name}] 에이전트의 기반 CLI(${cliDef.name})가 현재 PC에 설치되어 있지 않습니다.`,
+        "error"
+      );
+      return;
+    }
+
     const initialCmd =
       agent.useWrapper && cliDef?.wrapperBinary ? "__WRAPPER__" : undefined;
 
@@ -1756,15 +1885,15 @@ ${recentSnippet || "진행 내역 기록 없음"}
         <div className="flex items-center z-10" data-tauri-drag-region onMouseDown={handleStartDragging}>
           <button
             onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-slate-200 hover:text-slate-100 hover:bg-slate-800 transition text-xs font-semibold"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-slate-100 hover:bg-slate-800 transition text-xs font-bold"
             title={sidebarCollapsed ? "사이드바 열기" : "사이드바 닫기"}
           >
             {sidebarCollapsed ? (
-              <PanelLeftOpen className="w-4 h-4 text-indigo-400" />
+              <PanelLeftOpen className="w-4 h-4 text-indigo-500 shrink-0" />
             ) : (
-              <PanelLeftClose className="w-4 h-4 text-slate-300" />
+              <PanelLeftClose className="w-4 h-4 text-slate-400 group-hover:text-slate-100 shrink-0" />
             )}
-            <span className="text-[11px] hidden sm:inline text-slate-100 font-semibold">
+            <span className="text-[11px] hidden sm:inline text-slate-100 font-bold">
               {sidebarCollapsed ? "사이드바 열기" : "사이드바 닫기"}
             </span>
           </button>
@@ -1790,10 +1919,42 @@ ${recentSnippet || "진행 내역 기록 없음"}
           <span className="text-xs font-extrabold text-slate-100 tracking-tight whitespace-nowrap">
             AgentriX
           </span>
+          <button
+            type="button"
+            disabled={isCheckingUpdate}
+            onClick={() => handleCheckUpdate(true)}
+            className="pointer-events-auto px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold bg-indigo-500/15 border border-indigo-500/30 text-indigo-400 hover:bg-indigo-500/25 transition cursor-pointer flex items-center gap-1 disabled:opacity-50"
+            title="현재 버전 v1.0.0 (클릭 시 최신 버전 업데이트 확인)"
+          >
+            {isCheckingUpdate ? "확인 중..." : "v1.0.0"}
+            {updateInfo?.has_update && (
+              <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-ping" />
+            )}
+          </button>
         </div>
 
-        {/* 우: 테마 스위처 + 창 제어 컨트롤 (최소화, 최대화, 닫기) */}
+        {/* 우: 내 프로필 + 테마 스위처 + 창 제어 컨트롤 (최소화, 최대화, 닫기) */}
         <div className="flex items-center justify-end gap-2 shrink-0 z-10">
+          {/* 내 프로필 미니 버튼 (클릭 시 언제든 프로필 설정 모달 열기) */}
+          <button
+            type="button"
+            onClick={() => {
+              setOnboardName(userProfile.name);
+              setOnboardRole(userProfile.role);
+              setOnboardDept(userProfile.department);
+              setOnboardCli(userProfile.favoriteCli);
+              setOnboardEmoji(userProfile.avatarEmoji);
+              setIsOnboardingProfileOpen(true);
+            }}
+            className="flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-slate-900/90 hover:bg-slate-800 border border-slate-800 text-xs text-slate-200 transition cursor-pointer select-none"
+            title="내 프로필 설정 변경"
+          >
+            <span className="text-xs leading-none">{userProfile.avatarEmoji}</span>
+            <span className="font-semibold text-[11px] max-w-[90px] truncate hidden sm:inline">
+              {userProfile.name}
+            </span>
+          </button>
+
           {/* 테마 스위처 (자동, 다크, 라이트) */}
           <div className="flex items-center p-0.5 rounded-lg border text-[11px] bg-slate-950 border-slate-800">
             <button
@@ -1862,14 +2023,14 @@ ${recentSnippet || "진행 내역 기록 없음"}
           <div className="flex items-center ml-1">
             <button
               onClick={handleWindowMinimize}
-              className="w-8 h-7 flex items-center justify-center rounded text-slate-300 hover:text-slate-100 hover:bg-slate-800 transition"
+              className="w-8 h-7 flex items-center justify-center rounded text-slate-200 hover:text-slate-100 hover:bg-slate-800 transition"
               title="최소화"
             >
               <Minus className="w-3.5 h-3.5" />
             </button>
             <button
               onClick={handleWindowToggleMaximize}
-              className="w-8 h-7 flex items-center justify-center rounded text-slate-300 hover:text-slate-100 hover:bg-slate-800 transition"
+              className="w-8 h-7 flex items-center justify-center rounded text-slate-200 hover:text-slate-100 hover:bg-slate-800 transition"
               title={isMaximized ? "이전 크기로 복원" : "최대화"}
             >
               {isMaximized ? (
@@ -1880,7 +2041,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
             </button>
             <button
               onClick={handleAttemptClose}
-              className="w-8 h-7 flex items-center justify-center rounded text-slate-300 hover:text-white hover:bg-rose-600 transition"
+              className="w-8 h-7 flex items-center justify-center rounded text-slate-200 hover:text-white hover:bg-rose-600 transition"
               title="닫기 (실행 세션 유지 시 시스템 트레이로 숨김)"
             >
               <X className="w-3.5 h-3.5" />
@@ -1894,7 +2055,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
         {/* =====================================================================
             좌측 패널 (깔끔한 프로젝트 리스트 + 프로젝트 추가 버튼 전용):
             - 상단: 글로벌 설정/대시보드 메뉴
-            - 중앙: [+ 프로젝트 추가] 독립 버튼 & 프로젝트 리스트 (youtubeai, AI_CLI_MANAGER 등)
+            - 중앙: [+ 프로젝트 추가] 독립 버튼 & 프로젝트 리스트 (예: my-web-app 등)
             - 프로젝트를 클릭하면 우측에 해당 프로젝트 전용 화면(ProjectWorkspaceView)이 열림!
            ===================================================================== */}
         {!sidebarCollapsed && (
@@ -1921,10 +2082,10 @@ ${recentSnippet || "진행 내역 기록 없음"}
                   </span>
                   {item.badge && (
                     <span
-                      className={`px-1.5 py-0.2 rounded text-[10px] font-bold shrink-0 ${
+                      className={`px-1.5 py-0.2 rounded text-[10px] font-bold shrink-0 border ${
                         activeNav === item.id
-                          ? "bg-white/20 text-white"
-                          : "bg-indigo-500/20 text-indigo-300"
+                          ? "bg-white/20 text-white border-white/30"
+                          : "bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 border-indigo-500/30"
                       }`}
                     >
                       {item.badge}
@@ -2000,10 +2161,10 @@ ${recentSnippet || "진행 내역 기록 없음"}
                       setSelectedProjectForNewGroup(projectFolders[0]?.path || "");
                       setIsNewGroupModalOpen(true);
                     }}
-                    className="flex items-center gap-1 px-2 py-0.5 rounded-lg border border-transparent hover:border-slate-800 hover:bg-slate-800 text-[11px] font-semibold text-slate-300 hover:text-indigo-400 transition"
+                    className="flex items-center gap-1 px-2 py-0.5 rounded-lg border border-transparent hover:border-slate-800 hover:bg-slate-800 text-[11px] font-bold text-slate-100 hover:text-indigo-500 transition select-none"
                     title="새 프로젝트 그룹 만들기"
                   >
-                    <FolderPlus className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                    <FolderPlus className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
                     <span>새 그룹</span>
                   </button>
                 </div>
@@ -2202,22 +2363,13 @@ ${recentSnippet || "진행 내역 기록 없음"}
                   {activeCliName}
                 </span>
                 {activePlanLabel && (
-                  <span className="text-[10px] text-slate-400 shrink-0 font-medium">
+                  <span className="text-[10px] text-slate-400 shrink-0 font-medium truncate">
                     ({activePlanLabel})
                   </span>
                 )}
               </div>
-              <div className="flex items-center gap-1 shrink-0">
-                {activeReset5h && focusedCliId !== "grok" ? (
-                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-600 dark:text-amber-300 font-bold shrink-0 border border-amber-500/20">
-                    {activeReset5h}
-                  </span>
-                ) : activeResetWk ? (
-                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-600 dark:text-indigo-300 font-bold shrink-0 border border-indigo-500/20">
-                    {activeResetWk}
-                  </span>
-                ) : null}
-                <ArrowUpDown className="w-3 h-3 text-slate-400 group-hover:text-indigo-400 transition" />
+              <div className="flex items-center gap-1 shrink-0 text-slate-400 group-hover:text-indigo-400 transition">
+                <ArrowUpDown className="w-3.5 h-3.5" />
               </div>
             </div>
 
@@ -2225,13 +2377,20 @@ ${recentSnippet || "진행 내역 기록 없음"}
             <div className="space-y-1">
               <div className="flex items-center justify-between text-[11px]">
                 <span className="text-slate-400 font-medium">5시간 잔여</span>
-                <span
-                  className={`font-mono text-xs font-bold ${
-                    remainPct5h <= 10 ? "text-rose-500 dark:text-rose-400" : "text-emerald-600 dark:text-emerald-400"
-                  }`}
-                >
-                  {remainPct5h}%
-                </span>
+                <div className="flex items-center gap-1.5">
+                  {activeReset5h && focusedCliId !== "grok" && (
+                    <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-amber-500/10 text-amber-600 dark:text-amber-300 font-bold border border-amber-500/20">
+                      {activeReset5h}
+                    </span>
+                  )}
+                  <span
+                    className={`font-mono text-xs font-bold ${
+                      remainPct5h <= 10 ? "text-rose-500 dark:text-rose-400" : "text-emerald-600 dark:text-emerald-400"
+                    }`}
+                  >
+                    {remainPct5h}%
+                  </span>
+                </div>
               </div>
               <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
                 <div
@@ -2251,13 +2410,20 @@ ${recentSnippet || "진행 내역 기록 없음"}
             <div className="space-y-1">
               <div className="flex items-center justify-between text-[11px]">
                 <span className="text-slate-400 font-medium">주간 잔여</span>
-                <span
-                  className={`font-mono text-xs font-bold ${
-                    remainPctWeekly <= 15 ? "text-rose-500 dark:text-rose-400" : "text-indigo-600 dark:text-indigo-400"
-                  }`}
-                >
-                  {remainPctWeekly}%
-                </span>
+                <div className="flex items-center gap-1.5">
+                  {activeResetWk && (
+                    <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-indigo-500/10 text-indigo-600 dark:text-indigo-300 font-bold border border-indigo-500/20">
+                      {activeResetWk}
+                    </span>
+                  )}
+                  <span
+                    className={`font-mono text-xs font-bold ${
+                      remainPctWeekly <= 15 ? "text-rose-500 dark:text-rose-400" : "text-indigo-600 dark:text-indigo-400"
+                    }`}
+                  >
+                    {remainPctWeekly}%
+                  </span>
+                </div>
               </div>
               <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
                 <div
@@ -2790,6 +2956,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
               }}
               onAddCustomCli={handleAddCustomCli}
               onDeleteCustomCli={handleDeleteCustomCli}
+              onResetAppData={handleResetAllAppData}
             />
           )}
 
@@ -3105,14 +3272,14 @@ ${recentSnippet || "진행 내역 기록 없음"}
 
             <div className="p-5 space-y-4 text-xs">
               <div>
-                <span className="text-slate-400 block mb-1">선택 프로젝트:</span>
-                <div className="px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 font-bold text-slate-200 truncate font-mono text-[11px]">
+                <span className="text-slate-300 block mb-1.5 font-semibold">선택 프로젝트:</span>
+                <div className="px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 font-bold text-slate-100 truncate font-mono text-xs">
                   📁 {getShortFolderName(groupModalProjPath)}
                 </div>
               </div>
 
               <div>
-                <label className="block text-slate-300 mb-1.5 font-semibold">
+                <label className="block text-slate-100 mb-1.5 font-bold">
                   기존 그룹 선택
                 </label>
                 <div className="space-y-1 max-h-40 overflow-y-auto pr-1">
@@ -3121,17 +3288,17 @@ ${recentSnippet || "진행 내역 기록 없음"}
                       key={gName}
                       type="button"
                       onClick={() => handleSetProjectGroup(groupModalProjPath, gName)}
-                      className="w-full text-left px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 hover:border-indigo-500 text-slate-200 text-xs flex items-center justify-between transition group/btn"
+                      className="w-full text-left px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 hover:border-indigo-500 text-slate-100 text-xs flex items-center justify-between transition group/btn font-medium"
                     >
                       <span className="truncate">{gName}</span>
-                      <span className="text-[10px] text-indigo-400 font-semibold group-hover/btn:translate-x-0.5 transition-transform">이동 →</span>
+                      <span className="text-[10px] text-indigo-600 dark:text-indigo-400 font-bold group-hover/btn:translate-x-0.5 transition-transform">이동 →</span>
                     </button>
                   ))}
                 </div>
               </div>
 
               <div>
-                <label className="block text-slate-300 mb-1.5 font-semibold">
+                <label className="block text-slate-100 mb-1.5 font-bold">
                   또는 새 그룹 직접 입력
                 </label>
                 <div className="flex gap-1.5">
@@ -3166,7 +3333,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
               <button
                 type="button"
                 onClick={() => setGroupModalProjPath(null)}
-                className="px-3.5 py-1.5 rounded-xl bg-slate-800 text-slate-300 text-xs hover:bg-slate-700 transition"
+                className="px-4 py-1.5 rounded-xl bg-slate-800 text-slate-100 text-xs font-bold hover:bg-slate-700 transition"
               >
                 닫기
               </button>
@@ -3215,8 +3382,8 @@ ${recentSnippet || "진행 내역 기록 없음"}
               className="p-5 space-y-4"
             >
               <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                  그룹 이름 <span className="text-indigo-400 font-bold">*</span>
+                <label className="block text-xs font-bold text-slate-100 mb-1.5">
+                  그룹 이름 <span className="text-indigo-500 font-bold">*</span>
                 </label>
                 <input
                   type="text"
@@ -3275,7 +3442,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
                 <button
                   type="button"
                   onClick={() => setIsNewGroupModalOpen(false)}
-                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-300 bg-slate-800 hover:bg-slate-700 transition"
+                  className="px-4 py-2 rounded-xl text-xs font-bold text-slate-100 bg-slate-800 hover:bg-slate-700 transition"
                 >
                   취소
                 </button>
@@ -3404,16 +3571,287 @@ ${recentSnippet || "진행 내역 기록 없음"}
         themeMode={themeMode}
       />
 
-      {/* 우측 하단 알림 토스트 (고대비 가독성 극대화 및 직관적 상태 아이콘) */}
+      {/* 모달 8: GitHub Releases 새 버전 자동 감지 & 업데이트 모달 */}
+      {isUpdateModalOpen && updateInfo && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 select-none animate-in fade-in duration-150">
+          <div className="w-full max-w-md rounded-2xl bg-slate-900 border border-indigo-500/50 shadow-2xl overflow-hidden flex flex-col">
+            <div className="px-5 py-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 to-fuchsia-600 flex items-center justify-center text-white shadow-md">
+                  <ArrowUpCircle className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
+                    새로운 버전 출시!
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                      {updateInfo.latest_version}
+                    </span>
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    현재 {updateInfo.current_version} ➔ 최신 {updateInfo.latest_version}으로 업데이트할 수 있습니다.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsUpdateModalOpen(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-100 transition"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 text-xs">
+              {updateInfo.release_notes ? (
+                <div>
+                  <span className="block text-[11px] font-semibold text-slate-300 mb-1">업데이트 변경 내역:</span>
+                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-slate-200 text-[11px] font-mono max-h-48 overflow-y-auto whitespace-pre-wrap leading-relaxed">
+                    {updateInfo.release_notes}
+                  </div>
+                </div>
+              ) : (
+                <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-slate-300 text-center">
+                  안정성 개선 및 새로운 기능이 포함된 최신 버전입니다.
+                </div>
+              )}
+
+              <div className="p-3 rounded-xl bg-indigo-500/10 border border-indigo-500/20 space-y-1">
+                <div className="font-semibold text-indigo-300 flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5" />
+                  간편 업데이트 안내
+                </div>
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  아래 [최신 버전 다운로드]를 클릭하여 최신 포터블 실행 파일을 내려받아 바로 실행하시면 기존 설정과 세션이 그대로 유지됩니다.
+                </p>
+              </div>
+            </div>
+
+            <div className="px-5 py-3.5 bg-slate-950 border-t border-slate-800 flex items-center justify-between">
+              <a
+                href={updateInfo.release_url}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 text-[11px] text-slate-400 hover:text-indigo-400 transition"
+              >
+                <span>GitHub 릴리즈 페이지</span>
+                <ExternalLink className="w-3 h-3" />
+              </a>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsUpdateModalOpen(false)}
+                  className="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition"
+                >
+                  다음에 하기
+                </button>
+                <a
+                  href={updateInfo.download_url || updateInfo.release_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={() => setIsUpdateModalOpen(false)}
+                  className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-md shadow-indigo-600/30 transition"
+                >
+                  <ArrowUpCircle className="w-3.5 h-3.5" />
+                  최신 버전 다운로드
+                </a>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 모달 9: 신규 사용자 최초 온보딩 & 나만의 프로필 설정 모달 */}
+      {isOnboardingProfileOpen && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-md flex items-center justify-center p-4 select-none animate-in fade-in duration-200">
+          <div className="w-full max-w-lg rounded-3xl bg-slate-900 border border-indigo-500/40 shadow-2xl overflow-hidden flex flex-col">
+            {/* 상단 배너 */}
+            <div className="px-6 py-5 bg-gradient-to-r from-indigo-950/80 via-slate-900 to-slate-950 border-b border-slate-800 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-indigo-600 flex items-center justify-center text-white text-xl shadow-lg shadow-indigo-500/30">
+                  {onboardEmoji}
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-100 flex items-center gap-2">
+                    AgentriX에 오신 것을 환영합니다! 🎉
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    대시보드와 팀 협업 뷰에서 표시될 개발자 프로필을 설정해 주세요.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleSkipOnboardingProfile}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* 본문 폼 */}
+            <div className="p-6 space-y-5 max-h-[75vh] overflow-y-auto">
+              {/* 아바타 선택 */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-2">
+                  아바타 선택
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  {["👨‍💻", "👩‍💻", "🧑‍💻", "🤖", "⚡", "🚀", "💡", "👾", "🎯", "👑", "🔥", "💎", "🦾", "🧙‍♂️"].map((emoji) => (
+                    <button
+                      key={emoji}
+                      type="button"
+                      onClick={() => setOnboardEmoji(emoji)}
+                      className={`w-10 h-10 rounded-xl text-xl flex items-center justify-center transition ${
+                        onboardEmoji === emoji
+                          ? "bg-indigo-600/40 border-2 border-indigo-500 scale-110 shadow-md"
+                          : "bg-slate-950 border border-slate-800 hover:bg-slate-800 hover:border-slate-700"
+                      }`}
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* 이름 */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                  이름 / 닉네임 <span className="text-indigo-400">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={onboardName}
+                  onChange={(e) => setOnboardName(e.target.value)}
+                  placeholder="예: 홍길동, Alex, 개발자"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-slate-100 text-sm focus:outline-none focus:border-indigo-500 transition"
+                />
+              </div>
+
+              {/* 직무 / 역할 */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                  직무 / 역할
+                </label>
+                <input
+                  type="text"
+                  value={onboardRole}
+                  onChange={(e) => setOnboardRole(e.target.value)}
+                  placeholder="예: Software Engineer, Fullstack, AI Researcher"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-slate-100 text-sm focus:outline-none focus:border-indigo-500 transition mb-2"
+                />
+                <div className="flex flex-wrap gap-1.5">
+                  {["Software Engineer", "Frontend", "Backend", "Fullstack", "AI Engineer", "DevOps"].map((r) => (
+                    <button
+                      key={r}
+                      type="button"
+                      onClick={() => setOnboardRole(r)}
+                      className="px-2 py-1 rounded-lg bg-slate-950 border border-slate-800 text-[11px] text-slate-400 hover:text-indigo-300 hover:border-indigo-500/40 transition"
+                    >
+                      {r}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* 소속 / 부서 */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                  소속 / 부서
+                </label>
+                <input
+                  type="text"
+                  value={onboardDept}
+                  onChange={(e) => setOnboardDept(e.target.value)}
+                  placeholder="예: Engineering, Platform, 개인 프로젝트"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-slate-100 text-sm focus:outline-none focus:border-indigo-500 transition"
+                />
+              </div>
+
+              {/* 주력 AI 도구 선택 (설치 여부 직관적 표시) */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                  주력 AI 도구 선택
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  {clis.map((c) => {
+                    const isSelected = onboardCli.toLowerCase() === c.id.toLowerCase();
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => setOnboardCli(c.id)}
+                        className={`p-3 rounded-xl border text-left transition flex items-center justify-between ${
+                          isSelected
+                            ? "bg-indigo-600/20 border-indigo-500 text-indigo-200"
+                            : "bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700"
+                        }`}
+                      >
+                        <div className="min-w-0">
+                          <div className="font-bold text-xs truncate">{c.name}</div>
+                          <div className="text-[10px] mt-0.5">
+                            {c.installed ? (
+                              <span className="text-emerald-400 font-medium">● 설치됨</span>
+                            ) : (
+                              <span className="text-slate-500">○ 미설치</span>
+                            )}
+                          </div>
+                        </div>
+                        {isSelected && (
+                          <CheckCircle2 className="w-4 h-4 text-indigo-400 shrink-0" />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-[11px] text-slate-400 mt-2">
+                  💡 컴퓨터에 Claude가 없어도 Antigravity 등 설치된 도구를 자유롭게 사용할 수 있습니다.
+                </p>
+              </div>
+            </div>
+
+            {/* 하단 액션 버튼 */}
+            <div className="px-6 py-4 bg-slate-950 border-t border-slate-800 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleSkipOnboardingProfile}
+                  className="px-3.5 py-2 rounded-xl text-slate-400 hover:text-slate-200 text-xs font-semibold transition"
+                >
+                  다음에 설정하기
+                </button>
+                <button
+                  type="button"
+                  onClick={handleResetAllAppData}
+                  className="px-2.5 py-1.5 rounded-xl text-rose-400/80 hover:text-rose-300 hover:bg-rose-950/30 text-[11px] font-medium transition"
+                  title="모든 프로젝트와 로컬 기록을 완전히 지우고 공장 초기화합니다."
+                >
+                  전체 데이터 초기화
+                </button>
+              </div>
+              <button
+                type="button"
+                onClick={handleSaveOnboardingProfile}
+                className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-lg shadow-indigo-600/30 transition active:scale-95"
+              >
+                AgentriX 시작하기
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 우측 하단 알림 토스트 (고대비 가독성 극대화: 라이트/다크 모드 불문 항상 선명한 다크 캡슐 & 또렷한 화이트 텍스트) */}
       {toast && (
         <div
-          className={`fixed bottom-6 right-6 z-50 flex items-center gap-2.5 px-4 py-3 rounded-xl border-2 shadow-2xl text-xs font-semibold backdrop-blur-md transition-all ${
+          className={`fixed bottom-6 right-6 z-50 flex items-center gap-3 px-5 py-3.5 rounded-2xl border-2 shadow-2xl text-xs font-bold tracking-wide backdrop-blur-xl transition-all animate-in fade-in slide-in-from-bottom-3 duration-200 ${
             toast.tone === "error"
-              ? "bg-slate-900 text-white border-rose-500 shadow-rose-950/50"
+              ? "bg-[#0b0f19] text-rose-100 border-rose-500 shadow-rose-950/80"
               : toast.tone === "success"
-              ? "bg-slate-900 text-white border-emerald-500 shadow-emerald-950/50"
-              : "bg-slate-900 text-white border-indigo-500 shadow-indigo-950/50"
+              ? "bg-[#0b0f19] text-emerald-100 border-emerald-500 shadow-emerald-950/80"
+              : "bg-[#0b0f19] text-indigo-100 border-indigo-500 shadow-indigo-950/80"
           }`}
+          style={{ minWidth: "260px", maxWidth: "420px" }}
         >
           {toast.tone === "error" ? (
             <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
@@ -3422,7 +3860,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
           ) : (
             <Sparkles className="w-4 h-4 text-indigo-400 shrink-0" />
           )}
-          <span className="text-white tracking-wide">{toast.text}</span>
+          <span className="text-slate-100 leading-snug flex-1 break-words">{toast.text}</span>
         </div>
       )}
     </div>

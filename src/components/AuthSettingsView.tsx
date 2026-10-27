@@ -23,6 +23,7 @@ interface AuthSettingsViewProps {
   onStartLoginSession: (cliId: string, loginCmd: string) => Promise<void>;
   onAddCustomCli: (input: CustomCliInput) => Promise<void>;
   onDeleteCustomCli: (cliId: string) => Promise<void>;
+  onResetAppData?: () => Promise<void>;
 }
 
 interface CliPreset {
@@ -180,6 +181,7 @@ export const AuthSettingsView: React.FC<AuthSettingsViewProps> = ({
   onStartLoginSession,
   onAddCustomCli,
   onDeleteCustomCli,
+  onResetAppData,
 }) => {
   const [inputs, setInputs] = useState<Record<string, string>>({});
   const [showAddCliModal, setShowAddCliModal] = useState(false);
@@ -553,7 +555,7 @@ export const AuthSettingsView: React.FC<AuthSettingsViewProps> = ({
                   <input
                     value={cliConfigPath}
                     onChange={(e) => setCliConfigPath(e.target.value)}
-                    placeholder="예: C:\Users\gusdl\.aider.conf.yml"
+                    placeholder="예: ~/.aider.conf.yml"
                     className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-100 font-mono"
                   />
                 </div>
@@ -562,7 +564,7 @@ export const AuthSettingsView: React.FC<AuthSettingsViewProps> = ({
                   <input
                     value={cliLogPath}
                     onChange={(e) => setCliLogPath(e.target.value)}
-                    placeholder="예: C:\Users\gusdl\.aider\logs"
+                    placeholder="예: ~/.aider/logs"
                     className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-100 font-mono"
                   />
                 </div>
@@ -816,6 +818,28 @@ export const AuthSettingsView: React.FC<AuthSettingsViewProps> = ({
           })}
         </div>
       </div>
+
+      {/* 공장 초기화 및 개인 설정 완전 삭제 섹션 */}
+      {onResetAppData && (
+        <div className="rounded-2xl border border-rose-500/30 bg-rose-950/10 p-5 mt-8 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div>
+            <h4 className="text-sm font-bold text-rose-300 flex items-center gap-2">
+              <Trash2 className="w-4 h-4 text-rose-400" />
+              앱 데이터 및 설정 공장 초기화 (Clean Slate)
+            </h4>
+            <p className="text-xs text-slate-400 mt-1 max-w-xl">
+              등록된 모든 작업 프로젝트, 토큰 사용 통계 기록, 팀원 목록, 로컬 캐시 및 프로필 설정을 싹 비우고 앱을 최초 설치 상태로 깨끗하게 되돌립니다.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onResetAppData}
+            className="px-4 py-2 rounded-xl bg-rose-600/20 hover:bg-rose-600 text-rose-200 hover:text-white border border-rose-500/40 text-xs font-bold transition shadow-sm shrink-0 active:scale-95"
+          >
+            모든 데이터 초기화
+          </button>
+        </div>
+      )}
     </div>
   );
 };

@@ -227,17 +227,6 @@ pub fn is_forbidden_system_dir(path_str: &str) -> bool {
 
 pub fn default_safe_project_dir() -> String {
     let home = crate::cli::home_dir();
-    let candidates = [
-        home.join("OneDrive").join("Desktop").join("Develop_Project").join("AI_CLI_MANAGER"),
-        home.join("OneDrive").join("Desktop").join("Develop_Project"),
-        home.join("Desktop").join("Develop_Project"),
-        home.clone(),
-    ];
-    for c in candidates {
-        if c.exists() && c.is_dir() {
-            return c.to_string_lossy().to_string();
-        }
-    }
     home.to_string_lossy().to_string()
 }
 
@@ -1812,6 +1801,32 @@ pub fn add_team_member(
 pub fn delete_team_member(conn: &Connection, member_id: &str) -> Result<Vec<TeamMemberRecord>> {
     conn.execute("DELETE FROM team_members WHERE member_id = ?1", params![member_id])?;
     get_team_members(conn)
+}
+
+/// 앱의 모든 사용자 데이터(등록 프로젝트, 사용량 통계, 팀원, 에이전트, API 키, 캐시)를 완전히 초기화(공장 초기화)
+pub fn reset_all_user_data(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        DELETE FROM user_projects;
+        DELETE FROM usage_logs;
+        DELETE FROM team_members;
+        DELETE FROM project_agents;
+        DELETE FROM api_keys;
+        DELETE FROM config_backups;
+        VACUUM;
+        ",
+    )?;
+
+    // 쿼터 캐시 파일 삭제
+    let cache_path = dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("AI_CLI_Manager")
+        .join("claude_quota_cache.json");
+    if cache_path.exists() {
+        let _ = std::fs::remove_file(cache_path);
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

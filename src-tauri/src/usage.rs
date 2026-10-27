@@ -109,15 +109,15 @@ pub fn format_epoch_kst(epoch_secs: i64) -> String {
         let dt_kst = dt_utc.with_timezone(&kst_offset);
         let now_kst = Utc::now().with_timezone(&kst_offset);
         if dt_kst <= now_kst {
-            return "리셋 완료 (사용 가능)".to_string();
+            return "리셋 완료".to_string();
         }
         if dt_kst.date_naive() == now_kst.date_naive() {
-            format!("오늘 {} 리셋", dt_kst.format("%H:%M"))
+            format!("오늘 {}", dt_kst.format("%H:%M"))
         } else {
-            format!("{} 리셋", dt_kst.format("%m/%d %H:%M"))
+            format!("{}", dt_kst.format("%m/%d %H:%M"))
         }
     } else {
-        "리셋 시각 미확인".to_string()
+        "시각 미확인".to_string()
     }
 }
 
@@ -127,12 +127,12 @@ pub fn format_iso_kst(iso_str: &str) -> Option<String> {
     let dt_kst = parsed.with_timezone(&kst_offset);
     let now_kst = Utc::now().with_timezone(&kst_offset);
     if dt_kst <= now_kst {
-        return Some("리셋 완료 (사용 가능)".to_string());
+        return Some("리셋 완료".to_string());
     }
     if dt_kst.date_naive() == now_kst.date_naive() {
-        Some(format!("오늘 {} 리셋", dt_kst.format("%H:%M")))
+        Some(format!("오늘 {}", dt_kst.format("%H:%M")))
     } else {
-        Some(format!("{} 리셋", dt_kst.format("%m/%d %H:%M")))
+        Some(format!("{}", dt_kst.format("%m/%d %H:%M")))
     }
 }
 
@@ -788,7 +788,7 @@ pub fn extract_codex_quota() -> CliQuotaStatus {
                 let (used_5h, resets_5h_label, status_msg) = match resets_5h_epoch {
                     Some(ts) if now_epoch >= ts => (
                         0.0,
-                        Some(format!("{} (리셋 완료)", format_epoch_kst(ts))),
+                        Some("리셋 완료".to_string()),
                         None,
                     ),
                     Some(ts) => {
@@ -825,7 +825,7 @@ pub fn extract_codex_quota() -> CliQuotaStatus {
                     .and_then(|x| x.as_i64());
 
                 let (used_weekly, resets_weekly_label) = match resets_weekly_epoch {
-                    Some(ts) if now_epoch >= ts => (0.0, Some(format!("{} (리셋 완료)", format_epoch_kst(ts)))),
+                    Some(ts) if now_epoch >= ts => (0.0, Some("리셋 완료".to_string())),
                     Some(ts) => (raw_used_weekly.clamp(0.0, 100.0), Some(format_epoch_kst(ts))),
                     None => (raw_used_weekly.clamp(0.0, 100.0), None),
                 };
@@ -1132,13 +1132,11 @@ pub fn extract_grok_quota() -> CliQuotaStatus {
 }
 
 static AGY_QUOTA_CACHE: OnceLock<Mutex<Option<(Instant, CliQuotaStatus)>>> = OnceLock::new();
-static AGY_QUOTA_FETCHING: OnceLock<Mutex<bool>> = OnceLock::new();
 
 fn fetch_antigravity_quota_worker() -> Option<CliQuotaStatus> {
     let mut agy_bin = None;
     for cand in [
         crate::cli::home_dir().join("AppData").join("Local").join("agy").join("bin").join("agy.exe"),
-        PathBuf::from("C:\\Users\\gusdl\\AppData\\Local\\agy\\bin\\agy.exe"),
         PathBuf::from("agy.exe"),
         PathBuf::from("agy"),
     ] {

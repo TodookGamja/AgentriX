@@ -235,7 +235,7 @@ export const TeamModeView: React.FC<TeamModeViewProps> = ({
         <div className="flex items-center gap-2">
           <button
             onClick={openProfileModal}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-indigo-300 border border-indigo-500/30 text-xs font-semibold transition shadow-sm active:scale-95"
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-indigo-600 dark:text-indigo-300 border border-indigo-500/30 text-xs font-bold transition shadow-sm active:scale-95"
           >
             <Settings className="w-3.5 h-3.5" />
             내 프로필 설정
@@ -244,7 +244,7 @@ export const TeamModeView: React.FC<TeamModeViewProps> = ({
           {onAddMember && (
             <button
               onClick={() => setShowAddModal(true)}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition shadow active:scale-95"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition shadow active:scale-95"
             >
               <UserPlus className="w-3.5 h-3.5" />
               새 팀원 등록
@@ -253,7 +253,7 @@ export const TeamModeView: React.FC<TeamModeViewProps> = ({
 
           <button
             onClick={onRefreshTeam}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition active:scale-95"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700 text-xs font-bold transition active:scale-95"
           >
             <RefreshCw className="w-3.5 h-3.5" />
             팀 뷰 동기화
@@ -282,16 +282,16 @@ export const TeamModeView: React.FC<TeamModeViewProps> = ({
 
         <div className="flex items-center gap-4 text-xs font-mono shrink-0">
           <div className="text-right">
-            <div className="text-[10px] text-slate-500">주력 도구</div>
-            <div className="font-bold text-indigo-300 uppercase">{userProfile.favoriteCli}</div>
+            <div className="text-[10px] text-slate-500 font-medium">주력 도구</div>
+            <div className="font-bold text-indigo-600 dark:text-indigo-300 uppercase">{userProfile.favoriteCli}</div>
           </div>
           <div className="text-right">
-            <div className="text-[10px] text-slate-500">내 주간 토큰</div>
-            <div className="font-bold text-slate-200">{myUsage.weekly.toLocaleString()}</div>
+            <div className="text-[10px] text-slate-500 font-medium">내 주간 토큰</div>
+            <div className="font-extrabold text-slate-100">{myUsage.weekly.toLocaleString()}</div>
           </div>
           <button
             onClick={openProfileModal}
-            className="px-3 py-1.5 rounded-lg bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-200 text-xs font-semibold border border-indigo-500/40 transition active:scale-95"
+            className="px-3 py-1.5 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-700 dark:text-indigo-200 text-xs font-bold border border-indigo-500/40 transition active:scale-95"
           >
             프로필 수정
           </button>
@@ -300,34 +300,34 @@ export const TeamModeView: React.FC<TeamModeViewProps> = ({
 
       {/* 팀 요약 카드 */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-800">
-          <div className="text-xs text-slate-400">팀 주간 총 토큰 사용량</div>
-          <div className="text-2xl font-bold font-mono text-indigo-400 mt-1">
+        <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-800 shadow-sm">
+          <div className="text-xs font-semibold text-slate-300">팀 주간 총 토큰 사용량</div>
+          <div className="text-2xl font-extrabold font-mono text-indigo-600 dark:text-indigo-400 mt-1">
             {(totalTeamWeekly / 1_000_000).toFixed(1)}M
             <span className="text-xs text-slate-400 font-normal ml-1">tokens</span>
           </div>
-          <div className="text-[11px] text-slate-400 mt-2">
+          <div className="text-[11px] text-slate-400 mt-2 font-medium">
             호스트 포함 {members.length + 1}명 주간 누적
           </div>
         </div>
 
-        <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-800">
-          <div className="text-xs text-slate-400">팀 평균 토큰 절감률 (Headroom·Caveman)</div>
-          <div className="text-2xl font-bold font-mono text-emerald-400 mt-1 flex items-center gap-1.5">
-            <Sparkles className="w-5 h-5 text-emerald-400" />
+        <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-800 shadow-sm">
+          <div className="text-xs font-semibold text-slate-300">팀 평균 토큰 절감률 (Headroom·Caveman)</div>
+          <div className="text-2xl font-extrabold font-mono text-emerald-600 dark:text-emerald-400 mt-1 flex items-center gap-1.5">
+            <Sparkles className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
             {avgSavedPct.toFixed(1)}%
           </div>
-          <div className="text-[11px] text-emerald-400/80 mt-2">
+          <div className="text-[11px] text-emerald-700 dark:text-emerald-400 mt-2 font-medium">
             컨텍스트 압축 및 중복 방지 절감 효과 가동 중
           </div>
         </div>
 
-        <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-800">
-          <div className="text-xs text-slate-400">팀 주간 환산 총 비용</div>
-          <div className="text-2xl font-bold font-mono text-amber-400 mt-1">
+        <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-800 shadow-sm">
+          <div className="text-xs font-semibold text-slate-300">팀 주간 환산 총 비용</div>
+          <div className="text-2xl font-extrabold font-mono text-amber-600 dark:text-amber-400 mt-1">
             ${totalTeamCost.toFixed(2)}
           </div>
-          <div className="text-[11px] text-slate-400 mt-2">
+          <div className="text-[11px] text-slate-400 mt-2 font-medium">
             주간 토큰 기준 Claude 3.5 Sonnet 환산 추정치
           </div>
         </div>
@@ -428,23 +428,23 @@ export const TeamModeView: React.FC<TeamModeViewProps> = ({
                 <span className="font-medium">{userProfile.role}</span> · <span className="text-slate-400">{userProfile.department}</span>
               </td>
               <td className="py-3 px-4 whitespace-nowrap">
-                <span className="px-2 py-0.5 rounded bg-indigo-900/60 text-indigo-300 uppercase text-[10px] font-bold border border-indigo-700/40">
+                <span className="px-2 py-0.5 rounded bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 uppercase text-[10px] font-bold border border-indigo-500/30">
                   {userProfile.favoriteCli}
                 </span>
               </td>
-              <td className="py-3 px-4 text-right font-mono text-amber-300 font-semibold whitespace-nowrap">
+              <td className="py-3 px-4 text-right font-mono text-amber-600 dark:text-amber-300 font-bold whitespace-nowrap">
                 {myUsage.rolling5h.toLocaleString()}
               </td>
-              <td className="py-3 px-4 text-right font-mono text-slate-200 whitespace-nowrap">
+              <td className="py-3 px-4 text-right font-mono text-slate-100 font-bold whitespace-nowrap">
                 {myUsage.weekly.toLocaleString()}
               </td>
               <td className="py-3 px-4 text-center whitespace-nowrap">
                 <div className="inline-flex items-center gap-1.5 whitespace-nowrap">
-                  <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 text-[10px] border border-emerald-500/30">
+                  <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 text-[10px] font-bold border border-emerald-500/30">
                     <CheckCircle2 className="w-2.5 h-2.5" />
                     Headroom
                   </span>
-                  <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded bg-indigo-500/15 text-indigo-300 text-[10px] border border-indigo-500/30">
+                  <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 text-[10px] font-bold border border-indigo-500/30">
                     <CheckCircle2 className="w-2.5 h-2.5" />
                     Caveman
                   </span>
@@ -493,20 +493,20 @@ export const TeamModeView: React.FC<TeamModeViewProps> = ({
                 <td className="py-3 px-4 text-center whitespace-nowrap">
                   <div className="inline-flex items-center gap-1.5 whitespace-nowrap">
                     <span
-                      className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] ${
+                      className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold ${
                         m.headroomActive
-                          ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/30"
-                          : "bg-slate-800 text-slate-500 border border-slate-700"
+                          ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30"
+                          : "bg-slate-800 text-slate-500 border border-slate-700 font-medium"
                       }`}
                     >
                       {m.headroomActive && <CheckCircle2 className="w-2.5 h-2.5" />}
                       Headroom
                     </span>
                     <span
-                      className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] ${
+                      className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold ${
                         m.cavemanActive
-                          ? "bg-indigo-500/15 text-indigo-300 border border-indigo-500/30"
-                          : "bg-slate-800 text-slate-500 border border-slate-700"
+                          ? "bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 border border-indigo-500/30"
+                          : "bg-slate-800 text-slate-500 border border-slate-700 font-medium"
                       }`}
                     >
                       {m.cavemanActive && <CheckCircle2 className="w-2.5 h-2.5" />}
@@ -514,10 +514,10 @@ export const TeamModeView: React.FC<TeamModeViewProps> = ({
                     </span>
                   </div>
                 </td>
-                <td className="py-3 px-4 text-right font-mono text-emerald-400 whitespace-nowrap">
+                <td className="py-3 px-4 text-right font-mono text-emerald-600 dark:text-emerald-400 font-bold whitespace-nowrap">
                   -{m.savedTokensPct.toFixed(1)}%
                 </td>
-                <td className="py-3 px-4 text-right font-mono text-slate-200 whitespace-nowrap">
+                <td className="py-3 px-4 text-right font-mono text-slate-100 font-bold whitespace-nowrap">
                   ${m.costUsd.toFixed(2)}
                 </td>
                 <td className="py-3 px-4 text-center whitespace-nowrap">
