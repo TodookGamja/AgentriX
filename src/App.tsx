@@ -2391,7 +2391,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
             <div className="flex items-center justify-between px-1 text-[11px] select-none">
               <span className="font-mono text-slate-400 font-bold flex items-center gap-1.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                AgentriX v1.0.0
+                AgentriX v1.0.1
               </span>
               <button
                 type="button"
