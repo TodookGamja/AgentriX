@@ -1982,10 +1982,10 @@ ${recentSnippet || "진행 내역 기록 없음"}
                       setSelectedProjectForNewGroup(projectFolders[0]?.path || "");
                       setIsNewGroupModalOpen(true);
                     }}
-                    className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-slate-500 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-300 hover:bg-slate-200 dark:hover:bg-slate-800 transition"
+                    className="flex items-center gap-1 px-2 py-0.5 rounded-lg border border-transparent hover:border-slate-800 hover:bg-slate-800 text-[11px] font-semibold text-slate-300 hover:text-indigo-400 transition"
                     title="새 프로젝트 그룹 만들기"
                   >
-                    <FolderPlus className="w-3 h-3 text-indigo-500 dark:text-indigo-400" />
+                    <FolderPlus className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
                     <span>새 그룹</span>
                   </button>
                 </div>

@@ -467,7 +467,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
             className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border transition text-[11px] font-bold whitespace-nowrap shrink-0 shadow-sm ${
               estimatedTokens >= (contextThresholdTokens || 100000) * 0.85
                 ? "bg-amber-100 text-amber-950 border-amber-400 hover:bg-amber-200 dark:bg-amber-500/20 dark:text-amber-300 dark:border-amber-500/50 dark:hover:bg-amber-500/30 animate-pulse font-extrabold"
-                : "bg-slate-200/90 text-slate-800 border-slate-300 hover:bg-slate-300 dark:bg-slate-800/80 dark:text-slate-200 dark:border-slate-700/80 dark:hover:text-white dark:hover:bg-slate-700"
+                : "bg-slate-900 text-slate-200 border-slate-800 hover:bg-slate-800 hover:text-slate-100"
             }`}
             title={`컨텍스트 토큰 최적화 설정 (현재 약 ${Math.round(estimatedTokens / 1000)}k / 한도 ${Math.round((contextThresholdTokens || 100000) / 1000)}k 토큰)`}
           >
