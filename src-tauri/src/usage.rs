@@ -91,16 +91,16 @@ pub fn get_dynamic_kst_reset(hours: i64) -> String {
     let target_kst = (Utc::now() + chrono::Duration::hours(hours)).with_timezone(&kst_offset);
     let now_kst = Utc::now().with_timezone(&kst_offset);
     if target_kst.date_naive() == now_kst.date_naive() {
-        format!("오늘 {} 리셋", target_kst.format("%H:%M"))
+        format!("{}", target_kst.format("%H:%M"))
     } else {
-        format!("내일 {} 리셋", target_kst.format("%H:%M"))
+        format!("{}", target_kst.format("%m/%d %H:%M"))
     }
 }
 
 pub fn get_dynamic_kst_weekly_reset(days: i64) -> String {
     let kst_offset = FixedOffset::east_opt(9 * 3600).unwrap();
     let target_kst = (Utc::now() + chrono::Duration::days(days)).with_timezone(&kst_offset);
-    format!("{} 리셋", target_kst.format("%m/%d %H:%M"))
+    format!("{}", target_kst.format("%m/%d %H:%M"))
 }
 
 pub fn format_epoch_kst(epoch_secs: i64) -> String {
@@ -109,15 +109,15 @@ pub fn format_epoch_kst(epoch_secs: i64) -> String {
         let dt_kst = dt_utc.with_timezone(&kst_offset);
         let now_kst = Utc::now().with_timezone(&kst_offset);
         if dt_kst <= now_kst {
-            return "리셋 완료".to_string();
+            return String::new();
         }
         if dt_kst.date_naive() == now_kst.date_naive() {
-            format!("오늘 {}", dt_kst.format("%H:%M"))
+            format!("{}", dt_kst.format("%H:%M"))
         } else {
             format!("{}", dt_kst.format("%m/%d %H:%M"))
         }
     } else {
-        "시각 미확인".to_string()
+        String::new()
     }
 }
 
@@ -127,10 +127,10 @@ pub fn format_iso_kst(iso_str: &str) -> Option<String> {
     let dt_kst = parsed.with_timezone(&kst_offset);
     let now_kst = Utc::now().with_timezone(&kst_offset);
     if dt_kst <= now_kst {
-        return Some("리셋 완료".to_string());
+        return None;
     }
     if dt_kst.date_naive() == now_kst.date_naive() {
-        Some(format!("오늘 {}", dt_kst.format("%H:%M")))
+        Some(format!("{}", dt_kst.format("%H:%M")))
     } else {
         Some(format!("{}", dt_kst.format("%m/%d %H:%M")))
     }
@@ -788,7 +788,7 @@ pub fn extract_codex_quota() -> CliQuotaStatus {
                 let (used_5h, resets_5h_label, status_msg) = match resets_5h_epoch {
                     Some(ts) if now_epoch >= ts => (
                         0.0,
-                        Some("리셋 완료".to_string()),
+                        None,
                         None,
                     ),
                     Some(ts) => {
@@ -808,7 +808,8 @@ pub fn extract_codex_quota() -> CliQuotaStatus {
                         } else {
                             None
                         };
-                        (effective_used, Some(format_epoch_kst(ts)), msg)
+                        let label = format_epoch_kst(ts);
+                        (effective_used, if label.is_empty() { None } else { Some(label) }, msg)
                     }
                     None => {
                         let effective_used = if hit_limit_exceeded { 100.0 } else { raw_used_5h.clamp(0.0, 100.0) };
@@ -825,8 +826,11 @@ pub fn extract_codex_quota() -> CliQuotaStatus {
                     .and_then(|x| x.as_i64());
 
                 let (used_weekly, resets_weekly_label) = match resets_weekly_epoch {
-                    Some(ts) if now_epoch >= ts => (0.0, Some("리셋 완료".to_string())),
-                    Some(ts) => (raw_used_weekly.clamp(0.0, 100.0), Some(format_epoch_kst(ts))),
+                    Some(ts) if now_epoch >= ts => (0.0, None),
+                    Some(ts) => {
+                        let label = format_epoch_kst(ts);
+                        (raw_used_weekly.clamp(0.0, 100.0), if label.is_empty() { None } else { Some(label) })
+                    }
                     None => (raw_used_weekly.clamp(0.0, 100.0), None),
                 };
 

@@ -1740,6 +1740,17 @@ ${recentSnippet || "진행 내역 기록 없음"}
   const pctWeekly = 100 - activeRemainPctWk;
   const remainPctWeekly = activeRemainPctWk;
 
+  // 리셋 라벨에서 사족("리셋 완료", "리셋", 괄호 등)을 완전 제거하고 순수 시간만 추출
+  const cleanResetTime = (str?: string | null) => {
+    if (!str) return null;
+    const cleaned = str
+      .replace(/리셋\s*완료/g, "")
+      .replace(/리셋/g, "")
+      .replace(/[()]/g, "")
+      .trim();
+    return cleaned || null;
+  };
+
   const selectedFolderName = getShortFolderName(selectedProjectPath);
 
   const [isMaximized, setIsMaximized] = useState(false);
@@ -2378,9 +2389,9 @@ ${recentSnippet || "진행 내역 기록 없음"}
               <div className="flex items-center justify-between text-[11px]">
                 <span className="text-slate-400 font-medium">5시간 잔여</span>
                 <div className="flex items-center gap-1.5">
-                  {activeReset5h && focusedCliId !== "grok" && (
+                  {cleanResetTime(activeReset5h) && focusedCliId !== "grok" && remainPct5h < 100 && (
                     <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-amber-500/10 text-amber-600 dark:text-amber-300 font-bold border border-amber-500/20">
-                      {activeReset5h}
+                      {cleanResetTime(activeReset5h)}
                     </span>
                   )}
                   <span
@@ -2411,9 +2422,9 @@ ${recentSnippet || "진행 내역 기록 없음"}
               <div className="flex items-center justify-between text-[11px]">
                 <span className="text-slate-400 font-medium">주간 잔여</span>
                 <div className="flex items-center gap-1.5">
-                  {activeResetWk && (
+                  {cleanResetTime(activeResetWk) && remainPctWeekly < 100 && (
                     <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-indigo-500/10 text-indigo-600 dark:text-indigo-300 font-bold border border-indigo-500/20">
-                      {activeResetWk}
+                      {cleanResetTime(activeResetWk)}
                     </span>
                   )}
                   <span
