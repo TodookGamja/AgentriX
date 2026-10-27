@@ -139,30 +139,30 @@ h1, h2, h3, h4, h5, h6, p, span, button, label {
 /* =========================================================================
    드롭다운 (<select>) — 테마 토큰 기반
    ========================================================================= */
-select {
-  background-color: rgb(var(--slate-950)) !important;
-  color: rgb(var(--slate-100)) !important;
-  border: 1px solid rgb(var(--slate-700)) !important;
-  border-radius: 0.75rem !important;
-  padding: 0.5rem 2rem 0.5rem 0.75rem !important;
-  appearance: none !important;
-  -webkit-appearance: none !important;
-  background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%23818cf8' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M6 8l4 4 4-4'/%3e%3c/svg%3e") !important;
-  background-position: right 0.65rem center !important;
-  background-repeat: no-repeat !important;
-  background-size: 1.1em 1.1em !important;
-  cursor: pointer !important;
-  transition: border-color 0.15s, box-shadow 0.15s !important;
+select:not(.clean-select) {
+  background-color: rgb(var(--slate-950));
+  color: rgb(var(--slate-100));
+  border: 1px solid rgb(var(--slate-700));
+  border-radius: 0.75rem;
+  padding: 0.5rem 2rem 0.5rem 0.75rem;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%23818cf8' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
+  background-position: right 0.65rem center;
+  background-repeat: no-repeat;
+  background-size: 1.1em 1.1em;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
-select:hover { border-color: rgb(var(--slate-600)) !important; }
-select:focus {
-  outline: none !important;
-  border-color: #6366f1 !important;
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.25) !important;
+select:not(.clean-select):hover { border-color: rgb(var(--slate-600)); }
+select:not(.clean-select):focus {
+  outline: none;
+  border-color: #6366f1;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.25);
 }
 select option {
-  background-color: rgb(var(--slate-900)) !important;
-  color: rgb(var(--slate-100)) !important;
+  background-color: rgb(var(--slate-900));
+  color: rgb(var(--slate-100));
 }
 
 /* =========================================================================

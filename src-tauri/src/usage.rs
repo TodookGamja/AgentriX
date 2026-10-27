@@ -983,15 +983,19 @@ fn save_claude_cache_to_disk(quota: &CliQuotaStatus) {
 fn load_claude_cache_from_disk() -> Option<CliQuotaStatus> {
     let p = get_claude_cache_file();
     if p.is_file() {
+        if let Ok(metadata) = p.metadata() {
+            if let Ok(modified) = metadata.modified() {
+                if let Ok(elapsed) = modified.elapsed() {
+                    if elapsed.as_secs() > 300 {
+                        let _ = std::fs::remove_file(&p);
+                        return None;
+                    }
+                }
+            }
+        }
         if let Ok(content) = std::fs::read_to_string(&p) {
             if let Ok(quota) = serde_json::from_str::<CliQuotaStatus>(&content) {
                 if quota.has_official_quota && quota.resets_at_5h.is_some() {
-                    if let Some(ref rst) = quota.resets_at_5h {
-                        if rst.contains("13:50") {
-                            let _ = std::fs::remove_file(&p);
-                            return None;
-                        }
-                    }
                     return Some(quota);
                 }
             }
@@ -1347,7 +1351,17 @@ fn save_agy_cache_to_disk(quota: &CliQuotaStatus) {
 fn load_agy_cache_from_disk() -> Option<CliQuotaStatus> {
     let p = get_agy_cache_file();
     if p.is_file() {
-        if let Ok(content) = std::fs::read_to_string(p) {
+        if let Ok(metadata) = p.metadata() {
+            if let Ok(modified) = metadata.modified() {
+                if let Ok(elapsed) = modified.elapsed() {
+                    if elapsed.as_secs() > 300 {
+                        let _ = std::fs::remove_file(&p);
+                        return None;
+                    }
+                }
+            }
+        }
+        if let Ok(content) = std::fs::read_to_string(&p) {
             if let Ok(quota) = serde_json::from_str::<CliQuotaStatus>(&content) {
                 return Some(quota);
             }

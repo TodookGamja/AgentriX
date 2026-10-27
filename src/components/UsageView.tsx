@@ -17,6 +17,7 @@ import {
   ArrowUpDown,
   BarChart3,
   CheckCircle2,
+  ChevronDown,
   Cpu,
   DollarSign,
   Layers,
@@ -94,6 +95,43 @@ const TIMEFRAME_OPTIONS: { id: string; label: string; desc: string; icon: string
   { id: "all", label: "전체 기간", desc: "전체 세션 누적", icon: "🌐" },
 ];
 
+// 리셋 시간 포맷 및 이미 지난 과거 시간 자동 검증 필터
+const formatCleanReset = (raw?: string | null): string => {
+  if (!raw) return "—";
+  let s = raw.replace(/리셋\s*완료/g, "").replace(/리셋/g, "").replace(/오늘/g, "").replace(/[()]/g, "").trim();
+  if (!s || s === "—" || s === "-") return "—";
+
+  // "HH:mm" 포맷 검증: 오늘 기준 이미 지난 시간이면 "리셋 완료" 표시
+  const match = s.match(/^(\d{1,2}):(\d{2})$/);
+  if (match) {
+    const h = parseInt(match[1], 10);
+    const m = parseInt(match[2], 10);
+    const now = new Date();
+    const target = new Date();
+    target.setHours(h, m, 0, 0);
+    if (target.getTime() < now.getTime() - 60000) {
+      return "리셋 완료";
+    }
+    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+  }
+
+  // "MM/DD HH:mm" 포맷 검증
+  const dateMatch = s.match(/^(\d{1,2})\/(\d{1,2})\s+(\d{1,2}):(\d{2})$/);
+  if (dateMatch) {
+    const month = parseInt(dateMatch[1], 10) - 1;
+    const day = parseInt(dateMatch[2], 10);
+    const h = parseInt(dateMatch[3], 10);
+    const m = parseInt(dateMatch[4], 10);
+    const now = new Date();
+    const target = new Date(now.getFullYear(), month, day, h, m, 0);
+    if (target.getTime() < now.getTime() - 60000) {
+      return "리셋 완료";
+    }
+  }
+
+  return s;
+};
+
 export const UsageView: React.FC<UsageViewProps> = ({
   data,
   cliFilter,
@@ -107,6 +145,47 @@ export const UsageView: React.FC<UsageViewProps> = ({
   const [breakdownCliFilter, setBreakdownCliFilter] = useState("all");
   const [sortBy, setSortBy] = useState<"total" | "cost" | "input" | "output" | "cache">("total");
   const breakdownRef = useRef<HTMLDivElement>(null);
+
+  // 동적 CLI 필터 목록: 백엔드 쿼터 목록 + 기본/사용자 추가 CLI 자동 반영 (OpenCode, Cursor 등)
+  const dynamicCliFilters = useMemo(() => {
+    const list: { id: string; label: string; dot: string }[] = [
+      { id: "all", label: "전체 CLI 통합", dot: "" },
+    ];
+    const seen = new Set<string>(["all"]);
+
+    // 1) 쿼터 데이터에 포함된 모든 CLI
+    for (const q of (data?.cliQuotas ?? [])) {
+      if (!seen.has(q.cliId)) {
+        seen.add(q.cliId);
+        list.push({
+          id: q.cliId,
+          label: q.cliName || CLI_LABELS[q.cliId] || q.cliId,
+          dot: CLI_ACCENT[q.cliId]?.dot ?? "bg-indigo-400",
+        });
+      }
+    }
+
+    // 2) 기본 CLI 누락 방지
+    const defaults = [
+      { id: "claude", label: "Claude Code" },
+      { id: "codex", label: "Codex CLI" },
+      { id: "grok", label: "Grok CLI" },
+      { id: "antigravity", label: "Antigravity (agy)" },
+      { id: "cursor", label: "Cursor Agent CLI" },
+      { id: "opencode", label: "OpenCode CLI" },
+    ];
+    for (const d of defaults) {
+      if (!seen.has(d.id)) {
+        seen.add(d.id);
+        list.push({
+          id: d.id,
+          label: d.label,
+          dot: CLI_ACCENT[d.id]?.dot ?? "bg-indigo-400",
+        });
+      }
+    }
+    return list;
+  }, [data?.cliQuotas]);
 
   const scrollToBreakdown = () => {
     breakdownRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -261,21 +340,21 @@ export const UsageView: React.FC<UsageViewProps> = ({
 
           <div className="flex items-center gap-2 min-w-0">
             <span className="text-[11px] font-semibold text-slate-500 shrink-0">CLI 대상</span>
-            <div className="flex flex-wrap items-center bg-slate-950 p-1 rounded-xl border border-slate-800">
-              {["all", "claude", "codex", "grok", "antigravity", "cursor"].map((id) => (
+            <div className="flex flex-wrap items-center bg-slate-950 p-1 rounded-xl border border-slate-800 gap-0.5">
+              {dynamicCliFilters.map((cli) => (
                 <button
-                  key={id}
-                  onClick={() => onFilterChange(id)}
+                  key={cli.id}
+                  onClick={() => onFilterChange(cli.id)}
                   className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition whitespace-nowrap ${
-                    cliFilter === id
+                    cliFilter === cli.id
                       ? "bg-indigo-600 text-white shadow-sm"
                       : "text-slate-400 hover:text-slate-100 hover:bg-slate-800"
                   }`}
                 >
-                  {id !== "all" && (
-                    <span className={`w-1.5 h-1.5 rounded-full ${CLI_ACCENT[id]?.dot ?? "bg-slate-400"}`} />
+                  {cli.id !== "all" && (
+                    <span className={`w-1.5 h-1.5 rounded-full ${cli.dot}`} />
                   )}
-                  {id === "all" ? "전체 CLI 통합" : CLI_LABELS[id]}
+                  {cli.label}
                 </button>
               ))}
             </div>
@@ -285,48 +364,70 @@ export const UsageView: React.FC<UsageViewProps> = ({
 
       {/* =====================================================================
           1. CLI별 공식 구독 한도 및 세션 쿼터 카드
-          - 'all' (전체 CLI 통합) 선택 시: Claude, Codex, Grok, Antigravity 4개 동일 규격 카드 동시 표시
+          - 'all' (전체 CLI 통합) 선택 시: Claude, Codex, Grok, Antigravity, Cursor, OpenCode 및 추가된 모든 CLI 동시 표시
           - 개별 CLI 선택 시: 선택된 CLI의 카드만 1개 단독으로 집중 표시!
          ===================================================================== */}
       {(() => {
-        const targetClis =
-          cliFilter === "all"
-            ? ["claude", "codex", "grok", "antigravity"]
-            : [cliFilter];
+        const cardsToRender = (() => {
+          if (cliFilter !== "all") {
+            const found = quotas.find((q) => q.cliId === cliFilter);
+            if (found) return [found];
+            return [
+              {
+                cliId: cliFilter,
+                cliName: CLI_LABELS[cliFilter] ?? cliFilter,
+                planLabel: "CLI 연동 중",
+                sourceLabel: "텔레메트리 연동 준비 중",
+                hasOfficialQuota: false,
+                usedPercent5h: 0,
+                remainingPercent5h: 100,
+                resetsAt5h: null,
+                usedPercentWeekly: 0,
+                remainingPercentWeekly: 100,
+                resetsAtWeekly: null,
+                statusMessage: null,
+              } as CliQuotaStatus,
+            ];
+          }
 
-        const cardsToRender = targetClis
-          .map((id) => {
-            const found = quotas.find((q) => q.cliId === id);
-            if (found) return found;
-            return {
-              cliId: id,
-              cliName: CLI_LABELS[id] ?? id,
-              planLabel:
-                id === "claude"
-                  ? "Claude Pro"
-                  : id === "antigravity"
-                  ? "Google DeepMind"
-                  : id === "grok"
-                  ? "SuperGrok"
-                  : "ChatGPT Plus",
-              sourceLabel: "텔레메트리 연동 준비 중",
-              hasOfficialQuota: false,
-              usedPercent5h: 0,
-              remainingPercent5h: 100,
-              resetsAt5h: null,
-              usedPercentWeekly: 0,
-              remainingPercentWeekly: 100,
-              resetsAtWeekly: null,
-              statusMessage: null,
-            } as CliQuotaStatus;
-          })
-          .filter(Boolean);
+          const result = [...quotas];
+          const seen = new Set(result.map((q) => q.cliId));
+          const standardList = [
+            { id: "claude", name: "Claude Code", plan: "Claude Pro" },
+            { id: "codex", name: "Codex CLI", plan: "ChatGPT Plus" },
+            { id: "grok", name: "Grok CLI", plan: "SuperGrok" },
+            { id: "antigravity", name: "Antigravity (agy)", plan: "Google DeepMind" },
+            { id: "cursor", name: "Cursor Agent CLI", plan: "Cursor Pro" },
+            { id: "opencode", name: "OpenCode CLI", plan: "OpenCode OSS" },
+          ];
+
+          for (const s of standardList) {
+            if (!seen.has(s.id)) {
+              seen.add(s.id);
+              result.push({
+                cliId: s.id,
+                cliName: s.name,
+                planLabel: s.plan,
+                sourceLabel: "텔레메트리 연동 준비 중",
+                hasOfficialQuota: false,
+                usedPercent5h: 0,
+                remainingPercent5h: 100,
+                resetsAt5h: null,
+                usedPercentWeekly: 0,
+                remainingPercentWeekly: 100,
+                resetsAtWeekly: null,
+                statusMessage: null,
+              } as CliQuotaStatus);
+            }
+          }
+          return result;
+        })();
 
         return (
           <div
             className={`grid gap-3.5 ${
               cliFilter === "all"
-                ? "grid-cols-1 sm:grid-cols-2 2xl:grid-cols-4"
+                ? "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 2xl:grid-cols-3"
                 : "grid-cols-1"
             }`}
           >
@@ -433,7 +534,7 @@ export const UsageView: React.FC<UsageViewProps> = ({
                     <div className="text-[11px] text-slate-400 flex items-center justify-between font-mono pt-0.5 h-4">
                       <span className="shrink-0 text-slate-500 text-[10px]">초기화</span>
                       <span className="text-amber-300 font-medium truncate text-right ml-2 text-[10px]">
-                        {q.resetsAt5h ? q.resetsAt5h.replace("통합 주간 크레딧 ", "") : "—"}
+                        {formatCleanReset(q.resetsAt5h)}
                       </span>
                     </div>
                   </div>
@@ -463,7 +564,7 @@ export const UsageView: React.FC<UsageViewProps> = ({
                     <div className="text-[11px] text-slate-400 flex items-center justify-between font-mono pt-0.5 h-4">
                       <span className="shrink-0 text-slate-500 text-[10px]">주간 리셋</span>
                       <span className="text-indigo-300 font-medium truncate text-right ml-2 text-[10px]">
-                        {q.resetsAtWeekly ?? "—"}
+                        {formatCleanReset(q.resetsAtWeekly)}
                       </span>
                     </div>
                   </div>
@@ -512,7 +613,7 @@ export const UsageView: React.FC<UsageViewProps> = ({
                                         {r5h}%
                                       </span>
                                       {g.resetsAt5h && (
-                                        <span className="text-amber-300/80 text-[9px]">({g.resetsAt5h})</span>
+                                        <span className="text-amber-300/80 text-[9px]">({formatCleanReset(g.resetsAt5h)})</span>
                                       )}
                                     </div>
                                   )}
@@ -523,7 +624,7 @@ export const UsageView: React.FC<UsageViewProps> = ({
                                         {rWk}%
                                       </span>
                                       {g.resetsAtWeekly && (
-                                        <span className="text-indigo-300/80 text-[9px]">({g.resetsAtWeekly})</span>
+                                        <span className="text-indigo-300/80 text-[9px]">({formatCleanReset(g.resetsAtWeekly)})</span>
                                       )}
                                     </div>
                                   )}
@@ -860,21 +961,21 @@ export const UsageView: React.FC<UsageViewProps> = ({
               />
             </div>
 
-            {/* 정렬 셀렉터 */}
-            <div className="h-9 flex items-center gap-1.5 text-xs text-slate-300 bg-slate-950 px-3 rounded-xl border border-slate-800">
-              <ArrowUpDown className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-              <span className="text-slate-400 shrink-0">정렬:</span>
+            {/* 정렬 셀렉터 (이중 박스 없는 단일 라운드 필) */}
+            <div className="relative flex items-center">
+              <ArrowUpDown className="w-3.5 h-3.5 absolute left-3 text-indigo-400 pointer-events-none" />
               <select
                 value={sortBy}
                 onChange={(e) => setSortBy(e.target.value as any)}
-                className="bg-transparent text-slate-100 font-semibold focus:outline-none cursor-pointer text-xs"
+                className="clean-select h-9 pl-8 pr-7 rounded-xl bg-slate-950 border border-slate-800 text-xs font-semibold text-slate-200 hover:border-slate-700 focus:outline-none focus:border-indigo-500 cursor-pointer transition appearance-none"
               >
-                <option value="total" className="bg-slate-900 text-slate-100">총 토큰순</option>
-                <option value="cost" className="bg-slate-900 text-slate-100">비용($)순</option>
-                <option value="input" className="bg-slate-900 text-slate-100">Input순</option>
-                <option value="output" className="bg-slate-900 text-slate-100">Output순</option>
-                <option value="cache" className="bg-slate-900 text-slate-100">Cache순</option>
+                <option value="total">정렬: 총 토큰순</option>
+                <option value="cost">정렬: 비용($)순</option>
+                <option value="input">정렬: Input순</option>
+                <option value="output">정렬: Output순</option>
+                <option value="cache">정렬: Cache순</option>
               </select>
+              <ChevronDown className="w-3.5 h-3.5 absolute right-2.5 text-slate-400 pointer-events-none" />
             </div>
           </div>
         </div>

@@ -1741,14 +1741,45 @@ ${recentSnippet || "진행 내역 기록 없음"}
   const pctWeekly = 100 - activeRemainPctWk;
   const remainPctWeekly = activeRemainPctWk;
 
-  // 리셋 라벨에서 사족("리셋 완료", "리셋", 괄호 등)을 완전 제거하고 순수 시간만 추출
+  // 리셋 라벨에서 사족을 완전 제거하고, 이미 지난 과거 시간인 경우 표시하지 않음 (18:59 등 과거 시간 방지)
   const cleanResetTime = (str?: string | null) => {
     if (!str) return null;
-    const cleaned = str
+    let cleaned = str
       .replace(/리셋\s*완료/g, "")
       .replace(/리셋/g, "")
+      .replace(/오늘/g, "")
       .replace(/[()]/g, "")
       .trim();
+    if (!cleaned || cleaned === "—" || cleaned === "-") return null;
+
+    // "HH:mm" 포맷 검증: 오늘 기준 이미 지난 시간이면 표시 제외
+    const match = cleaned.match(/^(\d{1,2}):(\d{2})$/);
+    if (match) {
+      const h = parseInt(match[1], 10);
+      const m = parseInt(match[2], 10);
+      const now = new Date();
+      const target = new Date();
+      target.setHours(h, m, 0, 0);
+      if (target.getTime() < now.getTime() - 60000) {
+        return null;
+      }
+      cleaned = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+    }
+
+    // "MM/DD HH:mm" 포맷 검증
+    const dateMatch = cleaned.match(/^(\d{1,2})\/(\d{1,2})\s+(\d{1,2}):(\d{2})$/);
+    if (dateMatch) {
+      const month = parseInt(dateMatch[1], 10) - 1;
+      const day = parseInt(dateMatch[2], 10);
+      const h = parseInt(dateMatch[3], 10);
+      const m = parseInt(dateMatch[4], 10);
+      const now = new Date();
+      const target = new Date(now.getFullYear(), month, day, h, m, 0);
+      if (target.getTime() < now.getTime() - 60000) {
+        return null;
+      }
+    }
+
     return cleaned || null;
   };
 
@@ -3876,15 +3907,15 @@ ${recentSnippet || "진행 내역 기록 없음"}
         </div>
       )}
 
-      {/* 우측 하단 알림 토스트 (고대비 가독성 극대화: 라이트/다크 모드 불문 항상 선명한 다크 캡슐 & 또렷한 화이트 텍스트) */}
+      {/* 우측 하단 알림 토스트 (고대비 가독성 극대화: 라이트/다크 모드 불문 항상 선명한 캡슐 & 또렷한 화이트 텍스트) */}
       {toast && (
         <div
           className={`fixed bottom-6 right-6 z-50 flex items-center gap-3 px-5 py-3.5 rounded-2xl border-2 shadow-2xl text-xs font-bold tracking-wide backdrop-blur-xl transition-all animate-in fade-in slide-in-from-bottom-3 duration-200 ${
             toast.tone === "error"
-              ? "bg-[#0b0f19] text-rose-100 border-rose-500 shadow-rose-950/80"
+              ? "bg-slate-950 text-white border-rose-500 shadow-rose-950/80"
               : toast.tone === "success"
-              ? "bg-[#0b0f19] text-emerald-100 border-emerald-500 shadow-emerald-950/80"
-              : "bg-[#0b0f19] text-indigo-100 border-indigo-500 shadow-indigo-950/80"
+              ? "bg-slate-950 text-white border-emerald-500 shadow-emerald-950/80"
+              : "bg-slate-950 text-white border-indigo-500 shadow-indigo-950/80"
           }`}
           style={{ minWidth: "260px", maxWidth: "420px" }}
         >
@@ -3895,7 +3926,9 @@ ${recentSnippet || "진행 내역 기록 없음"}
           ) : (
             <Sparkles className="w-4 h-4 text-indigo-400 shrink-0" />
           )}
-          <span className="text-slate-100 leading-snug flex-1 break-words">{toast.text}</span>
+          <span style={{ color: "#ffffff" }} className="text-white text-xs font-semibold leading-relaxed flex-1 break-words">
+            {toast.text}
+          </span>
         </div>
       )}
     </div>

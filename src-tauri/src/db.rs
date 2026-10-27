@@ -1586,6 +1586,33 @@ pub fn get_usage_dashboard(
         }
     }
 
+    if let Ok(customs) = get_custom_clis(conn) {
+        for c in customs {
+            if !cli_quotas.iter().any(|q| q.cli_id == c.id) {
+                let sum = cli_summaries.iter().find(|s| s.cli_id == c.id);
+                let r5h = sum.map(|s| s.rolling_5h_tokens).unwrap_or(0);
+                let wk = sum.map(|s| s.weekly_tokens).unwrap_or(0);
+                let pct_5h = ((r5h as f64 / 500_000.0) * 100.0).clamp(0.0, 100.0).round();
+                let pct_wk = ((wk as f64 / 5_000_000.0) * 100.0).clamp(0.0, 100.0).round();
+                cli_quotas.push(CliQuotaStatus {
+                    cli_id: c.id.clone(),
+                    cli_name: c.name.clone(),
+                    plan_label: c.provider.clone(),
+                    source_label: "사용자 추가 CLI".into(),
+                    has_official_quota: false,
+                    used_percent_5h: pct_5h,
+                    remaining_percent_5h: (100.0 - pct_5h).clamp(0.0, 100.0),
+                    resets_at_5h: Some("롤링 5시간 윈도우".into()),
+                    used_percent_weekly: pct_wk,
+                    remaining_percent_weekly: (100.0 - pct_wk).clamp(0.0, 100.0),
+                    resets_at_weekly: Some("롤링 7일 윈도우".into()),
+                    status_message: None,
+                    sub_groups: None,
+                });
+            }
+        }
+    }
+
     let active_quota = cli_filter
         .filter(|f| !f.is_empty() && *f != "all")
         .and_then(|f| cli_quotas.iter().find(|q| q.cli_id == f).cloned());
