@@ -10,6 +10,7 @@ import {
   YAxis,
 } from "recharts";
 import {
+  Activity,
   Award,
   CheckCircle2,
   Image as ImageIcon,
@@ -142,6 +143,9 @@ export const TeamModeView: React.FC<TeamModeViewProps> = ({
   const [newRole, setNewRole] = useState("Software Engineer");
   const [newDept, setNewDept] = useState("Platform");
   const [newCli, setNewCli] = useState("claude");
+  const [newConnectType, setNewConnectType] = useState<"workspace" | "apikey" | "endpoint">("workspace");
+  const [newConnectTarget, setNewConnectTarget] = useState("");
+  const [newQuotaLimit, setNewQuotaLimit] = useState("500k");
 
   // 내 프로필 설정 모달 상태
   const [showProfileModal, setShowProfileModal] = useState(false);
@@ -221,10 +225,10 @@ export const TeamModeView: React.FC<TeamModeViewProps> = ({
         <div>
           <h2 className="text-lg font-bold text-slate-100 flex items-center gap-2">
             <Users className="w-5 h-5 text-indigo-400" />
-            팀 모드 (멤버별 사용량 동기화 & 토큰 최적화 비교)
+            팀 사용량 대시보드
           </h2>
           <p className="text-xs text-slate-400 mt-0.5">
-            로컬 SQLite 퍼스트 구조 + 팀원별 5시간 롤링/주간 토큰 소비량 및 Headroom·Caveman 적용 효율 비교
+            팀원별 CLI 세션 사용량을 실시간으로 집계하고 토큰 절감 현황을 모니터링합니다.
           </p>
         </div>
 
@@ -554,58 +558,157 @@ export const TeamModeView: React.FC<TeamModeViewProps> = ({
               <button
                 type="button"
                 onClick={() => setShowAddModal(false)}
-                className="p-1 rounded text-slate-400 hover:text-white"
+                className="p-1 rounded text-slate-400 hover:text-slate-100 transition"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <div className="p-5 space-y-3.5 text-xs">
-              <div>
-                <label className="block text-slate-300 mb-1 font-semibold">이름</label>
-                <input
-                  required
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
-                  placeholder="예: 김개발, Sarah"
-                  className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-100 focus:outline-none focus:border-indigo-500"
-                />
+            <div className="p-5 space-y-4 text-xs">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-300 mb-1 font-semibold">이름 *</label>
+                  <input
+                    required
+                    value={newName}
+                    onChange={(e) => setNewName(e.target.value)}
+                    placeholder="예: 김개발, Sarah"
+                    className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-100 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-300 mb-1 font-semibold">역할 / 직무</label>
+                  <input
+                    value={newRole}
+                    onChange={(e) => setNewRole(e.target.value)}
+                    placeholder="예: Backend Engineer"
+                    className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-100 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
               </div>
 
-              <div>
-                <label className="block text-slate-300 mb-1 font-semibold">역할 / 직무</label>
-                <input
-                  value={newRole}
-                  onChange={(e) => setNewRole(e.target.value)}
-                  placeholder="예: Backend Engineer"
-                  className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-100 focus:outline-none focus:border-indigo-500"
-                />
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-300 mb-1 font-semibold">부서 / 팀명</label>
+                  <input
+                    value={newDept}
+                    onChange={(e) => setNewDept(e.target.value)}
+                    placeholder="예: Platform Core"
+                    className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-100 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-300 mb-1 font-semibold">주력 CLI</label>
+                  <select
+                    value={newCli}
+                    onChange={(e) => setNewCli(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-100 focus:outline-none focus:border-indigo-500"
+                  >
+                    <option value="claude">Claude Code (Anthropic)</option>
+                    <option value="codex">Codex CLI (OpenAI)</option>
+                    <option value="grok">Grok CLI (xAI)</option>
+                    <option value="antigravity">Antigravity (Google)</option>
+                    <option value="cursor">Cursor Agent CLI</option>
+                    <option value="opencode">OpenCode CLI</option>
+                  </select>
+                </div>
               </div>
 
-              <div>
-                <label className="block text-slate-300 mb-1 font-semibold">부서 / 팀명</label>
-                <input
-                  value={newDept}
-                  onChange={(e) => setNewDept(e.target.value)}
-                  placeholder="예: Platform Core"
-                  className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-100 focus:outline-none focus:border-indigo-500"
-                />
-              </div>
+              {/* 실시간 사용량 연동 설정 파이프라인 */}
+              <div className="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-slate-200 flex items-center gap-1.5">
+                    <Activity className="w-3.5 h-3.5 text-indigo-400" />
+                    토큰 사용량 실시간 연동 소스
+                  </span>
+                  <span className="text-[10px] text-emerald-400 font-semibold bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full">
+                    자동 집계 파이프라인
+                  </span>
+                </div>
 
-              <div>
-                <label className="block text-slate-300 mb-1 font-semibold">주력 CLI</label>
-                <select
-                  value={newCli}
-                  onChange={(e) => setNewCli(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-100 focus:outline-none focus:border-indigo-500"
-                >
-                  <option value="claude">Claude Code (Anthropic)</option>
-                  <option value="codex">Codex CLI (OpenAI)</option>
-                  <option value="grok">Grok CLI (xAI)</option>
-                  <option value="antigravity">Antigravity (Google)</option>
-                  <option value="cursor">Cursor Agent CLI</option>
-                  <option value="opencode">OpenCode CLI</option>
-                </select>
+                {/* 연동 방식 선택 탭 */}
+                <div className="grid grid-cols-3 gap-1 bg-slate-900 p-1 rounded-lg border border-slate-800 text-[11px]">
+                  <button
+                    type="button"
+                    onClick={() => setNewConnectType("workspace")}
+                    className={`py-1.5 px-2 rounded-md font-semibold transition ${
+                      newConnectType === "workspace"
+                        ? "bg-indigo-600 text-white shadow-sm"
+                        : "text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    📁 작업 폴더
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNewConnectType("apikey")}
+                    className={`py-1.5 px-2 rounded-md font-semibold transition ${
+                      newConnectType === "apikey"
+                        ? "bg-indigo-600 text-white shadow-sm"
+                        : "text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    🔑 계정 / 키 매핑
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNewConnectType("endpoint")}
+                    className={`py-1.5 px-2 rounded-md font-semibold transition ${
+                      newConnectType === "endpoint"
+                        ? "bg-indigo-600 text-white shadow-sm"
+                        : "text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    🌐 원격 동기화
+                  </button>
+                </div>
+
+                {/* 연동 대상 입력창 */}
+                <div>
+                  <label className="block text-[11px] text-slate-400 mb-1">
+                    {newConnectType === "workspace" && "팀원의 프로젝트 작업 디렉토리 또는 CLI 세션 로그 경로"}
+                    {newConnectType === "apikey" && "팀원 전용 CLI API 키 접두사 또는 계정 식별자"}
+                    {newConnectType === "endpoint" && "팀 사용량 공유 JSON 엔드포인트 URL"}
+                  </label>
+                  <input
+                    value={newConnectTarget}
+                    onChange={(e) => setNewConnectTarget(e.target.value)}
+                    placeholder={
+                      newConnectType === "workspace"
+                        ? "예: C:\\Users\\team_member\\Develop 또는 ~/.claude"
+                        : newConnectType === "apikey"
+                        ? "예: sk-ant-api03-... 또는 member_dev01"
+                        : "예: http://internal-server:8788/team-usage.json"
+                    }
+                    className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-slate-100 text-xs font-mono placeholder:text-slate-600 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between pt-1 text-[11px]">
+                  <span className="text-slate-400">주간 권장 토큰 한도:</span>
+                  <div className="flex items-center gap-1.5">
+                    {["250k", "500k", "1M", "2M"].map((limit) => (
+                      <button
+                        key={limit}
+                        type="button"
+                        onClick={() => setNewQuotaLimit(limit)}
+                        className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold transition border ${
+                          newQuotaLimit === limit
+                            ? "bg-indigo-600/30 border-indigo-500 text-indigo-300"
+                            : "bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700"
+                        }`}
+                      >
+                        {limit}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <p className="text-[10px] text-slate-500 leading-relaxed">
+                  💡 등록 시 지정된 작업 폴더/계정의 CLI 세션 실행 로그를 백그라운드에서 실시간 집계하여 팀 대시보드에 자동 반영합니다.
+                </p>
               </div>
             </div>
 
@@ -643,7 +746,7 @@ export const TeamModeView: React.FC<TeamModeViewProps> = ({
               <button
                 type="button"
                 onClick={() => setShowProfileModal(false)}
-                className="p-1 rounded text-slate-400 hover:text-white transition"
+                className="p-1 rounded text-slate-400 hover:text-slate-100 transition"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -701,7 +804,7 @@ export const TeamModeView: React.FC<TeamModeViewProps> = ({
                       value={profEmoji.startsWith("data:image/") ? "[사용자 업로드 이미지 적용됨]" : profEmoji}
                       onChange={(e) => setProfEmoji(e.target.value)}
                       disabled={profEmoji.startsWith("data:image/")}
-                      className="w-full px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-white text-xs focus:outline-none focus:border-indigo-500 disabled:text-indigo-300 disabled:font-medium font-mono"
+                      className="w-full px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-100 text-xs focus:outline-none focus:border-indigo-500 disabled:text-indigo-400 disabled:font-medium font-mono"
                     />
                   </div>
                 </div>

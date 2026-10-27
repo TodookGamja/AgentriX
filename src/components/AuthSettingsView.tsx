@@ -710,7 +710,7 @@ export const AuthSettingsView: React.FC<AuthSettingsViewProps> = ({
                   {/* 2. 일반 실행 버튼 */}
                   <button
                     onClick={() => onStartLoginSession(cli.id, "")}
-                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-100 hover:text-white text-xs font-semibold border border-slate-700 transition"
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-slate-100 text-xs font-semibold border border-slate-700 transition"
                     title={`${cli.name} 일반 CLI 터미널 실행`}
                   >
                     <Play className="w-3.5 h-3.5 text-cyan-400" />

@@ -499,7 +499,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
           <div className="flex items-center bg-slate-800/80 rounded border border-slate-700/80 text-[10px] shrink-0">
             <button
               onClick={() => changeFontSize(-1)}
-              className="px-1.5 py-0.5 hover:text-white text-slate-400 hover:bg-slate-700 transition"
+              className="px-1.5 py-0.5 hover:text-slate-100 text-slate-400 hover:bg-slate-800 transition"
               title="글자 크기 축소 (Ctrl + -)"
             >
               -
@@ -508,8 +508,8 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
               onClick={resetFontSize}
               className={`px-1.5 py-0.5 font-mono cursor-pointer transition ${
                 fontSize !== 13.5
-                  ? "text-amber-300 font-bold bg-amber-500/20 hover:bg-amber-500/30 rounded"
-                  : "text-slate-300 hover:text-indigo-300"
+                  ? "text-amber-500 dark:text-amber-300 font-bold bg-amber-500/20 hover:bg-amber-500/30 rounded"
+                  : "text-slate-300 hover:text-indigo-400"
               }`}
               title="클릭 시 기본 크기(13.5px)로 원상 복구 (단축키: Ctrl + 0)"
             >
@@ -517,7 +517,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
             </span>
             <button
               onClick={() => changeFontSize(1)}
-              className="px-1.5 py-0.5 hover:text-white text-slate-400 hover:bg-slate-700 transition"
+              className="px-1.5 py-0.5 hover:text-slate-100 text-slate-400 hover:bg-slate-800 transition"
               title="글자 크기 확대 (Ctrl + + / Ctrl + 휠)"
             >
               +
@@ -558,7 +558,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
                 key={q.cmd}
                 type="button"
                 onClick={() => sendRawCommand(q.cmd)}
-                className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/80 text-[10px] font-mono transition whitespace-nowrap"
+                className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-slate-100 border border-slate-700/80 text-[10px] font-mono transition whitespace-nowrap"
                 title={q.desc}
               >
                 {q.label}

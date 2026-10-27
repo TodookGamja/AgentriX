@@ -590,7 +590,7 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
                       <div className="flex items-center gap-1 shrink-0">
                         <button
                           onClick={() => onOpenEditAgent(agent)}
-                          className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-white border border-slate-800"
+                          className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-slate-100 border border-slate-800 transition"
                           title="역할 및 CLI 엔진 수정"
                         >
                           <Edit3 className="w-3.5 h-3.5" />

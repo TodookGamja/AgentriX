@@ -230,7 +230,7 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
           </div>
           <button
             onClick={onClose}
-            className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
+            className="p-1 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition"
           >
             <X className="w-4 h-4" />
           </button>

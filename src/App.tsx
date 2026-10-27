@@ -1894,7 +1894,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
                   className={`w-full flex items-center justify-between px-2.5 py-2 rounded-xl text-xs font-medium transition ${
                     activeNav === item.id
                       ? "bg-indigo-600 text-white shadow-sm"
-                      : "text-slate-300 hover:bg-slate-800/80 hover:text-white"
+                      : "text-slate-300 hover:bg-slate-800/80 hover:text-slate-100"
                   }`}
                 >
                   <span className="flex items-center gap-2 min-w-0 truncate">
@@ -2167,20 +2167,20 @@ ${recentSnippet || "진행 내역 기록 없음"}
           </div>
 
           {/* 사이드바 하단: 현재 포커스된 CLI 한도 실시간 미니 위젯 (가독성 & 디자인 대폭 강화) */}
-          <div className="p-3 border-t border-slate-800 bg-slate-950/80 space-y-2.5 text-xs shrink-0">
+          <div className="p-3 border-t border-slate-800 bg-slate-900/40 space-y-2.5 text-xs shrink-0">
             <div
               onClick={handleCycleMiniCli}
-              className="flex items-center justify-between gap-1 text-[11px] cursor-pointer group hover:bg-slate-900/80 p-1 -m-1 rounded-lg transition"
+              className="flex items-center justify-between gap-1 text-[11px] cursor-pointer group hover:bg-slate-800/60 p-1.5 -m-1 rounded-lg transition"
               title="클릭하여 모니터링 CLI 전환 (Claude ↔ Antigravity ↔ Codex ↔ Grok)"
             >
               <div className="flex items-center gap-1.5 min-w-0">
                 <span
-                  className="w-2.5 h-2.5 rounded-full shrink-0"
+                  className="w-2.5 h-2.5 rounded-full shrink-0 shadow-sm"
                   style={{
                     backgroundColor: activeAccentColor,
                   }}
                 />
-                <span className="font-bold text-slate-100 truncate group-hover:text-indigo-300 transition">
+                <span className="font-bold text-slate-100 truncate group-hover:text-indigo-400 transition">
                   {activeCliName}
                 </span>
                 {activePlanLabel && (
@@ -2191,15 +2191,15 @@ ${recentSnippet || "진행 내역 기록 없음"}
               </div>
               <div className="flex items-center gap-1 shrink-0">
                 {activeReset5h && focusedCliId !== "grok" ? (
-                  <span className="text-[10px] font-mono text-amber-300 font-semibold shrink-0">
+                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-600 dark:text-amber-300 font-bold shrink-0 border border-amber-500/20">
                     {activeReset5h}
                   </span>
                 ) : activeResetWk ? (
-                  <span className="text-[10px] font-mono text-indigo-300 font-semibold shrink-0">
+                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-600 dark:text-indigo-300 font-bold shrink-0 border border-indigo-500/20">
                     {activeResetWk}
                   </span>
                 ) : null}
-                <ArrowUpDown className="w-3 h-3 text-slate-500 group-hover:text-indigo-400 transition" />
+                <ArrowUpDown className="w-3 h-3 text-slate-400 group-hover:text-indigo-400 transition" />
               </div>
             </div>
 
@@ -2209,7 +2209,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
                 <span className="text-slate-400 font-medium">5시간 잔여</span>
                 <span
                   className={`font-mono text-xs font-bold ${
-                    remainPct5h <= 10 ? "text-rose-400" : "text-emerald-400"
+                    remainPct5h <= 10 ? "text-rose-500 dark:text-rose-400" : "text-emerald-600 dark:text-emerald-400"
                   }`}
                 >
                   {remainPct5h}%
@@ -2235,7 +2235,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
                 <span className="text-slate-400 font-medium">주간 잔여</span>
                 <span
                   className={`font-mono text-xs font-bold ${
-                    remainPctWeekly <= 15 ? "text-rose-400" : "text-indigo-300"
+                    remainPctWeekly <= 15 ? "text-rose-500 dark:text-rose-400" : "text-indigo-600 dark:text-indigo-400"
                   }`}
                 >
                   {remainPctWeekly}%
@@ -2290,7 +2290,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
             {sidebarCollapsed && (
               <button
                 onClick={() => setSidebarCollapsed(false)}
-                className="p-1.5 rounded-lg bg-slate-800 text-slate-300 hover:text-white transition shrink-0"
+                className="p-1.5 rounded-lg bg-slate-800 text-slate-300 hover:text-slate-100 transition shrink-0"
                 title="좌측 패널 펼치기"
               >
                 <PanelLeftOpen className="w-4 h-4" />
@@ -2386,10 +2386,10 @@ ${recentSnippet || "진행 내역 기록 없음"}
                       title={`${s.name} ${s.agentRole ? `(${s.agentRole})` : ""}`}
                       className={`group flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium cursor-pointer border transition shrink-0 whitespace-nowrap ${
                         isPrimary
-                          ? "bg-slate-950 text-white border-indigo-500/80 shadow-sm"
+                          ? "bg-slate-950 text-slate-100 font-bold border-indigo-500/80 shadow-sm"
                           : isVisibleInSplit
-                          ? "bg-slate-950/70 text-indigo-300 border-indigo-500/40"
-                          : "bg-slate-800/60 text-slate-400 border-slate-700/60 hover:bg-slate-800 hover:text-slate-200"
+                          ? "bg-slate-950/70 text-indigo-600 dark:text-indigo-300 border-indigo-500/40"
+                          : "bg-slate-800/40 text-slate-400 border-slate-700/60 hover:bg-slate-800/70 hover:text-slate-100"
                       }`}
                     >
                       <span
@@ -2661,7 +2661,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
                             setActiveSessionId(session.id);
                             setSplitLayout("single");
                           }}
-                          className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-800 transition"
+                          className="p-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition"
                           title="이 터미널을 단일 전체 화면으로 확대"
                         >
                           <Maximize2 className="w-3 h-3" />
@@ -2811,7 +2811,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
               <button
                 type="button"
                 onClick={() => setShowAgentModal(false)}
-                className="p-1 rounded-lg text-slate-400 hover:text-white"
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-100 transition"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -2963,7 +2963,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
               </div>
               <button
                 onClick={() => setShowBlackboardModal(false)}
-                className="p-1 rounded-lg text-slate-400 hover:text-white"
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-100 transition"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -3021,7 +3021,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
               <button
                 type="button"
                 onClick={() => setShowDispatchModal(false)}
-                className="p-1 rounded-lg text-slate-400 hover:text-white"
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-100 transition"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -3289,7 +3289,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
               <button
                 type="button"
                 onClick={() => setShowExitConfirmModal(false)}
-                className="p-1 rounded text-slate-400 hover:text-white"
+                className="p-1 rounded text-slate-400 hover:text-slate-100 transition"
               >
                 <X className="w-4 h-4" />
               </button>

@@ -60,7 +60,7 @@ export const TokenOptimizationModal: React.FC<TokenOptimizationModalProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="p-1 rounded text-slate-400 hover:text-white transition"
+            className="p-1 rounded text-slate-400 hover:text-slate-100 transition"
           >
             <X className="w-4 h-4" />
           </button>
@@ -74,9 +74,9 @@ export const TokenOptimizationModal: React.FC<TokenOptimizationModalProps> = ({
               <div className="flex items-center justify-between">
                 <span className="font-semibold text-slate-300 flex items-center gap-1.5">
                   <Cpu className="w-3.5 h-3.5 text-indigo-400" />
-                  현재 선택된 세션: <b className="text-white">{activeSessionName}</b>
+                  현재 선택된 세션: <b className="text-slate-100 font-bold">{activeSessionName}</b>
                 </span>
-                <span className="font-mono text-[11px] font-bold text-amber-300">
+                <span className="font-mono text-[11px] font-bold text-amber-600 dark:text-amber-300">
                   {currentK}k / {thresholdK}k 토큰 ({usagePct}%)
                 </span>
               </div>

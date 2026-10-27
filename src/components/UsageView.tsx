@@ -912,7 +912,7 @@ export const UsageView: React.FC<UsageViewProps> = ({
                     </div>
                   </div>
                   <div className="text-right shrink-0">
-                    <div className="text-sm font-extrabold text-white font-mono">
+                    <div className="text-sm font-extrabold text-slate-100 font-mono">
                       <span title={fullTok(m.totalTokens)}>{fmtTok(m.totalTokens)}</span>
                     </div>
                     <div className="text-[10px] text-slate-500">tokens</div>
@@ -1000,7 +1000,7 @@ export const UsageView: React.FC<UsageViewProps> = ({
                           )}
                         </div>
                       </td>
-                      <td className="py-3 px-4 text-right font-extrabold text-white">
+                      <td className="py-3 px-4 text-right font-extrabold text-slate-100">
                         {item.totalTokens.toLocaleString()}
                       </td>
                       <td className="py-3 px-4 text-right text-slate-300">

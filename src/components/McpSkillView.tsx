@@ -67,7 +67,7 @@ const ConfigCodeBlock: React.FC<{ code: string }> = ({ code }) => {
         <div className="flex items-center gap-2">
           <span
             onClick={handleCopy}
-            className="inline-flex items-center gap-1 px-2 py-0.5 rounded hover:bg-slate-800 text-slate-300 hover:text-white transition text-[10px] font-medium"
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded hover:bg-slate-800 text-slate-300 hover:text-slate-100 transition text-[10px] font-medium"
             title="설정 내용 클립보드에 복사"
           >
             {copied ? (
@@ -289,7 +289,7 @@ export const McpSkillView: React.FC<McpSkillViewProps> = ({
                         className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] font-medium transition ${
                           isApplied
                             ? "bg-indigo-600/20 text-indigo-300 border-indigo-500/40 hover:bg-indigo-600 hover:text-white"
-                            : "bg-slate-900/60 hover:bg-slate-800 text-slate-300 hover:text-white border-slate-800 hover:border-slate-700"
+                            : "bg-slate-900/60 hover:bg-slate-800 text-slate-300 hover:text-slate-100 border-slate-800 hover:border-slate-700"
                         }`}
                       >
                         {isApplied ? (
@@ -479,7 +479,7 @@ export const McpSkillView: React.FC<McpSkillViewProps> = ({
               <button
                 type="button"
                 onClick={() => setShowAddModal(false)}
-                className="text-slate-400 hover:text-white text-sm"
+                className="text-slate-400 hover:text-slate-100 text-sm"
               >
                 ✕
               </button>

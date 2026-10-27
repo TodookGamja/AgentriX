@@ -168,84 +168,13 @@ select option {
 /* =========================================================================
    라이트 모드 보정
    ========================================================================= */
-/* 1) text-white: 밝은 배경 위에서는 진한 글자, 단색/그라데이션 버튼 안에서는 흰 글자 유지 */
-.light .text-white { color: rgb(var(--slate-100)); }
-.light :is(.bg-indigo-600, .bg-indigo-500, .bg-indigo-700, .bg-cyan-600, .bg-cyan-500, .bg-emerald-600, .bg-emerald-500, .bg-rose-600, .bg-rose-500, .bg-violet-600, .bg-purple-600, .bg-fuchsia-600, .bg-blue-600, .bg-sky-600, .bg-orange-600, .bg-amber-500, .bg-amber-600, .bg-red-600, [class*='bg-gradient-to']).text-white,
-.light :is(.bg-indigo-600, .bg-indigo-500, .bg-indigo-700, .bg-cyan-600, .bg-cyan-500, .bg-emerald-600, .bg-emerald-500, .bg-rose-600, .bg-rose-500, .bg-violet-600, .bg-purple-600, .bg-fuchsia-600, .bg-blue-600, .bg-sky-600, .bg-orange-600, .bg-amber-500, .bg-amber-600, .bg-red-600, [class*='bg-gradient-to']) .text-white,
-.light :is(.bg-indigo-600, .bg-indigo-500, .bg-indigo-700, .bg-cyan-600, .bg-cyan-500, .bg-emerald-600, .bg-emerald-500, .bg-rose-600, .bg-rose-500, .bg-violet-600, .bg-purple-600, .bg-fuchsia-600, .bg-blue-600, .bg-sky-600, .bg-orange-600, .bg-amber-500, .bg-amber-600, .bg-red-600, [class*='bg-gradient-to']) { color: #fff; }
-
-/* 2) 파스텔(200~400 및 /70 투명도 포함) 강조 글자 → 라이트 배경에서 고대비 800 톤 강제 적용 */
-.light [class*="text-emerald-200"],
-.light [class*="text-emerald-300"],
-.light [class*="text-emerald-400"] { color: rgb(6 95 70) !important; font-weight: 600; }
-
-.light [class*="text-amber-200"],
-.light [class*="text-amber-300"],
-.light [class*="text-amber-400"] { color: rgb(146 64 14) !important; font-weight: 600; }
-
-.light [class*="text-rose-200"],
-.light [class*="text-rose-300"],
-.light [class*="text-rose-400"] { color: rgb(159 18 57) !important; font-weight: 600; }
-
-.light [class*="text-indigo-200"],
-.light [class*="text-indigo-300"],
-.light [class*="text-indigo-400"] { color: rgb(55 48 163) !important; font-weight: 600; }
-
-.light [class*="text-cyan-200"],
-.light [class*="text-cyan-300"],
-.light [class*="text-cyan-400"] { color: rgb(21 94 117) !important; font-weight: 600; }
-
-.light [class*="text-teal-200"],
-.light [class*="text-teal-300"],
-.light [class*="text-teal-400"] { color: rgb(17 94 89) !important; font-weight: 600; }
-
-.light [class*="text-violet-200"],
-.light [class*="text-violet-300"],
-.light [class*="text-violet-400"] { color: rgb(91 33 182) !important; font-weight: 600; }
-
-.light [class*="text-sky-200"],
-.light [class*="text-sky-300"],
-.light [class*="text-sky-400"] { color: rgb(7 89 133) !important; font-weight: 600; }
-
-.light [class*="text-orange-200"],
-.light [class*="text-orange-300"],
-.light [class*="text-orange-400"] { color: rgb(154 52 18) !important; font-weight: 600; }
-
-.light [class*="text-pink-200"],
-.light [class*="text-pink-300"],
-.light [class*="text-pink-400"] { color: rgb(157 23 77) !important; font-weight: 600; }
-
-.light [class*="text-purple-200"],
-.light [class*="text-purple-300"],
-.light [class*="text-purple-400"] { color: rgb(107 33 168) !important; font-weight: 600; }
-
-.light [class*="text-red-200"],
-.light [class*="text-red-300"],
-.light [class*="text-red-400"] { color: rgb(153 27 27) !important; font-weight: 600; }
-
-.light [class*="text-yellow-200"],
-.light [class*="text-yellow-300"],
-.light [class*="text-yellow-400"] { color: rgb(133 77 14) !important; font-weight: 600; }
-
-.light [class*="text-blue-200"],
-.light [class*="text-blue-300"],
-.light [class*="text-blue-400"] { color: rgb(30 64 175) !important; font-weight: 600; }
-
-.light [class*="text-fuchsia-200"],
-.light [class*="text-fuchsia-300"],
-.light [class*="text-fuchsia-400"] { color: rgb(134 25 143) !important; font-weight: 600; }
-
-.light [class*="text-lime-200"],
-.light [class*="text-lime-300"],
-.light [class*="text-lime-400"] { color: rgb(63 98 18) !important; font-weight: 600; }
-
-/* 3) 카드/패널에 은은한 그림자로 깊이감 */
+/* 카드/패널에 은은한 그림자로 깊이감 */
 .light .bg-slate-900,
 .light [class*="bg-slate-900/"] {
   box-shadow: 0 1px 2px rgb(15 23 42 / 0.04), 0 1px 3px rgb(15 23 42 / 0.06);
 }
 
-/* 4) Recharts 격자/축 */
+/* Recharts 격자/축 */
 .light .recharts-cartesian-grid line { stroke: #e2e8f0; }
 .light .recharts-cartesian-axis-tick-value { fill: #475569; }
 .light .recharts-default-tooltip {
@@ -255,5 +184,5 @@ select option {
   box-shadow: 0 4px 12px rgb(15 23 42 / 0.12);
 }
 
-/* 5) 플레이스홀더 */
+/* 플레이스홀더 */
 .light ::placeholder { color: rgb(var(--slate-500)) !important; }
