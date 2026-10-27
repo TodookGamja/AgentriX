@@ -551,3 +551,21 @@ export async function apiSaveClipboardImage(
   }
   return "pasted_mock_image.png";
 }
+
+export async function apiOpenExternalUrl(url: string): Promise<void> {
+  if (isTauriRuntime()) {
+    try {
+      await invoke("open_external_url", { url });
+      return;
+    } catch {}
+  }
+  window.open(url, "_blank");
+}
+
+export async function apiDownloadAndSaveUpdate(url: string, filename?: string): Promise<string> {
+  if (isTauriRuntime()) {
+    return invoke<string>("download_and_save_update", { url, filename });
+  }
+  window.open(url, "_blank");
+  return "";
+}

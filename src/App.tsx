@@ -79,6 +79,8 @@ import {
   apiWindowExit,
   apiWindowIsMaximized,
   apiCheckAppUpdate,
+  apiDownloadAndSaveUpdate,
+  apiOpenExternalUrl,
   apiResetAppData,
   type AppUpdateInfo,
 } from "./lib/tauriBridge";
@@ -288,6 +290,7 @@ export const App: React.FC = () => {
   const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null);
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
+  const [isDownloadingUpdate, setIsDownloadingUpdate] = useState(false);
 
   const handleCheckUpdate = useCallback(async (manual = false) => {
     setIsCheckingUpdate(true);
@@ -307,6 +310,32 @@ export const App: React.FC = () => {
       setIsCheckingUpdate(false);
     }
   }, []);
+
+  const handleDownloadUpdate = async () => {
+    if (!updateInfo) return;
+    const url = updateInfo.download_url || updateInfo.release_url;
+    setIsDownloadingUpdate(true);
+    showToast("최신 버전 다운로드를 시작합니다...", "info");
+
+    try {
+      // 1. 브라우저로 다운로드/릴리즈 링크 즉시 오픈
+      await apiOpenExternalUrl(url);
+
+      // 2. 인앱에서도 사용자의 다운로드 폴더에 안전하게 다운로드 후 탐색기 열기
+      if (updateInfo.download_url) {
+        const savedPath = await apiDownloadAndSaveUpdate(updateInfo.download_url);
+        if (savedPath) {
+          showToast("다운로드 폴더에 저장되었습니다!", "success");
+        }
+      }
+    } catch (e) {
+      await apiOpenExternalUrl(updateInfo.release_url);
+      showToast("브라우저에서 릴리즈 페이지를 열었습니다.", "info");
+    } finally {
+      setIsDownloadingUpdate(false);
+      setIsUpdateModalOpen(false);
+    }
+  };
 
   // 앱 마운트 시 자동 업데이트 검사 실행 (1회 백그라운드)
   useEffect(() => {
@@ -3693,34 +3722,32 @@ ${recentSnippet || "진행 내역 기록 없음"}
             </div>
 
             <div className="px-5 py-3.5 bg-slate-950 border-t border-slate-800 flex items-center justify-between">
-              <a
-                href={updateInfo.release_url}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1 text-[11px] text-slate-400 hover:text-indigo-400 transition"
+              <button
+                type="button"
+                onClick={() => apiOpenExternalUrl(updateInfo.release_url)}
+                className="inline-flex items-center gap-1 text-[11px] text-slate-400 hover:text-indigo-400 transition cursor-pointer"
               >
                 <span>GitHub 릴리즈 페이지</span>
                 <ExternalLink className="w-3 h-3" />
-              </a>
+              </button>
 
               <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={() => setIsUpdateModalOpen(false)}
-                  className="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition"
+                  className="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition cursor-pointer"
                 >
                   다음에 하기
                 </button>
-                <a
-                  href={updateInfo.download_url || updateInfo.release_url}
-                  target="_blank"
-                  rel="noreferrer"
-                  onClick={() => setIsUpdateModalOpen(false)}
-                  className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-md shadow-indigo-600/30 transition"
+                <button
+                  type="button"
+                  disabled={isDownloadingUpdate}
+                  onClick={handleDownloadUpdate}
+                  className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-bold shadow-md shadow-indigo-600/30 transition cursor-pointer"
                 >
-                  <ArrowUpCircle className="w-3.5 h-3.5" />
-                  최신 버전 다운로드
-                </a>
+                  <ArrowUpCircle className={`w-3.5 h-3.5 ${isDownloadingUpdate ? "animate-spin" : ""}`} />
+                  <span>{isDownloadingUpdate ? "다운로드 중..." : "최신 버전 다운로드"}</span>
+                </button>
               </div>
             </div>
           </div>

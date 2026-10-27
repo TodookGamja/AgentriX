@@ -999,6 +999,62 @@ fn check_app_update() -> Result<AppUpdateInfo, String> {
     })
 }
 
+#[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut cmd = std::process::Command::new("rundll32");
+        cmd.args(["url.dll,FileProtocolHandler", &url]);
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        cmd.spawn().map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open").arg(&url).spawn().map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open").arg(&url).spawn().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn download_and_save_update(url: String, filename: Option<String>) -> Result<String, String> {
+    let download_dir = dirs::download_dir().unwrap_or_else(|| {
+        dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")).join("Downloads")
+    });
+    let _ = std::fs::create_dir_all(&download_dir);
+
+    let fname = filename.unwrap_or_else(|| {
+        url.split('/').last().unwrap_or("AgentriX_update.exe").to_string()
+    });
+    let target_path = download_dir.join(&fname);
+
+    let resp = ureq::get(&url)
+        .set("User-Agent", "AgentriX-Updater")
+        .call()
+        .map_err(|e| format!("다운로드 요청 실패: {}", e))?;
+
+    let mut reader = resp.into_reader();
+    let mut file = std::fs::File::create(&target_path)
+        .map_err(|e| format!("파일 생성 실패: {}", e))?;
+    std::io::copy(&mut reader, &mut file)
+        .map_err(|e| format!("파일 저장 실패: {}", e))?;
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut cmd = std::process::Command::new("explorer");
+        cmd.arg(format!("/select,{}", target_path.to_string_lossy()));
+        cmd.creation_flags(0x08000000);
+        let _ = cmd.spawn();
+    }
+
+    Ok(target_path.to_string_lossy().to_string())
+}
+
 fn main() {
     std::panic::set_hook(Box::new(|info| {
         let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
@@ -1178,6 +1234,8 @@ fn main() {
             app_window_exit,
             app_window_is_maximized,
             check_app_update,
+            open_external_url,
+            download_and_save_update,
             reset_app_data,
             save_clipboard_image,
         ])
