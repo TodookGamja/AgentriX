@@ -127,10 +127,18 @@ async function main() {
 
     // 4. Upload files
     const zipName = `AgentriX-Portable-${tag}-win-x64.zip`;
+    const setupName = `AgentriX-Setup-${tag}.exe`;
     const filesToUpload = [
         { localPath: path.resolve('release/AgentriX.exe'), name: 'AgentriX.exe', mime: 'application/octet-stream' },
         { localPath: path.resolve(`release/${zipName}`), name: zipName, mime: 'application/zip' }
     ];
+    if (fs.existsSync(path.resolve('release/AgentriX-Setup-v1.0.2.exe'))) {
+        filesToUpload.push({
+            localPath: path.resolve('release/AgentriX-Setup-v1.0.2.exe'),
+            name: setupName,
+            mime: 'application/octet-stream'
+        });
+    }
 
     for (const f of filesToUpload) {
         console.log(`Uploading ${f.name} (${(fs.statSync(f.localPath).size / 1024 / 1024).toFixed(2)} MB)...`);

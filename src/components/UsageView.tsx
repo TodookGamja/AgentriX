@@ -969,11 +969,11 @@ export const UsageView: React.FC<UsageViewProps> = ({
                 onChange={(e) => setSortBy(e.target.value as any)}
                 className="clean-select h-9 pl-8 pr-7 rounded-xl bg-slate-950 border border-slate-800 text-xs font-semibold text-slate-200 hover:border-slate-700 focus:outline-none focus:border-indigo-500 cursor-pointer transition appearance-none"
               >
-                <option value="total">정렬: 총 토큰순</option>
-                <option value="cost">정렬: 비용($)순</option>
-                <option value="input">정렬: Input순</option>
-                <option value="output">정렬: Output순</option>
-                <option value="cache">정렬: Cache순</option>
+                <option value="total" className="bg-[#0b0f19] text-slate-100">정렬: 총 토큰순</option>
+                <option value="cost" className="bg-[#0b0f19] text-slate-100">정렬: 비용($)순</option>
+                <option value="input" className="bg-[#0b0f19] text-slate-100">정렬: Input순</option>
+                <option value="output" className="bg-[#0b0f19] text-slate-100">정렬: Output순</option>
+                <option value="cache" className="bg-[#0b0f19] text-slate-100">정렬: Cache순</option>
               </select>
               <ChevronDown className="w-3.5 h-3.5 absolute right-2.5 text-slate-400 pointer-events-none" />
             </div>

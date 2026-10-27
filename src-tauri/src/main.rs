@@ -942,10 +942,10 @@ fn is_newer_version(latest: &str, current: &str) -> bool {
 
 #[tauri::command]
 fn check_app_update() -> Result<AppUpdateInfo, String> {
-    let current_version = "1.0.1".to_string();
+    let current_version = "1.0.2".to_string();
     let url = "https://api.github.com/repos/TodookGamja/AgentriX/releases/latest";
     let resp = match ureq::get(url)
-        .set("User-Agent", "AgentriX-Updater/1.0.1")
+        .set("User-Agent", "AgentriX-Updater/1.0.2")
         .timeout(std::time::Duration::from_secs(5))
         .call()
     {

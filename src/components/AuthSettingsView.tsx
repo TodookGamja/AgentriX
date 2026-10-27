@@ -827,7 +827,7 @@ export const AuthSettingsView: React.FC<AuthSettingsViewProps> = ({
         <div>
           <h4 className="text-sm font-bold text-slate-100 flex items-center gap-2">
             <ArrowUpCircle className="w-4 h-4 text-indigo-400" />
-            AgentriX 소프트웨어 버전: <span className="font-mono text-indigo-400 font-extrabold">v1.0.1</span>
+            AgentriX 소프트웨어 버전: <span className="font-mono text-indigo-400 font-extrabold">v1.0.2</span>
           </h4>
           <p className="text-xs text-slate-400 mt-1 max-w-xl">
             GitHub Releases를 통해 새로운 기능과 버그 수정이 포함된 최신 버전을 감지하고 업데이트합니다.

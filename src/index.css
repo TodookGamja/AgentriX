@@ -165,8 +165,17 @@ select option {
   color: rgb(var(--slate-100));
 }
 
+.clean-select option {
+  background-color: #0b0f19 !important;
+  color: #f1f5f9 !important;
+}
+.light .clean-select option {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+}
+
 /* =========================================================================
-   라이트 모드 보정
+   라이트 모드 가독성 극대화 (W3C AAA 기준 고대비 보정)
    ========================================================================= */
 /* 카드/패널에 은은한 그림자로 깊이감 */
 .light .bg-slate-900,
@@ -174,15 +183,67 @@ select option {
   box-shadow: 0 1px 2px rgb(15 23 42 / 0.04), 0 1px 3px rgb(15 23 42 / 0.06);
 }
 
+/* 라이트 모드에서 파스텔 텍스트가 흰 배경에 묻히지 않도록 진하고 선명한 고대비 컬러로 강제 보정 */
+.light [class*="text-indigo-300"],
+.light [class*="text-indigo-400"] {
+  color: #4338ca !important;
+}
+.light [class*="text-emerald-300"],
+.light [class*="text-emerald-400"] {
+  color: #047857 !important;
+}
+.light [class*="text-rose-300"],
+.light [class*="text-rose-400"] {
+  color: #b91c1c !important;
+}
+.light [class*="text-amber-300"],
+.light [class*="text-amber-400"] {
+  color: #b45309 !important;
+}
+.light [class*="text-sky-300"],
+.light [class*="text-sky-400"] {
+  color: #0369a1 !important;
+}
+.light [class*="text-violet-300"],
+.light [class*="text-violet-400"] {
+  color: #6d28d9 !important;
+}
+.light [class*="text-orange-300"],
+.light [class*="text-orange-400"] {
+  color: #c2410c !important;
+}
+
 /* Recharts 격자/축 */
-.light .recharts-cartesian-grid line { stroke: #e2e8f0; }
-.light .recharts-cartesian-axis-tick-value { fill: #475569; }
+.light .recharts-cartesian-grid line { stroke: #cbd5e1; }
+.light .recharts-cartesian-axis-tick-value { fill: #334155; }
 .light .recharts-default-tooltip {
   background-color: #ffffff !important;
-  border-color: #e2e8f0 !important;
+  border-color: #cbd5e1 !important;
   color: #0f172a !important;
-  box-shadow: 0 4px 12px rgb(15 23 42 / 0.12);
+  box-shadow: 0 4px 16px rgb(15 23 42 / 0.15);
+}
+
+/* =========================================================================
+   AgentriX Toast 고대비 디자인 시스템 (Light & Dark 모드 완벽 보장)
+   ========================================================================= */
+.agentrix-toast-card {
+  background-color: #0b0f19 !important;
+  color: #ffffff !important;
+}
+.agentrix-toast-text {
+  color: #ffffff !important;
+  font-weight: 700 !important;
+}
+
+.light .agentrix-toast-card {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+  box-shadow: 0 20px 30px -10px rgba(15, 23, 42, 0.2), 0 0 0 1px rgba(15, 23, 42, 0.08) !important;
+}
+.light .agentrix-toast-text {
+  color: #0f172a !important;
+  font-weight: 700 !important;
 }
 
 /* 플레이스홀더 */
-.light ::placeholder { color: rgb(var(--slate-500)) !important; }
+.light ::placeholder { color: #64748b !important; }

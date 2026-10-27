@@ -2420,7 +2420,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
             <div className="flex items-center justify-between px-1 text-[11px] select-none">
               <span className="font-mono text-slate-400 font-bold flex items-center gap-1.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                AgentriX v1.0.1
+                AgentriX v1.0.2
               </span>
               <button
                 type="button"
@@ -3934,30 +3934,46 @@ ${recentSnippet || "진행 내역 기록 없음"}
         </div>
       )}
 
-      {/* 우측 하단 알림 토스트 (고대비 가독성 극대화: 라이트/다크 모드 불문 항상 선명한 캡슐 & 또렷한 화이트 텍스트) */}
-      {toast && (
-        <div
-          className={`fixed bottom-6 right-6 z-50 flex items-center gap-3 px-5 py-3.5 rounded-2xl border-2 shadow-2xl text-xs font-bold tracking-wide backdrop-blur-xl transition-all animate-in fade-in slide-in-from-bottom-3 duration-200 ${
-            toast.tone === "error"
-              ? "bg-slate-950 text-white border-rose-500 shadow-rose-950/80"
-              : toast.tone === "success"
-              ? "bg-slate-950 text-white border-emerald-500 shadow-emerald-950/80"
-              : "bg-slate-950 text-white border-indigo-500 shadow-indigo-950/80"
-          }`}
-          style={{ minWidth: "260px", maxWidth: "420px" }}
-        >
-          {toast.tone === "error" ? (
-            <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
-          ) : toast.tone === "success" ? (
-            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-          ) : (
-            <Sparkles className="w-4 h-4 text-indigo-400 shrink-0" />
-          )}
-          <span style={{ color: "#ffffff" }} className="text-white text-xs font-semibold leading-relaxed flex-1 break-words">
-            {toast.text}
-          </span>
-        </div>
-      )}
+      {/* 우측 하단 알림 토스트 (고대비 가독성 극대화: 라이트 모드에서는 새하얀 카드+선명한 블랙 글씨, 다크 모드에서는 딥 블랙 카드+화이트 글씨) */}
+      {toast && (() => {
+        const isLight =
+          themeMode === "light" ||
+          (themeMode === "auto" &&
+            typeof window !== "undefined" &&
+            !window.matchMedia("(prefers-color-scheme: dark)").matches);
+
+        return (
+          <div
+            className={`agentrix-toast-card fixed bottom-6 right-6 z-50 flex items-center gap-3 px-5 py-3.5 rounded-2xl border-2 shadow-2xl text-xs font-bold tracking-wide transition-all animate-in fade-in slide-in-from-bottom-3 duration-200 ${
+              isLight
+                ? toast.tone === "error"
+                  ? "border-rose-500 shadow-xl shadow-rose-500/15"
+                  : toast.tone === "success"
+                  ? "border-emerald-500 shadow-xl shadow-emerald-500/15"
+                  : "border-indigo-500 shadow-xl shadow-indigo-500/15"
+                : toast.tone === "error"
+                ? "border-rose-500 shadow-2xl shadow-rose-950/80"
+                : toast.tone === "success"
+                ? "border-emerald-500 shadow-2xl shadow-emerald-950/80"
+                : "border-indigo-500 shadow-2xl shadow-indigo-950/80"
+            }`}
+            style={{ minWidth: "280px", maxWidth: "460px" }}
+          >
+            {toast.tone === "error" ? (
+              <AlertTriangle className={`w-5 h-5 shrink-0 ${isLight ? "text-rose-600" : "text-rose-400"}`} />
+            ) : toast.tone === "success" ? (
+              <CheckCircle2 className={`w-5 h-5 shrink-0 ${isLight ? "text-emerald-600" : "text-emerald-400"}`} />
+            ) : (
+              <Sparkles className={`w-5 h-5 shrink-0 ${isLight ? "text-indigo-600" : "text-indigo-400"}`} />
+            )}
+            <span
+              className="agentrix-toast-text text-xs font-bold leading-relaxed flex-1 break-words"
+            >
+              {toast.text}
+            </span>
+          </div>
+        );
+      })()}
     </div>
   );
 };
