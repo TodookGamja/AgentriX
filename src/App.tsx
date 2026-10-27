@@ -1738,15 +1738,15 @@ ${recentSnippet || "진행 내역 기록 없음"}
         <div className="flex items-center z-10" data-tauri-drag-region onMouseDown={handleStartDragging}>
           <button
             onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-slate-700 hover:text-slate-950 hover:bg-slate-200/80 dark:text-slate-400 dark:hover:text-white dark:hover:bg-slate-800 transition text-xs font-semibold"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-slate-200 hover:text-slate-100 hover:bg-slate-800 transition text-xs font-semibold"
             title={sidebarCollapsed ? "사이드바 열기" : "사이드바 닫기"}
           >
             {sidebarCollapsed ? (
-              <PanelLeftOpen className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+              <PanelLeftOpen className="w-4 h-4 text-indigo-400" />
             ) : (
-              <PanelLeftClose className="w-4 h-4 text-slate-600 dark:text-slate-400" />
+              <PanelLeftClose className="w-4 h-4 text-slate-300" />
             )}
-            <span className="text-[11px] hidden sm:inline text-slate-800 dark:text-slate-300 font-semibold">
+            <span className="text-[11px] hidden sm:inline text-slate-100 font-semibold">
               {sidebarCollapsed ? "사이드바 열기" : "사이드바 닫기"}
             </span>
           </button>
@@ -1769,7 +1769,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
             size={22}
             className="rounded shadow-sm drop-shadow-sm"
           />
-          <span className="text-xs font-extrabold text-slate-900 dark:text-slate-100 tracking-tight whitespace-nowrap">
+          <span className="text-xs font-extrabold text-slate-100 tracking-tight whitespace-nowrap">
             AgentriX
           </span>
         </div>
@@ -1841,17 +1841,17 @@ ${recentSnippet || "진행 내역 기록 없음"}
             <span className="font-mono font-bold">Headroom {headroomEnabled ? "ON" : "OFF"}</span>
           </div>
 
-          <div className="flex items-center border-l border-slate-300 dark:border-slate-800/80 ml-1 pl-1">
+          <div className="flex items-center ml-1">
             <button
               onClick={handleWindowMinimize}
-              className="w-8 h-7 flex items-center justify-center rounded text-slate-600 hover:text-slate-950 hover:bg-slate-200/80 dark:text-slate-400 dark:hover:text-white dark:hover:bg-slate-800 transition"
+              className="w-8 h-7 flex items-center justify-center rounded text-slate-300 hover:text-slate-100 hover:bg-slate-800 transition"
               title="최소화"
             >
               <Minus className="w-3.5 h-3.5" />
             </button>
             <button
               onClick={handleWindowToggleMaximize}
-              className="w-8 h-7 flex items-center justify-center rounded text-slate-600 hover:text-slate-950 hover:bg-slate-200/80 dark:text-slate-400 dark:hover:text-white dark:hover:bg-slate-800 transition"
+              className="w-8 h-7 flex items-center justify-center rounded text-slate-300 hover:text-slate-100 hover:bg-slate-800 transition"
               title={isMaximized ? "이전 크기로 복원" : "최대화"}
             >
               {isMaximized ? (
@@ -1862,7 +1862,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
             </button>
             <button
               onClick={handleAttemptClose}
-              className="w-8 h-7 flex items-center justify-center rounded text-slate-600 hover:text-white hover:bg-rose-600 dark:text-slate-400 dark:hover:text-white dark:hover:bg-rose-600 transition"
+              className="w-8 h-7 flex items-center justify-center rounded text-slate-300 hover:text-white hover:bg-rose-600 transition"
               title="닫기 (실행 세션 유지 시 시스템 트레이로 숨김)"
             >
               <X className="w-3.5 h-3.5" />
@@ -3222,7 +3222,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
                         key={tag}
                         type="button"
                         onClick={() => setNewGroupNameInput(tag.replace(/^[^\s]+\s/, ""))}
-                        className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-indigo-500 text-[11px] text-slate-300 hover:text-indigo-400 transition"
+                        className="px-2.5 py-1 rounded-lg bg-slate-950 hover:bg-indigo-500/15 border border-slate-800 hover:border-indigo-500/50 text-[11px] text-slate-200 hover:text-indigo-400 transition"
                       >
                         {tag}
                       </button>
