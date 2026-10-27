@@ -26,6 +26,7 @@ import {
   Plus,
   Rows2,
   Send,
+  Settings,
   Sparkles,
   Square,
   Tag,
@@ -1910,7 +1911,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
           </button>
         </div>
 
-        {/* 중: 윈도우 정중앙 절대좌표 앱 로고 & 프로그램 이름 (좌우 비대칭 버튼 너비에 영향받지 않고 100% 정중앙 고정) */}
+        {/* 중: 윈도우 정중앙 절대좌표 앱 로고 & 프로그램 이름 (좌우 버튼에 전혀 간섭받지 않고 정중앙 고정) */}
         <div
           data-tauri-drag-region
           onMouseDown={handleStartDragging}
@@ -1930,58 +1931,10 @@ ${recentSnippet || "진행 내역 기록 없음"}
           <span className="text-xs font-extrabold text-slate-100 tracking-tight whitespace-nowrap">
             AgentriX
           </span>
-          <button
-            type="button"
-            disabled={isCheckingUpdate}
-            onClick={() => handleCheckUpdate(true)}
-            className="pointer-events-auto px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold bg-indigo-500/15 border border-indigo-500/30 text-indigo-400 hover:bg-indigo-500/25 transition cursor-pointer flex items-center gap-1 disabled:opacity-50"
-            title="현재 버전 v1.0.0 (클릭 시 최신 버전 업데이트 확인)"
-          >
-            {isCheckingUpdate ? "확인 중..." : "v1.0.0"}
-            {updateInfo?.has_update && (
-              <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-ping" />
-            )}
-          </button>
         </div>
 
-        {/* 우: 업데이트 확인 + 내 프로필 + 테마 스위처 + 창 제어 컨트롤 (최소화, 최대화, 닫기) */}
+        {/* 우: 테마 스위처 + Headroom 상태 + 창 제어 컨트롤 (최소화, 최대화, 닫기) */}
         <div className="flex items-center justify-end gap-2 shrink-0 z-10">
-          {/* 최신 버전 업데이트 확인 명시적 버튼 (사용자가 한눈에 바로 찾을 수 있는 고대비 버튼) */}
-          <button
-            type="button"
-            disabled={isCheckingUpdate}
-            onClick={() => handleCheckUpdate(true)}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/40 text-[11px] font-bold text-indigo-700 dark:text-indigo-300 transition cursor-pointer select-none active:scale-95 disabled:opacity-50"
-            title="AgentriX 최신 버전 업데이트 확인"
-          >
-            <ArrowUpCircle className={`w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0 ${isCheckingUpdate ? "animate-spin" : ""}`} />
-            <span className="hidden sm:inline">{isCheckingUpdate ? "확인 중..." : "업데이트 확인"}</span>
-            <span className="font-mono text-[10px] px-1 py-0.2 rounded bg-indigo-500/20 text-indigo-600 dark:text-indigo-300">v1.0.0</span>
-            {updateInfo?.has_update && (
-              <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
-            )}
-          </button>
-
-          {/* 내 프로필 미니 버튼 (클릭 시 언제든 프로필 설정 모달 열기) */}
-          <button
-            type="button"
-            onClick={() => {
-              setOnboardName(userProfile.name);
-              setOnboardRole(userProfile.role);
-              setOnboardDept(userProfile.department);
-              setOnboardCli(userProfile.favoriteCli);
-              setOnboardEmoji(userProfile.avatarEmoji);
-              setIsOnboardingProfileOpen(true);
-            }}
-            className="flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-slate-900/90 hover:bg-slate-800 border border-slate-800 text-xs text-slate-200 transition cursor-pointer select-none"
-            title="내 프로필 설정 변경"
-          >
-            <span className="text-xs leading-none">{userProfile.avatarEmoji}</span>
-            <span className="font-semibold text-[11px] max-w-[90px] truncate hidden sm:inline">
-              {userProfile.name}
-            </span>
-          </button>
-
           {/* 테마 스위처 (자동, 다크, 라이트) */}
           <div className="flex items-center p-0.5 rounded-lg border text-[11px] bg-slate-950 border-slate-800">
             <button
@@ -2372,8 +2325,62 @@ ${recentSnippet || "진행 내역 기록 없음"}
             </div>
           </div>
 
-          {/* 사이드바 하단: 현재 포커스된 CLI 한도 실시간 미니 위젯 (가독성 & 디자인 대폭 강화) */}
+          {/* 사이드바 하단: 사용자 프로필 + 앱 버전/업데이트 확인 + 포커스된 CLI 한도 실시간 미니 위젯 */}
           <div className="p-3 border-t border-slate-800 bg-slate-900/40 space-y-2.5 text-xs shrink-0">
+            {/* 1. 사용자 프로필 미니 카드 (클릭 시 프로필 설정 모달) */}
+            <div
+              onClick={() => {
+                setOnboardName(userProfile.name);
+                setOnboardRole(userProfile.role);
+                setOnboardDept(userProfile.department);
+                setOnboardCli(userProfile.favoriteCli);
+                setOnboardEmoji(userProfile.avatarEmoji);
+                setIsOnboardingProfileOpen(true);
+              }}
+              className="flex items-center justify-between p-2 rounded-xl bg-slate-800/70 hover:bg-slate-800 border border-slate-700/60 transition cursor-pointer select-none group"
+              title="내 프로필 및 개발 환경 설정 변경"
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="text-base leading-none p-1 rounded-lg bg-slate-900 border border-slate-700/60 shrink-0">
+                  {userProfile.avatarEmoji || "👨‍💻"}
+                </span>
+                <div className="min-w-0">
+                  <span className="text-xs font-bold text-slate-200 group-hover:text-indigo-400 transition truncate block">
+                    {userProfile.name}
+                  </span>
+                  <span className="text-[10px] text-slate-400 truncate block">
+                    {userProfile.role || "Developer"}
+                  </span>
+                </div>
+              </div>
+              <Settings className="w-3.5 h-3.5 text-slate-400 group-hover:text-indigo-400 transition shrink-0" />
+            </div>
+
+            {/* 2. 앱 버전 및 업데이트 확인 (잔여표시 바로 위 배치) */}
+            <div className="flex items-center justify-between px-1 text-[11px] select-none">
+              <span className="font-mono text-slate-400 font-bold flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                AgentriX v1.0.0
+              </span>
+              <button
+                type="button"
+                disabled={isCheckingUpdate}
+                onClick={() => handleCheckUpdate(true)}
+                className="text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 font-bold flex items-center gap-1 transition cursor-pointer disabled:opacity-50"
+                title="AgentriX 최신 버전 업데이트 확인"
+              >
+                <ArrowUpCircle className={`w-3.5 h-3.5 ${isCheckingUpdate ? "animate-spin" : ""}`} />
+                <span>{isCheckingUpdate ? "확인 중..." : "업데이트 확인"}</span>
+                {updateInfo?.has_update && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-ping" />
+                )}
+              </button>
+            </div>
+
+            {/* 3. 구분선 */}
+            <div className="border-t border-slate-800/80" />
+
+            {/* 4. 포커스된 CLI 한도 실시간 미니 위젯 */}
             <div
               onClick={handleCycleMiniCli}
               className="flex items-center justify-between gap-1 text-[11px] cursor-pointer group hover:bg-slate-800/60 p-1.5 -m-1 rounded-lg transition"
@@ -2485,20 +2492,6 @@ ${recentSnippet || "진행 내역 기록 없음"}
               >
                 Caveman {cavemanEnabled ? "ON" : "OFF"}
               </span>
-            </div>
-
-            {/* 앱 버전 및 업데이트 확인 버튼 (사이드바 최하단 항시 노출) */}
-            <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-[11px] select-none">
-              <span className="font-mono text-slate-400 font-bold">AgentriX v1.0.0</span>
-              <button
-                type="button"
-                disabled={isCheckingUpdate}
-                onClick={() => handleCheckUpdate(true)}
-                className="text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 font-bold flex items-center gap-1 transition cursor-pointer disabled:opacity-50"
-              >
-                <ArrowUpCircle className={`w-3.5 h-3.5 ${isCheckingUpdate ? "animate-spin" : ""}`} />
-                <span>{isCheckingUpdate ? "확인 중..." : "업데이트 확인"}</span>
-              </button>
             </div>
           </div>
         </aside>
