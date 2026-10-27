@@ -159,40 +159,40 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 select-none animate-in fade-in duration-150">
-      <div className="w-full max-w-3xl rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden flex flex-col h-[620px]">
+      <div className="w-full max-w-3xl rounded-2xl bg-slate-900 border border-slate-800 shadow-2xl overflow-hidden flex flex-col h-[620px]">
         {/* 헤더 */}
-        <div className="px-5 py-3.5 bg-slate-50 dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between shrink-0">
+        <div className="px-5 py-3.5 bg-slate-950 border-b border-slate-800 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-indigo-600 dark:bg-indigo-500 flex items-center justify-center text-white shadow-sm">
+            <div className="w-8 h-8 rounded-xl bg-indigo-600 flex items-center justify-center text-white shadow-sm">
               <FolderOpen className="w-4 h-4" />
             </div>
             <div>
-              <h2 className="text-sm font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+              <h2 className="text-sm font-bold text-slate-100 flex items-center gap-2">
                 작업 프로젝트 폴더 선택
-                <span className="px-2 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-700 text-[10px] font-semibold">
+                <span className="px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 text-[10px] font-semibold">
                   AgentriX Explorer
                 </span>
               </h2>
-              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              <p className="text-[11px] text-slate-400">
                 AI 에이전트와 연동할 프로젝트 디렉토리를 탐색하고 선택하세요.
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-800 transition"
+            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* 경로 네비게이션 바 */}
-        <div className="px-5 py-2.5 bg-slate-100/70 dark:bg-slate-950/70 border-b border-slate-200 dark:border-slate-800 flex items-center gap-2 shrink-0">
+        <div className="px-5 py-2.5 bg-slate-950/70 border-b border-slate-800 flex items-center gap-2 shrink-0">
           <button
             type="button"
             onClick={handleGoUp}
             disabled={!listing?.parent_path}
-            className="p-1.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-40 transition"
+            className="p-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 hover:bg-slate-800 disabled:opacity-40 transition"
             title="상위 폴더로 이동"
           >
             <ArrowUp className="w-4 h-4" />
@@ -200,10 +200,10 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
           <button
             type="button"
             onClick={() => loadDirectory(currentPath)}
-            className="p-1.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition"
+            className="p-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 hover:bg-slate-800 transition"
             title="새로고침"
           >
-            <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin text-indigo-500" : ""}`} />
+            <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin text-indigo-400" : ""}`} />
           </button>
 
           {/* 주소 표시줄 */}
@@ -213,7 +213,7 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
               value={pathInput}
               onChange={(e) => setPathInput(e.target.value)}
               placeholder="C:\경로 직접 입력 후 Enter..."
-              className="w-full px-3 py-1.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs font-mono text-slate-800 dark:text-slate-200 focus:outline-none focus:border-indigo-500 shadow-inner"
+              className="w-full px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs font-mono text-slate-100 focus:outline-none focus:border-indigo-500 shadow-inner"
             />
           </form>
 
@@ -224,7 +224,7 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
               value={filterText}
               onChange={(e) => setFilterText(e.target.value)}
               placeholder="폴더 필터..."
-              className="w-full pl-7 pr-2 py-1.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs text-slate-800 dark:text-slate-200 focus:outline-none focus:border-indigo-500"
+              className="w-full pl-7 pr-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs text-slate-100 focus:outline-none focus:border-indigo-500"
             />
             <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2 top-1/2 -translate-y-1/2" />
           </div>
@@ -233,7 +233,7 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
         {/* 본문 2컬럼 레이아웃: 좌측 빠른 바로가기 / 우측 폴더 목록 */}
         <div className="flex-1 flex overflow-hidden">
           {/* 좌측 사이드바: 빠른 바로가기 */}
-          <div className="w-52 border-r border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/40 p-3 overflow-y-auto shrink-0 space-y-3">
+          <div className="w-52 border-r border-slate-800 bg-slate-950/40 p-3 overflow-y-auto shrink-0 space-y-3">
             <div>
               <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-2 mb-1">
                 빠른 바로가기
@@ -251,7 +251,7 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
                         className={`w-full px-2.5 py-1.5 rounded-lg text-xs text-left flex items-center gap-2 transition ${
                           isActive
                             ? "bg-indigo-600 text-white font-bold shadow-sm"
-                            : "text-slate-700 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-800/60 font-medium"
+                            : "text-slate-300 hover:bg-slate-800/60 font-medium"
                         }`}
                       >
                         {getQuickIcon(item.kind, isActive)}
@@ -280,7 +280,7 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
                         className={`w-full px-2.5 py-1.5 rounded-lg text-xs text-left flex items-center gap-2 transition ${
                           isActive
                             ? "bg-indigo-600 text-white font-bold shadow-sm"
-                            : "text-slate-700 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-800/60 font-medium"
+                            : "text-slate-300 hover:bg-slate-800/60 font-medium"
                         }`}
                       >
                         {getQuickIcon("drive", isActive)}
@@ -310,7 +310,7 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
                           className={`w-full px-2.5 py-1.5 rounded-lg text-xs text-left flex items-center gap-2 transition ${
                             isActive
                               ? "bg-indigo-600 text-white font-bold shadow-sm"
-                              : "text-slate-700 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-800/60 font-medium"
+                              : "text-slate-300 hover:bg-slate-800/60 font-medium"
                           }`}
                           title={item.path}
                         >
@@ -327,7 +327,7 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
           {/* 우측 폴더 목록 영역 */}
           <div className="flex-1 p-4 overflow-y-auto">
             {errorMsg && (
-              <div className="p-3 mb-3 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 text-rose-700 dark:text-rose-300 text-xs">
+              <div className="p-3 mb-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs">
                 {errorMsg}
               </div>
             )}
@@ -349,33 +349,33 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
                       onDoubleClick={() => handleFolderDoubleClick(item)}
                       className={`p-2.5 rounded-xl border text-left cursor-pointer transition flex items-center gap-2.5 group ${
                         isSelected
-                          ? "bg-indigo-50 dark:bg-indigo-950/50 border-indigo-500 ring-1 ring-indigo-500/30 shadow-sm"
-                          : "bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800/40"
+                          ? "bg-indigo-500/10 border-indigo-500 ring-1 ring-indigo-500/30 shadow-sm"
+                          : "bg-slate-900 border-slate-800 hover:border-slate-700 hover:bg-slate-800/40"
                       }`}
                     >
                       <Folder
                         className={`w-5 h-5 shrink-0 transition ${
                           isSelected
-                            ? "text-indigo-600 dark:text-indigo-400"
+                            ? "text-indigo-400"
                             : item.is_hidden
-                            ? "text-slate-300 dark:text-slate-600"
-                            : "text-amber-500 dark:text-amber-400 group-hover:scale-105"
+                            ? "text-slate-600"
+                            : "text-amber-500 group-hover:scale-105"
                         }`}
                       />
                       <div className="min-w-0 flex-1">
                         <div
                           className={`text-xs font-semibold truncate ${
                             isSelected
-                              ? "text-indigo-900 dark:text-indigo-200"
+                              ? "text-indigo-400 font-bold"
                               : item.is_hidden
-                              ? "text-slate-400"
-                              : "text-slate-800 dark:text-slate-200"
+                              ? "text-slate-500"
+                              : "text-slate-100"
                           }`}
                         >
                           {item.name}
                         </div>
                       </div>
-                      <ChevronRight className="w-3.5 h-3.5 text-slate-300 dark:text-slate-600 shrink-0 opacity-0 group-hover:opacity-100 transition" />
+                      <ChevronRight className="w-3.5 h-3.5 text-slate-600 shrink-0 opacity-0 group-hover:opacity-100 transition" />
                     </div>
                   );
                 })}
@@ -385,12 +385,12 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
         </div>
 
         {/* 푸터 영역 */}
-        <div className="px-5 py-3.5 bg-slate-50 dark:bg-slate-950 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between shrink-0">
+        <div className="px-5 py-3.5 bg-slate-950 border-t border-slate-800 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3">
             <button
               type="button"
               onClick={handleFallbackNativePicker}
-              className="text-[11px] text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 flex items-center gap-1 transition"
+              className="text-[11px] text-slate-400 hover:text-indigo-400 flex items-center gap-1 transition"
               title="Windows 시스템 기본 탐색기로 열기"
             >
               <ExternalLink className="w-3.5 h-3.5" />
@@ -399,15 +399,15 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
           </div>
 
           <div className="flex items-center gap-2">
-            <div className="hidden sm:flex items-center gap-1 text-xs text-slate-500 font-mono truncate max-w-[260px]">
-              <span className="font-sans text-[11px] text-slate-400">선택됨:</span>
+            <div className="hidden sm:flex items-center gap-1 text-xs text-slate-400 font-mono truncate max-w-[260px]">
+              <span className="font-sans text-[11px] text-slate-500">선택됨:</span>
               <span className="truncate">{selectedFolder || currentPath}</span>
             </div>
 
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 rounded-xl bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-semibold transition"
+              className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition"
             >
               취소
             </button>

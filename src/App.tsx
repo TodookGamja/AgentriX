@@ -1777,13 +1777,13 @@ ${recentSnippet || "진행 내역 기록 없음"}
         {/* 우: 테마 스위처 + 창 제어 컨트롤 (최소화, 최대화, 닫기) */}
         <div className="flex items-center justify-end gap-2 shrink-0 z-10">
           {/* 테마 스위처 (자동, 다크, 라이트) */}
-          <div className="flex items-center p-0.5 rounded-lg border text-[11px] bg-slate-200/90 border-slate-300 dark:bg-slate-950 dark:border-slate-800">
+          <div className="flex items-center p-0.5 rounded-lg border text-[11px] bg-slate-950 border-slate-800">
             <button
               onClick={() => handleThemeChange("dark")}
               className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition ${
                 themeMode === "dark"
                   ? "bg-indigo-600 text-white shadow-sm"
-                  : "text-slate-700 hover:text-slate-950 dark:text-slate-400 dark:hover:text-slate-200"
+                  : "text-slate-400 hover:text-slate-100"
               }`}
               title="다크 모드"
             >
@@ -1794,7 +1794,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
               className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition ${
                 themeMode === "light"
                   ? "bg-indigo-600 text-white shadow-sm"
-                  : "text-slate-700 hover:text-slate-950 dark:text-slate-400 dark:hover:text-slate-200"
+                  : "text-slate-400 hover:text-slate-100"
               }`}
               title="라이트 모드"
             >
@@ -1805,7 +1805,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
               className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition ${
                 themeMode === "auto"
                   ? "bg-indigo-600 text-white shadow-sm"
-                  : "text-slate-700 hover:text-slate-950 dark:text-slate-400 dark:hover:text-slate-200"
+                  : "text-slate-400 hover:text-slate-100"
               }`}
               title="시스템 설정 자동"
             >
@@ -2012,19 +2012,19 @@ ${recentSnippet || "진행 내역 기록 없음"}
                               {/* 그룹 헤더 (그룹별 접기/펴기) */}
                               <div
                                 onClick={() => toggleGroupCollapsed(groupName)}
-                                className="flex items-center justify-between px-2 py-1.5 rounded-lg bg-slate-100/70 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800/70 cursor-pointer hover:bg-slate-200/60 dark:hover:bg-slate-900 transition text-[11px] select-none text-slate-600 dark:text-slate-400 group/grp"
+                                className="flex items-center justify-between px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-800 cursor-pointer hover:bg-slate-800/40 transition text-[11px] select-none text-slate-300 group/grp"
                               >
                                 <div className="flex items-center gap-1.5 min-w-0">
                                   <ChevronRight
                                     className={`w-3 h-3 text-slate-400 transition-transform duration-200 ${
-                                      isGroupCollapsed ? "" : "rotate-90 text-indigo-500 dark:text-indigo-400"
+                                      isGroupCollapsed ? "" : "rotate-90 text-indigo-400"
                                     }`}
                                   />
-                                  <FolderTree className="w-3.5 h-3.5 text-indigo-500 dark:text-indigo-400 shrink-0" />
-                                  <span className="font-semibold text-slate-700 dark:text-slate-200 truncate">
+                                  <FolderTree className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                                  <span className="font-semibold text-slate-200 truncate">
                                     {groupName}
                                   </span>
-                                  <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400 font-mono">
+                                  <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-slate-800 text-slate-300 font-mono">
                                     {projs.length}
                                   </span>
                                 </div>
@@ -2032,7 +2032,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
                                   <button
                                     type="button"
                                     onClick={(e) => handleDeleteGroup(groupName, e)}
-                                    className="opacity-0 group-hover/grp:opacity-100 p-1 rounded text-slate-400 hover:text-rose-500 hover:bg-rose-500/10 transition"
+                                    className="opacity-0 group-hover/grp:opacity-100 p-1 rounded text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition"
                                     title={`'${groupName}' 그룹 삭제`}
                                   >
                                     <Trash2 className="w-3 h-3" />
@@ -2044,7 +2044,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
                               {!isGroupCollapsed && (
                                 <div className="space-y-1.5 pl-1">
                                   {projs.length === 0 ? (
-                                    <div className="px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-950/40 border border-dashed border-slate-200 dark:border-slate-800 text-[10px] text-slate-400 dark:text-slate-500 text-center">
+                                    <div className="px-3 py-2 rounded-xl bg-slate-950/40 border border-dashed border-slate-800 text-[10px] text-slate-400 text-center">
                                       할당된 프로젝트가 없습니다
                                     </div>
                                   ) : (
@@ -3063,15 +3063,15 @@ ${recentSnippet || "진행 내역 기록 없음"}
       {/* 모달 4: 프로젝트 그룹 설정 / 이동 모달 (테마 완벽 연동) */}
       {groupModalProjPath && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 select-none animate-in fade-in duration-150">
-          <div className="w-full max-w-sm rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden">
-            <div className="px-5 py-3.5 bg-slate-50 dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+          <div className="w-full max-w-sm rounded-2xl bg-slate-900 border border-slate-800 shadow-2xl overflow-hidden">
+            <div className="px-5 py-3.5 bg-slate-950 border-b border-slate-800 flex items-center justify-between">
               <div className="flex items-center gap-2.5">
-                <div className="w-7 h-7 rounded-lg bg-indigo-600 dark:bg-indigo-500 flex items-center justify-center text-white shadow-sm">
+                <div className="w-7 h-7 rounded-lg bg-indigo-600 flex items-center justify-center text-white shadow-sm">
                   <Tag className="w-3.5 h-3.5" />
                 </div>
                 <div>
-                  <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100">프로젝트 그룹 변경</h3>
-                  <p className="text-[10px] text-slate-500 dark:text-slate-400">
+                  <h3 className="text-sm font-bold text-slate-100">프로젝트 그룹 변경</h3>
+                  <p className="text-[10px] text-slate-400">
                     프로젝트의 소속 그룹을 변경하거나 새로 지정합니다.
                   </p>
                 </div>
@@ -3079,7 +3079,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
               <button
                 type="button"
                 onClick={() => setGroupModalProjPath(null)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-800 transition"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -3087,14 +3087,14 @@ ${recentSnippet || "진행 내역 기록 없음"}
 
             <div className="p-5 space-y-4 text-xs">
               <div>
-                <span className="text-slate-500 dark:text-slate-400 block mb-1">선택 프로젝트:</span>
-                <div className="px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 font-bold text-slate-800 dark:text-slate-200 truncate font-mono text-[11px]">
+                <span className="text-slate-400 block mb-1">선택 프로젝트:</span>
+                <div className="px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 font-bold text-slate-200 truncate font-mono text-[11px]">
                   📁 {getShortFolderName(groupModalProjPath)}
                 </div>
               </div>
 
               <div>
-                <label className="block text-slate-700 dark:text-slate-300 mb-1.5 font-semibold">
+                <label className="block text-slate-300 mb-1.5 font-semibold">
                   기존 그룹 선택
                 </label>
                 <div className="space-y-1 max-h-40 overflow-y-auto pr-1">
@@ -3103,17 +3103,17 @@ ${recentSnippet || "진행 내역 기록 없음"}
                       key={gName}
                       type="button"
                       onClick={() => handleSetProjectGroup(groupModalProjPath, gName)}
-                      className="w-full text-left px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 hover:border-indigo-500 dark:hover:border-indigo-500 text-slate-700 dark:text-slate-200 text-xs flex items-center justify-between transition group/btn"
+                      className="w-full text-left px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 hover:border-indigo-500 text-slate-200 text-xs flex items-center justify-between transition group/btn"
                     >
                       <span className="truncate">{gName}</span>
-                      <span className="text-[10px] text-indigo-500 dark:text-indigo-400 font-semibold group-hover/btn:translate-x-0.5 transition-transform">이동 →</span>
+                      <span className="text-[10px] text-indigo-400 font-semibold group-hover/btn:translate-x-0.5 transition-transform">이동 →</span>
                     </button>
                   ))}
                 </div>
               </div>
 
               <div>
-                <label className="block text-slate-700 dark:text-slate-300 mb-1.5 font-semibold">
+                <label className="block text-slate-300 mb-1.5 font-semibold">
                   또는 새 그룹 직접 입력
                 </label>
                 <div className="flex gap-1.5">
@@ -3127,7 +3127,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
                       }
                     }}
                     placeholder="예: 회사 업무, 개인 토이"
-                    className="flex-1 px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-100 text-xs focus:outline-none focus:border-indigo-500 shadow-sm"
+                    className="flex-1 px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-slate-100 placeholder:text-slate-500 text-xs focus:outline-none focus:border-indigo-500 shadow-sm"
                   />
                   <button
                     type="button"
@@ -3144,11 +3144,11 @@ ${recentSnippet || "진행 내역 기록 없음"}
               </div>
             </div>
 
-            <div className="px-5 py-3 bg-slate-50 dark:bg-slate-950 border-t border-slate-200 dark:border-slate-800 flex justify-end">
+            <div className="px-5 py-3 bg-slate-950 border-t border-slate-800 flex justify-end">
               <button
                 type="button"
                 onClick={() => setGroupModalProjPath(null)}
-                className="px-3.5 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-xs hover:bg-slate-200 dark:hover:bg-slate-700 transition"
+                className="px-3.5 py-1.5 rounded-xl bg-slate-800 text-slate-300 text-xs hover:bg-slate-700 transition"
               >
                 닫기
               </button>
@@ -3161,20 +3161,20 @@ ${recentSnippet || "진행 내역 기록 없음"}
       {isNewGroupModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 select-none animate-in fade-in duration-150">
           <div
-            className="w-full max-w-md rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden flex flex-col"
+            className="w-full max-w-md rounded-2xl bg-slate-900 border border-slate-800 shadow-2xl overflow-hidden flex flex-col"
             onClick={(e) => e.stopPropagation()}
           >
             {/* 헤더 */}
-            <div className="px-5 py-3.5 bg-slate-50 dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between shrink-0">
+            <div className="px-5 py-3.5 bg-slate-950 border-b border-slate-800 flex items-center justify-between shrink-0">
               <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-xl bg-indigo-600 dark:bg-indigo-500 flex items-center justify-center text-white shadow-sm">
+                <div className="w-8 h-8 rounded-xl bg-indigo-600 flex items-center justify-center text-white shadow-sm">
                   <FolderTree className="w-4 h-4" />
                 </div>
                 <div>
-                  <h2 className="text-sm font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                  <h2 className="text-sm font-bold text-slate-100 flex items-center gap-2">
                     새 프로젝트 그룹 추가
                   </h2>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                  <p className="text-[11px] text-slate-400">
                     프로젝트를 체계적으로 분류하고 관리할 새 그룹을 만듭니다.
                   </p>
                 </div>
@@ -3182,7 +3182,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
               <button
                 type="button"
                 onClick={() => setIsNewGroupModalOpen(false)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-800 transition"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -3197,8 +3197,8 @@ ${recentSnippet || "진행 내역 기록 없음"}
               className="p-5 space-y-4"
             >
               <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                  그룹 이름 <span className="text-indigo-500 font-bold">*</span>
+                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                  그룹 이름 <span className="text-indigo-400 font-bold">*</span>
                 </label>
                 <input
                   type="text"
@@ -3206,13 +3206,13 @@ ${recentSnippet || "진행 내역 기록 없음"}
                   value={newGroupNameInput}
                   onChange={(e) => setNewGroupNameInput(e.target.value)}
                   placeholder="예: 회사 업무, 사이드 프로젝트, 연구, 토이"
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-100 text-xs focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 shadow-sm transition"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-slate-100 placeholder:text-slate-500 text-xs focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 shadow-sm transition"
                 />
               </div>
 
               {/* 추천 태그 칩 */}
               <div>
-                <span className="block text-[11px] text-slate-500 dark:text-slate-400 mb-1.5 font-medium">
+                <span className="block text-[11px] text-slate-400 mb-1.5 font-medium">
                   추천 그룹명 빠른 입력:
                 </span>
                 <div className="flex flex-wrap gap-1.5">
@@ -3222,7 +3222,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
                         key={tag}
                         type="button"
                         onClick={() => setNewGroupNameInput(tag.replace(/^[^\s]+\s/, ""))}
-                        className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 border border-slate-200 dark:border-slate-700 hover:border-indigo-300 dark:hover:border-indigo-700 text-[11px] text-slate-600 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-300 transition"
+                        className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-indigo-500 text-[11px] text-slate-300 hover:text-indigo-400 transition"
                       >
                         {tag}
                       </button>
@@ -3234,13 +3234,13 @@ ${recentSnippet || "진행 내역 기록 없음"}
               {/* 프로젝트 배정 (선택 사항) */}
               {projectFolders.length > 0 && (
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">
                     이 그룹에 바로 할당할 프로젝트 (선택 사항)
                   </label>
                   <select
                     value={selectedProjectForNewGroup}
                     onChange={(e) => setSelectedProjectForNewGroup(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-100 text-xs focus:outline-none focus:border-indigo-500 shadow-sm cursor-pointer transition"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-slate-100 text-xs focus:outline-none focus:border-indigo-500 shadow-sm cursor-pointer transition"
                   >
                     <option value="">(선택 안 함 - 빈 그룹으로 생성)</option>
                     {projectFolders.map((p) => (
@@ -3253,11 +3253,11 @@ ${recentSnippet || "진행 내역 기록 없음"}
               )}
 
               {/* 모달 푸터 버튼 */}
-              <div className="pt-2 flex items-center justify-end gap-2 border-t border-slate-100 dark:border-slate-800">
+              <div className="pt-2 flex items-center justify-end gap-2 border-t border-slate-800">
                 <button
                   type="button"
                   onClick={() => setIsNewGroupModalOpen(false)}
-                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 transition"
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-300 bg-slate-800 hover:bg-slate-700 transition"
                 >
                   취소
                 </button>
