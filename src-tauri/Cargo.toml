@@ -1,0 +1,31 @@
+[package]
+name = "ai-cli-manager"
+version = "0.1.0"
+description = "Windows Multi-AI Coding CLI Manager (Claude Code, Codex, Cursor, Antigravity)"
+authors = ["AI CLI Manager Team"]
+edition = "2021"
+rust-version = "1.77"
+
+[build-dependencies]
+tauri-build = { version = "2.7.4", features = [] }
+winres = "0.1.12"
+
+[dependencies]
+rfd = "0.15"
+ureq = { version = "2.10", features = ["tls", "json"] }
+tauri = { version = "2.12.5", features = ["custom-protocol", "tray-icon"] }
+portable-pty = { version = "0.9.0", features = ["serde_support"] }
+rusqlite = { version = "0.31.0", features = ["bundled", "modern_sqlite"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full", "rt-multi-thread"] }
+anyhow = "1"
+thiserror = "1"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+dirs = "5.0.1"
+walkdir = "2"
+whoami = "1.6.1"
+toml = "0.8.2"
+base64 = "0.22.1"
+sha2 = "0.10.9"

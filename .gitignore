@@ -1,0 +1,66 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build Outputs
+dist/
+dist-ssr/
+build/
+release/
+*.local
+tsconfig.tsbuildinfo
+
+# Rust & Tauri Builds (대용량 빌드 캐시 2GB+ 제외)
+target/
+src-tauri/target/
+*.exe
+*.dll
+*.pdb
+*.lib
+
+# Local SQLite & User Data (개인정보 및 로컬 세션 보호)
+*.sqlite
+*.sqlite3
+*.db
+*.db-shm
+*.db-wal
+AI_CLI_Manager.sqlite
+*.log
+*.tmp
+claude_quota_cache.json
+antigravity_quota_cache.json
+
+# Environment Variables & Secrets
+.env
+.env.*
+!.env.example
+
+# IDE & OS Files
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Project Harness Temp & Logs
+.ai-agents/
+.claude/
+hive/
+*.txt
+palace.*
+roster-backups/
+roster.json
+
+# Internal dev prompts, plans, test results & scripts
+*PROMPT*.md
+PROGRESS*.md
+TEST_RESULT*.md
+*.ps1
+examples/
+
