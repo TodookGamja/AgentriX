@@ -141,6 +141,7 @@ pub fn builtin_clis() -> Vec<CliDefinition> {
                 "cursor.cmd".into(),
                 "cursor.exe".into(),
                 "agent.exe".into(),
+                "agent.cmd".into(),
                 "cursor".into(),
             ],
             resolved_binary: None,
@@ -308,7 +309,7 @@ pub fn resolve_cli_binary(
         }
         let dir_path = Path::new(dir);
         for cand in candidates {
-            if cli_id == "cursor" && cand.eq_ignore_ascii_case("agent.exe") && is_grok_bin(&dir_path) {
+            if cli_id == "cursor" && (cand.eq_ignore_ascii_case("agent.exe") || cand.eq_ignore_ascii_case("agent.cmd")) && is_grok_bin(&dir_path) {
                 continue;
             }
             let full = dir_path.join(cand);
@@ -359,6 +360,7 @@ pub fn resolve_cli_binary(
             fallbacks.push(home.join(".grok").join("bin").join("agent.exe"));
         }
         "cursor" => {
+            fallbacks.push(local_appdata.join("cursor-agent").join("agent.cmd"));
             fallbacks.push(
                 local_appdata
                     .join("Programs")
@@ -401,6 +403,23 @@ mod tests {
         assert!(is_grok_bin(Path::new("C:/Users/test/.grok/bin")));
         assert!(is_grok_bin(Path::new("C:\\Users\\test\\.GROK\\bin\\")));
         assert!(!is_grok_bin(Path::new("C:/Users/test/.local/bin")));
+    }
+
+    #[test]
+    fn cursor_agent_cmd_is_detected_after_grok_agent() {
+        let root = std::env::temp_dir().join(format!("acm_cli_test_{}", uuid::Uuid::new_v4()));
+        let grok = root.join(".grok").join("bin");
+        let cursor = root.join("cursor-agent");
+        std::fs::create_dir_all(&grok).unwrap();
+        std::fs::create_dir_all(&cursor).unwrap();
+        std::fs::write(grok.join("agent.exe"), "").unwrap();
+        std::fs::write(grok.join("agent.cmd"), "").unwrap();
+        let expected = cursor.join("agent.cmd");
+        std::fs::write(&expected, "").unwrap();
+        let path = std::env::join_paths([&grok, &cursor]).unwrap();
+        let definition = builtin_clis().into_iter().find(|cli| cli.id == "cursor").unwrap();
+        assert_eq!(resolve_cli_binary("cursor", &definition.binary_candidates, &path.to_string_lossy()), Some(expected));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
