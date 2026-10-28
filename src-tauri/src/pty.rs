@@ -41,7 +41,15 @@ pub struct PtySession {
     pub master: Box<dyn MasterPty + Send>,
     pub writer: Box<dyn Write + Send>,
     pub child: Box<dyn Child + Send + Sync>,
-    pub output_buffer: Arc<Mutex<Vec<u8>>>,
+    pub output_buffer: Arc<Mutex<OutputBuffer>>,
+}
+
+/// 출력 버퍼. 커서는 세션 시작부터의 절대 바이트 위치라서 앞부분을 잘라내도 커서가 어긋나지 않는다.
+#[derive(Default)]
+pub struct OutputBuffer {
+    /// data[0]의 절대 위치 (지금까지 잘라낸 바이트 수)
+    start: usize,
+    data: Vec<u8>,
 }
 
 #[derive(Default, Clone)]
@@ -190,7 +198,7 @@ impl PtyManager {
         let session_id = Uuid::new_v4().to_string();
         let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
         let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
-        let output_buffer = Arc::new(Mutex::new(Vec::new()));
+        let output_buffer = Arc::new(Mutex::new(OutputBuffer::default()));
 
         let buffer_clone = output_buffer.clone();
         let sid_clone = session_id.clone();
@@ -203,10 +211,11 @@ impl PtyManager {
                         let chunk_bytes = &buf[..n];
                         {
                             let mut locked = buffer_clone.lock().unwrap();
-                            locked.extend_from_slice(chunk_bytes);
-                            if locked.len() > 524_288 {
-                                let drain_len = locked.len() - 393_216;
-                                locked.drain(..drain_len);
+                            locked.data.extend_from_slice(chunk_bytes);
+                            if locked.data.len() > 524_288 {
+                                let drain_len = locked.data.len() - 393_216;
+                                locked.data.drain(..drain_len);
+                                locked.start += drain_len;
                             }
                         }
                         if let Some(ref app) = app_handle {
@@ -326,9 +335,7 @@ impl PtyManager {
             .get(session_id)
             .ok_or_else(|| "세션을 찾을 수 없습니다.".to_string())?;
         let buffer = session.output_buffer.lock().unwrap();
-        let safe_cursor = cursor.min(buffer.len());
-        let data = String::from_utf8_lossy(&buffer[safe_cursor..]).to_string();
-        let next_cursor = buffer.len();
+        let (data, next_cursor) = read_from(&buffer, cursor);
         Ok(PtyOutputChunk {
             session_id: session_id.to_string(),
             data,
@@ -559,5 +566,49 @@ mod tests {
 
         mgr.stop_session(&s2.id).unwrap();
         assert!(mgr.list_sessions().is_empty());
+    }
+}
+
+/// 절대 커서 이후 출력을 돌려준다. 끝에서 잘린 UTF-8 문자는 다음 읽기로 미룬다.
+fn read_from(buf: &OutputBuffer, cursor: usize) -> (String, usize) {
+    let mut from = cursor.saturating_sub(buf.start).min(buf.data.len());
+    if cursor < buf.start {
+        // 이미 잘려 나간 구간: 남은 데이터의 첫 문자 경계부터
+        while from < buf.data.len() && (buf.data[from] & 0xC0) == 0x80 {
+            from += 1;
+        }
+    }
+    let tail = &buf.data[from..];
+    let valid = match std::str::from_utf8(tail) {
+        Ok(_) => tail.len(),
+        Err(e) if e.error_len().is_none() => e.valid_up_to(),
+        Err(_) => tail.len(),
+    };
+    (
+        String::from_utf8_lossy(&tail[..valid]).into_owned(),
+        buf.start + from + valid,
+    )
+}
+
+#[cfg(test)]
+mod buffer_tests {
+    use super::*;
+
+    #[test]
+    fn cursor_survives_trim_and_utf8_split() {
+        let mut b = OutputBuffer::default();
+        b.data.extend_from_slice("ab한".as_bytes());
+        b.data.pop(); // '한' 마지막 바이트 아직 안 옴
+        let (d, c) = read_from(&b, 0);
+        assert_eq!((d.as_str(), c), ("ab", 2));
+        b.data.push("한".as_bytes()[2]);
+        assert_eq!(read_from(&b, c), ("한".to_string(), 5));
+        // 앞 3바이트 잘림 → 이전 커서(5)는 그대로 유효
+        b.data.drain(..3);
+        b.start = 3;
+        b.data.extend_from_slice(b"z");
+        assert_eq!(read_from(&b, 5), ("z".to_string(), 6));
+        // 잘린 구간을 가리키는 오래된 커서는 남은 데이터의 문자 경계부터
+        assert_eq!(read_from(&b, 0), ("z".to_string(), 6));
     }
 }

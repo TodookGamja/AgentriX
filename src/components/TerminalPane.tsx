@@ -345,12 +345,15 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     let active = true;
     // 마운트 직후 첫 청크는 기존 버퍼 재생일 수 있으므로 토큰 추정에서 제외 (화면 이동 시 재집계 → 불필요한 /compact 방지)
     let replayed = false;
+    // 이전 요청이 끝나기 전에 다음 폴링이 겹치면 같은 커서로 두 번 읽어 출력이 중복/역순으로 써진다
+    let inFlight = false;
     const pollInterval = window.setInterval(async () => {
-      if (!active) return;
+      if (!active || inFlight) return;
+      inFlight = true;
       try {
         const chunk = await apiReadSessionOutput(session.id, cursorRef.current);
+        cursorRef.current = chunk.nextCursor;
         if (chunk.data && chunk.data.length > 0) {
-          cursorRef.current = chunk.nextCursor;
           // 스크롤을 강제로 내리지 않는다: 맨 아래에 있으면 xterm이 알아서 따라가고, 위로 올려 둔 경우엔 그대로 둔다.
           term.write(chunk.data);
           if (replayed) onOutputChunkRef.current?.(session.id, chunk.data);
@@ -358,6 +361,8 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
         }
       } catch {
         // 세션 종료 시 무시
+      } finally {
+        inFlight = false;
       }
     }, 55);
 
