@@ -8,7 +8,7 @@ echo.
 set RELEASE_DIR=release
 if not exist "%RELEASE_DIR%" mkdir "%RELEASE_DIR%"
 
-set VERSION=1.1.4
+set VERSION=1.1.5
 
 echo [1/3] 프론트엔드 프로덕션 빌드 중... (v%VERSION%)
 call npm run build

@@ -171,7 +171,7 @@ export const App: React.FC = () => {
   // 분할 각 슬롯(0~3)에 사용자가 직접 지정한 세션 ID들
   const [splitSlotSessionIds, setSplitSlotSessionIds] = useState<(string | null)[]>([null, null, null, null]);
   const terminalDrafts = useRef<Record<string, { text: string; attachments: string[] }>>({});
-  const draggedSessionId = useRef<string | null>(null);
+  const draggedSession = useRef<{ id: string; x: number; y: number; moved: boolean } | null>(null);
 
   const handleAssignSessionToSlot = (slotIdx: number, sessionId: string) => {
     setSplitSlotSessionIds((prev) => {
@@ -2916,27 +2916,33 @@ ${recentSnippet || "진행 내역 기록 없음"}
                   return (
                     <div
                       key={s.id}
-                      draggable
-                      onDragStart={(e) => {
-                        draggedSessionId.current = s.id;
-                        e.dataTransfer.effectAllowed = "move";
-                        e.dataTransfer.setData("text/plain", s.id);
+                      data-session-tab={s.id}
+                      onPointerDown={(e) => {
+                        draggedSession.current = null;
+                        if (e.button !== 0 || (e.target as HTMLElement).closest("button")) return;
+                        draggedSession.current = { id: s.id, x: e.clientX, y: e.clientY, moved: false };
+                        e.currentTarget.setPointerCapture(e.pointerId);
                       }}
-                      onDragOver={(e) => { if (draggedSessionId.current) e.preventDefault(); }}
-                      onDragEnd={() => { draggedSessionId.current = null; }}
-                      onDrop={(e) => {
-                        e.preventDefault();
-                        const dragged = draggedSessionId.current;
-                        draggedSessionId.current = null;
-                        if (!dragged || dragged === s.id) return;
+                      onPointerMove={(e) => {
+                        const dragged = draggedSession.current;
+                        if (!dragged || dragged.id !== s.id || e.buttons !== 1) return;
+                        if (!dragged.moved && Math.hypot(e.clientX - dragged.x, e.clientY - dragged.y) < 5) return;
+                        dragged.moved = true;
+                        const target = document.elementFromPoint(e.clientX, e.clientY)?.closest<HTMLElement>("[data-session-tab]")?.dataset.sessionTab;
+                        if (!target || dragged.id === target) return;
                         useAppStore.setState((st) => {
-                          const from = st.sessions.findIndex((item) => item.id === dragged);
-                          const to = st.sessions.findIndex((item) => item.id === s.id);
+                          const from = st.sessions.findIndex((item) => item.id === dragged.id);
+                          const to = st.sessions.findIndex((item) => item.id === target);
                           if (from < 0 || to < 0) return st;
                           const next = [...st.sessions];
                           next.splice(to, 0, next.splice(from, 1)[0]);
                           return { sessions: next };
                         });
+                      }}
+                      onPointerCancel={() => { draggedSession.current = null; }}
+                      onClickCapture={(e) => {
+                        if (draggedSession.current?.moved) e.stopPropagation();
+                        draggedSession.current = null;
                       }}
                                           onClick={() => {
                         setActiveNav("terminal");
