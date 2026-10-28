@@ -3,6 +3,7 @@
 
 pub mod cli;
 pub mod db;
+pub mod handoff;
 pub mod mcp;
 pub mod pty;
 pub mod usage;
@@ -426,16 +427,13 @@ fn save_session_handoff(
     filename: Option<String>,
     content: String,
 ) -> Result<String, String> {
-    let norm = db::normalize_project_path(&project_path);
-    if norm.is_empty() || db::is_forbidden_system_dir(&norm) {
-        return Err("유효하지 않은 프로젝트 경로입니다.".into());
+    let safe_path = handoff::validate_safe_handoff_path(&project_path, filename.as_deref())?;
+    if let Some(parent) = safe_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let dir = std::path::Path::new(&norm).join(".ai-agents");
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let fname = filename.unwrap_or_else(|| "SESSION_HANDOFF.md".to_string());
-    let path = dir.join(&fname);
-    std::fs::write(&path, &content).map_err(|e| e.to_string())?;
-    Ok(path.to_string_lossy().to_string())
+    let redacted = handoff::redact_secrets(&content);
+    std::fs::write(&safe_path, &redacted).map_err(|e| e.to_string())?;
+    Ok(safe_path.to_string_lossy().to_string())
 }
 
 #[tauri::command]

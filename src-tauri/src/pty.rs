@@ -588,11 +588,26 @@ fn read_from(buf: &OutputBuffer, cursor: usize) -> (String, usize) {
         }
     }
     let tail = &buf.data[from..];
-    let valid = match std::str::from_utf8(tail) {
-        Ok(_) => tail.len(),
-        Err(e) if e.error_len().is_none() => e.valid_up_to(),
-        Err(_) => tail.len(),
-    };
+    let mut valid = 0;
+    let mut remaining = tail;
+    while !remaining.is_empty() {
+        match std::str::from_utf8(remaining) {
+            Ok(s) => {
+                valid += s.len();
+                break;
+            }
+            Err(e) => {
+                valid += e.valid_up_to();
+                if let Some(error_len) = e.error_len() {
+                    valid += error_len;
+                    remaining = &remaining[e.valid_up_to() + error_len..];
+                } else {
+                    // 끝부분이 불완전한 UTF-8 바이트 시퀀스인 경우 다음 읽기로 안전하게 미룸
+                    break;
+                }
+            }
+        }
+    }
     (
         String::from_utf8_lossy(&tail[..valid]).into_owned(),
         buf.start + from + valid,
@@ -619,5 +634,26 @@ mod buffer_tests {
         assert_eq!(read_from(&b, 5), ("z".to_string(), 6));
         // 잘린 구간을 가리키는 오래된 커서는 남은 데이터의 문자 경계부터
         assert_eq!(read_from(&b, 0), ("z".to_string(), 6));
+    }
+
+    #[test]
+    fn invalid_byte_before_incomplete_utf8_does_not_corrupt_multi_byte_character() {
+        let mut b = OutputBuffer::default();
+        // 0xFF(유효하지 않은 바이트) + "ab" + '한'의 앞 2바이트
+        b.data.push(0xFF);
+        b.data.extend_from_slice("ab".as_bytes());
+        let han_bytes = "한".as_bytes();
+        b.data.extend_from_slice(&han_bytes[..2]);
+
+        let (d, c) = read_from(&b, 0);
+        // 0xFF는 손실 대체문자로 치환되고, "ab"는 정상 반환되며, 불완전한 '한'의 앞 2바이트는 다음 읽기로 보존됨
+        assert_eq!(d, "\u{FFFD}ab");
+        assert_eq!(c, 3); // 1 (0xFF) + 2 ("ab")
+
+        // '한'의 나머지 바이트 도착
+        b.data.push(han_bytes[2]);
+        let (d2, c2) = read_from(&b, c);
+        assert_eq!(d2, "한");
+        assert_eq!(c2, 6);
     }
 }

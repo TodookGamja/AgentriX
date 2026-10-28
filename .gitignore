@@ -65,3 +65,7 @@ TEST_RESULT*.md
 *.ps1
 examples/
 
+
+# Tool caches
+graphify-out/
+.serena/

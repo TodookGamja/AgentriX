@@ -73,7 +73,6 @@ import {
   apiUpsertProjectAgent,
   apiUpsertRegistryItem,
   apiWriteToSession,
-  apiWindowStartDragging,
   apiWindowMinimize,
   apiWindowToggleMaximize,
   apiWindowClose,
@@ -101,6 +100,7 @@ import {
 import { AiDeepTeamModal } from "./components/AiDeepTeamModal";
 import { FolderPickerModal } from "./components/FolderPickerModal";
 import { AgentrixLogo } from "./components/AgentrixLogo";
+import { parseBoardTasks } from "./lib/blackboardDispatch";
 import type {
   ActiveNavTab,
   CustomCliInput,
@@ -1905,6 +1905,61 @@ ${recentSnippet || "진행 내역 기록 없음"}
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
+  // 블랙보드 작업표 자동 디스패치: 🔥 착수 행 → 담당 에이전트 세션, ✅ 행 → PM 세션에 1회 전달
+  // ponytail: 10초 폴링 + 세션 busy 여부 미판단, 지연/입력 충돌이 문제되면 파일 감시·idle 감지로 교체
+  const dispatchStateRef = useRef({ sessions: currentProjectSessions, agents: projectAgents });
+  dispatchStateRef.current = { sessions: currentProjectSessions, agents: projectAgents };
+  const hasProjectSessions = currentProjectSessions.length > 0;
+  useEffect(() => {
+    if (!selectedProjectPath || !hasProjectSessions) return;
+    const storeKey = `agentrix_bb_dispatched:${selectedProjectPath}`;
+    const sent = new Set<string>(JSON.parse(localStorage.getItem(storeKey) || "[]"));
+    const tick = async () => {
+      const { sessions: projSessions, agents } = dispatchStateRef.current;
+      let board: string;
+      try {
+        board = await apiGetProjectBlackboard(selectedProjectPath);
+      } catch {
+        return;
+      }
+      const tasks = parseBoardTasks(board, agents.map((a) => a.id));
+      const pmSession = projSessions.find(
+        (s) => s.name.includes("PM") || s.agentRole?.includes("PM") || s.agentRole?.includes("리더")
+      );
+      const doneIds: string[] = [];
+      for (const t of tasks) {
+        const key = `${t.taskId}:${t.status}:${t.agentId}`;
+        if (sent.has(key)) continue;
+        if (t.status === "done") {
+          if (!pmSession) continue;
+          doneIds.push(t.taskId);
+          sent.add(key);
+          continue;
+        }
+        const target = projSessions.find((s) => s.agentId === t.agentId);
+        if (!target) continue; // 세션이 뜨면 다음 폴링에서 재시도
+        try {
+          await apiWriteToSession(
+            target.id,
+            `[PM 배정] .ai-agents/BLACKBOARD.md 작업표의 ${t.taskId} 작업을 수행하세요. 완료하면 해당 행의 상태를 ✅ 완료로 바꾸고 결과를 한 줄 메모로 남기세요.\r`
+          );
+          sent.add(key);
+          showToast(`📋 ${t.taskId} → '${target.name}' 자동 배정`, "info");
+        } catch {}
+      }
+      if (pmSession && doneIds.length > 0) {
+        apiWriteToSession(
+          pmSession.id,
+          `[완료 보고] ${doneIds.join(", ")} 작업이 ✅ 완료되었습니다. .ai-agents/BLACKBOARD.md를 확인하고 선행 조건이 풀린 다음 작업의 상태를 🔥 착수로 바꾸세요. 남은 작업이 없으면 사용자에게 최종 보고하세요.\r`
+        ).catch(() => {});
+      }
+      localStorage.setItem(storeKey, JSON.stringify([...sent]));
+    };
+    tick();
+    const id = window.setInterval(tick, 10000);
+    return () => window.clearInterval(id);
+  }, [selectedProjectPath, hasProjectSessions]);
+
   // 사용량/쿼터 자동 새로고침 (CLI 응답 후 반영되도록 주기적으로 갱신)
   useEffect(() => {
     const id = window.setInterval(() => {
@@ -2000,26 +2055,6 @@ ${recentSnippet || "진행 내역 기록 없음"}
     apiWindowExit().catch(() => apiWindowClose().catch(() => {}));
   };
 
-  const lastToggleTimeRef = useRef(0);
-  const handleTitlebarDoubleClick = (e: React.MouseEvent) => {
-    if ((e.target as HTMLElement).closest("button, a, input, select, textarea")) {
-      return;
-    }
-    const now = Date.now();
-    if (now - lastToggleTimeRef.current < 400) return;
-    lastToggleTimeRef.current = now;
-    handleWindowToggleMaximize();
-  };
-
-  const handleStartDragging = (e: React.MouseEvent) => {
-    if (
-      e.button === 0 &&
-      e.detail === 1 &&
-      !(e.target as HTMLElement).closest("button, a, input, select, textarea")
-    ) {
-      apiWindowStartDragging().catch(() => {});
-    }
-  };
 
   return (
     <div className="flex flex-col h-screen w-screen bg-slate-950 text-slate-100 overflow-hidden select-none border border-slate-800/60">
@@ -2033,12 +2068,10 @@ ${recentSnippet || "진행 내역 기록 없음"}
          ===================================================================== */}
       <header
         data-tauri-drag-region
-        onMouseDown={handleStartDragging}
-        onDoubleClick={handleTitlebarDoubleClick}
         className="relative h-10 min-h-[40px] max-h-[40px] bg-slate-900/95 backdrop-blur border-b border-slate-800/80 flex items-center justify-between px-3 select-none z-50 shrink-0 cursor-default"
       >
         {/* 좌: 사이드바 열기 / 닫기 버튼 */}
-        <div className="flex items-center z-10" data-tauri-drag-region onMouseDown={handleStartDragging}>
+        <div className="flex items-center z-10" data-tauri-drag-region>
           <button
             onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
             className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-slate-100 hover:bg-slate-800 transition text-xs font-bold"
@@ -2058,8 +2091,6 @@ ${recentSnippet || "진행 내역 기록 없음"}
         {/* 중: 윈도우 정중앙 절대좌표 앱 로고 & 프로그램 이름 (좌우 버튼에 전혀 간섭받지 않고 정중앙 고정) */}
         <div
           data-tauri-drag-region
-          onMouseDown={handleStartDragging}
-          onDoubleClick={handleTitlebarDoubleClick}
           className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center gap-2 select-none cursor-default z-0 pointer-events-none"
         >
           <AgentrixLogo

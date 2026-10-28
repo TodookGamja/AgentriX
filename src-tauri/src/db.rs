@@ -224,7 +224,25 @@ pub struct ProjectFolderRecord {
 
 pub fn is_forbidden_system_dir(path_str: &str) -> bool {
     let lower = path_str.trim().replace('/', "\\").to_lowercase();
-    lower.starts_with("c:\\windows") || lower == "c:\\"
+    if lower.is_empty() {
+        return true;
+    }
+    let bytes = lower.as_bytes();
+    if bytes.len() >= 2 && bytes[1] == b':' {
+        // 드라이브 루트: "c:", "c:\", "d:\", 등
+        if bytes.len() == 2 || (bytes.len() == 3 && bytes[2] == b'\\') {
+            return true;
+        }
+        let rest = &lower[2..];
+        if rest.starts_with("\\windows")
+            || rest.starts_with("\\program files")
+            || rest.starts_with("\\program files (x86)")
+            || rest.starts_with("\\programdata")
+        {
+            return true;
+        }
+    }
+    false
 }
 
 pub fn default_safe_project_dir() -> String {
@@ -473,6 +491,21 @@ pub fn delete_project_agent(
         "DELETE FROM project_agents WHERE id = ?1 AND LOWER(REPLACE(project_path, '/', '\\')) = ?2",
         params![agent_id, norm_lower],
     )?;
+
+    // T0b: 에이전트 삭제 시 디스크 상의 .ai-agents/agents/<id>/ 폴더도 함께 정리
+    if !norm.is_empty() && !is_forbidden_system_dir(&norm) {
+        let clean_id = agent_id.trim();
+        if !clean_id.is_empty()
+            && !clean_id.contains("..")
+            && !clean_id.chars().any(|c| matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\0'))
+        {
+            let agent_dir = Path::new(&norm).join(".ai-agents").join("agents").join(clean_id);
+            if agent_dir.exists() {
+                let _ = std::fs::remove_dir_all(&agent_dir);
+            }
+        }
+    }
+
     get_project_agents(conn, &norm)
 }
 
@@ -2038,5 +2071,26 @@ mod tests {
         assert_eq!(analysis.recommended_agents.len(), 5);
 
         let _ = std::fs::remove_dir_all(&temp_proj);
+    }
+
+    #[test]
+    fn delete_project_agent_removes_agent_directory_from_disk() {
+        let conn = create_memory_db();
+        let temp_dir = std::env::temp_dir().join(format!("acm_del_agent_{}", uuid::Uuid::new_v4()));
+        let proj_path = temp_dir.to_string_lossy().to_string();
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let agents = seed_project_agents_preset(&conn, &proj_path).unwrap();
+        assert!(!agents.is_empty());
+        let agent_to_delete = &agents[0];
+        let agent_dir = temp_dir.join(".ai-agents").join("agents").join(&agent_to_delete.id);
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        assert!(agent_dir.exists());
+
+        let remaining = delete_project_agent(&conn, &proj_path, &agent_to_delete.id).unwrap();
+        assert_eq!(remaining.len(), agents.len() - 1);
+        assert!(!agent_dir.exists(), "에이전트 삭제 후 폴더가 디스크에 남아있지 않아야 함");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }
