@@ -1,5 +1,6 @@
-import React, { useEffect, useId, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { apiListCliModels } from "../lib/tauriBridge";
+import { Select } from "./Select";
 
 const STORAGE_KEY = "agentrix_cli_default_models";
 
@@ -29,9 +30,8 @@ interface ModelPickerProps {
   className?: string;
 }
 
-/** CLI가 제공하는 모델 목록을 자동완성으로 보여주되 직접 입력도 허용 */
+/** CLI가 제공하는 모델 목록을 드롭다운으로 보여주되 직접 입력도 허용 */
 export const ModelPicker: React.FC<ModelPickerProps> = ({ cliId, value, onChange, className }) => {
-  const listId = useId();
   const [models, setModels] = useState<string[]>([]);
 
   useEffect(() => {
@@ -44,19 +44,13 @@ export const ModelPicker: React.FC<ModelPickerProps> = ({ cliId, value, onChange
   }, [cliId]);
 
   return (
-    <>
-      <input
-        list={listId}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={models.length > 0 ? `기본 모델 (예: ${models[0]})` : "기본 모델"}
-        className={className}
-      />
-      <datalist id={listId}>
-        {models.map((m) => (
-          <option key={m} value={m} />
-        ))}
-      </datalist>
-    </>
+    <Select
+      editable
+      value={value}
+      onChange={onChange}
+      options={models.map((m) => ({ value: m, label: m }))}
+      placeholder={models.length > 0 ? `기본 모델 (예: ${models[0]})` : "기본 모델 (직접 입력)"}
+      className={className}
+    />
   );
 };

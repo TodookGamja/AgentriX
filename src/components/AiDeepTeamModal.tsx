@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { Select } from "./Select";
 import {
   AlertCircle,
   Bot,
@@ -461,17 +462,12 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
                     <label className="text-[11px] font-medium text-slate-700 dark:text-slate-300 mb-1 block">
                       모델 선택
                     </label>
-                    <select
+                    <Select
                       value={config.model}
-                      onChange={(e) => setConfig({ ...config, model: e.target.value })}
-                      className="w-full px-3 py-2 rounded-lg bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs text-slate-800 dark:text-slate-200 focus:outline-none focus:border-indigo-500"
-                    >
-                      {PROVIDER_MODELS[config.provider].models.map((m) => (
-                        <option key={m} value={m}>
-                          {m}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={(v) => setConfig({ ...config, model: v })}
+                      options={PROVIDER_MODELS[config.provider].models.map((m) => ({ value: m, label: m }))}
+                      className="w-full px-3 py-2 rounded-lg bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs text-slate-800 dark:text-slate-200"
+                    />
                   </div>
 
                   <div className="shrink-0 self-end">

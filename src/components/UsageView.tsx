@@ -1,4 +1,5 @@
 import React, { useMemo, useRef, useState } from "react";
+import { Select } from "./Select";
 import {
   Area,
   AreaChart,
@@ -17,7 +18,6 @@ import {
   ArrowUpDown,
   BarChart3,
   CheckCircle2,
-  ChevronDown,
   Cpu,
   DollarSign,
   Layers,
@@ -964,18 +964,18 @@ export const UsageView: React.FC<UsageViewProps> = ({
             {/* 정렬 셀렉터 (이중 박스 없는 단일 라운드 필) */}
             <div className="relative flex items-center">
               <ArrowUpDown className="w-3.5 h-3.5 absolute left-3 text-indigo-400 pointer-events-none" />
-              <select
+              <Select
                 value={sortBy}
-                onChange={(e) => setSortBy(e.target.value as any)}
-                className="clean-select h-9 pl-8 pr-7 rounded-xl bg-slate-950 border border-slate-800 text-xs font-semibold text-slate-200 hover:border-slate-700 focus:outline-none focus:border-indigo-500 cursor-pointer transition appearance-none"
-              >
-                <option value="total" className="bg-[#0b0f19] text-slate-100">정렬: 총 토큰순</option>
-                <option value="cost" className="bg-[#0b0f19] text-slate-100">정렬: 비용($)순</option>
-                <option value="input" className="bg-[#0b0f19] text-slate-100">정렬: Input순</option>
-                <option value="output" className="bg-[#0b0f19] text-slate-100">정렬: Output순</option>
-                <option value="cache" className="bg-[#0b0f19] text-slate-100">정렬: Cache순</option>
-              </select>
-              <ChevronDown className="w-3.5 h-3.5 absolute right-2.5 text-slate-400 pointer-events-none" />
+                onChange={(v) => setSortBy(v as any)}
+                options={[
+                  { value: "total", label: "정렬: 총 토큰순" },
+                  { value: "cost", label: "정렬: 비용($)순" },
+                  { value: "input", label: "정렬: Input순" },
+                  { value: "output", label: "정렬: Output순" },
+                  { value: "cache", label: "정렬: Cache순" },
+                ]}
+                className="h-9 pl-8 pr-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs font-semibold text-slate-200 hover:border-slate-700 transition"
+              />
             </div>
           </div>
         </div>

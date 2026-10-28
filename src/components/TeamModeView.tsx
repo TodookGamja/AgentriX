@@ -1,4 +1,5 @@
 import React, { useRef, useState } from "react";
+import { Select } from "./Select";
 import {
   Bar,
   BarChart,
@@ -23,7 +24,7 @@ import {
   Users,
   X,
 } from "lucide-react";
-import type { TeamMemberRecord, UserProfile } from "../types/types";
+import type { CliDefinition, TeamMemberRecord, UserProfile } from "../types/types";
 
 interface TeamModeViewProps {
   members: TeamMemberRecord[];
@@ -32,6 +33,7 @@ interface TeamModeViewProps {
   onDeleteMember?: (memberId: string) => Promise<void>;
   userProfile?: UserProfile;
   onUpdateUserProfile?: (profile: UserProfile) => void;
+  clis: CliDefinition[];
   myUsage?: {
     rolling5h: number;
     weekly: number;
@@ -137,7 +139,15 @@ export const TeamModeView: React.FC<TeamModeViewProps> = ({
     savedPct: 35.0,
     costUsd: 0.0,
   },
+  clis,
 }) => {
+  // 설치 감지된 CLI를 위로, 미설치는 표시만
+  const cliOptions = [...clis]
+    .sort((a, b) => Number(b.installed) - Number(a.installed))
+    .map((c) => ({
+      value: c.id,
+      label: `${c.name} (${c.provider})${c.installed ? "" : " · 미설치"}`,
+    }));
   const [showAddModal, setShowAddModal] = useState(false);
   const [newName, setNewName] = useState("");
   const [newRole, setNewRole] = useState("Software Engineer");
@@ -601,18 +611,12 @@ export const TeamModeView: React.FC<TeamModeViewProps> = ({
 
                 <div>
                   <label className="block text-slate-300 mb-1 font-semibold">주력 CLI</label>
-                  <select
+                  <Select
                     value={newCli}
-                    onChange={(e) => setNewCli(e.target.value)}
-                    className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-100 focus:outline-none focus:border-indigo-500"
-                  >
-                    <option value="claude">Claude Code (Anthropic)</option>
-                    <option value="codex">Codex CLI (OpenAI)</option>
-                    <option value="grok">Grok CLI (xAI)</option>
-                    <option value="antigravity">Antigravity (Google)</option>
-                    <option value="cursor">Cursor Agent CLI</option>
-                    <option value="opencode">OpenCode CLI</option>
-                  </select>
+                    onChange={setNewCli}
+                    options={cliOptions}
+                    className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-100"
+                  />
                 </div>
               </div>
 
@@ -885,18 +889,12 @@ export const TeamModeView: React.FC<TeamModeViewProps> = ({
 
               <div>
                 <label className="block text-slate-300 mb-1 font-semibold">주력 사용 CLI</label>
-                <select
+                <Select
                   value={profCli}
-                  onChange={(e) => setProfCli(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-100 focus:outline-none focus:border-indigo-500"
-                >
-                  <option value="claude">Claude Code (Anthropic)</option>
-                  <option value="codex">Codex CLI (OpenAI)</option>
-                  <option value="grok">Grok CLI (xAI)</option>
-                  <option value="antigravity">Antigravity (Google)</option>
-                  <option value="cursor">Cursor Agent CLI</option>
-                  <option value="opencode">OpenCode CLI</option>
-                </select>
+                  onChange={setProfCli}
+                  options={cliOptions}
+                  className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-100"
+                />
               </div>
             </div>
 

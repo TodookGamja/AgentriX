@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { Select } from "./Select";
 import {
   Bot,
   BrainCircuit,
@@ -104,6 +105,7 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
   const [workspaceDisplayMode, setWorkspaceDisplayMode] = useState<"cards" | "synapse">("cards");
   const [recCliOverrides, setRecCliOverrides] = useState<Record<string, string>>({});
   const [recWrapperOverrides, setRecWrapperOverrides] = useState<Record<string, boolean>>({});
+  const [recModelOverrides, setRecModelOverrides] = useState<Record<string, string>>({});
   const [showAutoRelayModal, setShowAutoRelayModal] = useState(false);
   const [relayGoalInput, setRelayGoalInput] = useState("");
   const [showPermissionSettings, setShowPermissionSettings] = useState(false);
@@ -726,7 +728,20 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
 
             {unaddedRecommendations.length > 0 && (
               <button
-                onClick={() => onAddAllRecommended(unaddedRecommendations)}
+                onClick={() =>
+                  onAddAllRecommended(
+                    recommendations.flatMap((r, idx) => {
+                      if (isRecAlreadyAdded(r)) return [];
+                      const key = r.id ?? `rec-${idx}`;
+                      return [{
+                        ...r,
+                        cliId: recCliOverrides[key] ?? r.cliId,
+                        useWrapper: recWrapperOverrides[key] ?? r.useWrapper,
+                        model: (recModelOverrides[key] ?? r.model ?? "").trim(),
+                      }];
+                    })
+                  )
+                }
                 className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold shadow transition"
               >
                 <Wand2 className="w-3.5 h-3.5" />
@@ -743,6 +758,7 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
             const selectedCliId = recCliOverrides[key] ?? rec.cliId;
             const selectedWrapper =
               recWrapperOverrides[key] ?? rec.useWrapper;
+            const selectedModel = recModelOverrides[key] ?? rec.model ?? "";
             const cliObj = clis.find((c) => c.id === selectedCliId);
 
             return (
@@ -793,22 +809,26 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
                         <span className="text-[11px] text-slate-400">
                           담당 CLI 지정:
                         </span>
-                        <select
+                        <Select
                           value={selectedCliId}
-                          onChange={(e) =>
-                            setRecCliOverrides((prev) => ({
-                              ...prev,
-                              [key]: e.target.value,
-                            }))
-                          }
-                          className="px-2 py-1 rounded bg-slate-900 border border-slate-700 text-slate-200 text-xs font-medium"
-                        >
-                          {clis.map((c) => (
-                            <option key={c.id} value={c.id}>
-                              {c.name} ({c.provider})
-                            </option>
-                          ))}
-                        </select>
+                          onChange={(v) => {
+                            setRecCliOverrides((prev) => ({ ...prev, [key]: v }));
+                            setRecModelOverrides((prev) => ({ ...prev, [key]: "" }));
+                          }}
+                          options={clis.map((c) => ({ value: c.id, label: `${c.name} (${c.provider})` }))}
+                          className="px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-xs font-medium w-[62%]"
+                        />
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[11px] text-slate-400 shrink-0">
+                          실행 모델:
+                        </span>
+                        <ModelPicker
+                          cliId={selectedCliId}
+                          value={selectedModel}
+                          onChange={(m) => setRecModelOverrides((prev) => ({ ...prev, [key]: m }))}
+                          className="px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-xs font-mono w-[62%]"
+                        />
                       </div>
 
                       {cliObj?.wrapperBinary && (
@@ -845,6 +865,7 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
                           ...rec,
                           cliId: selectedCliId,
                           useWrapper: selectedWrapper,
+                          model: selectedModel.trim(),
                         })
                       }
                       className="w-full inline-flex items-center justify-center gap-1.5 py-2 rounded-lg bg-fuchsia-600 hover:bg-fuchsia-500 text-white text-xs font-bold transition shadow"

@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Select } from "./components/Select";
 import {
   Activity,
   AlertTriangle,
@@ -3016,19 +3017,15 @@ ${recentSnippet || "진행 내역 기록 없음"}
                           #{slotIdx + 1}
                         </span>
                         {sessions.length > 1 ? (
-                          <select
+                          <Select
                             value={session.id}
-                            onChange={(e) =>
-                              handleAssignSessionToSlot(slotIdx, e.target.value)
-                            }
-                            className="bg-slate-950 text-slate-200 border border-slate-700/80 rounded px-2 py-0.5 text-xs focus:outline-none focus:border-indigo-500 truncate max-w-[170px]"
-                          >
-                            {sessions.map((s) => (
-                              <option key={s.id} value={s.id}>
-                                {s.name} {s.agentRole ? `(${s.agentRole})` : ""}
-                              </option>
-                            ))}
-                          </select>
+                            onChange={(v) => handleAssignSessionToSlot(slotIdx, v)}
+                            options={sessions.map((s) => ({
+                              value: s.id,
+                              label: `${s.name} ${s.agentRole ? `(${s.agentRole})` : ""}`,
+                            }))}
+                            className="bg-slate-950 text-slate-200 border border-slate-700/80 rounded-md px-2 py-0.5 text-xs max-w-[170px]"
+                          />
                         ) : (
                           <span className="font-semibold text-slate-200 truncate text-xs">
                             {session.name}
@@ -3163,6 +3160,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
               userProfile={userProfile}
               onUpdateUserProfile={handleUpdateUserProfile}
               myUsage={myUsage}
+              clis={clis}
             />
           )}
         </main>
@@ -3233,20 +3231,15 @@ ${recentSnippet || "진행 내역 기록 없음"}
                   <label className="block text-slate-400 mb-1">
                     배정할 AI CLI 엔진
                   </label>
-                  <select
+                  <Select
                     value={agentCliId}
-                    onChange={(e) => {
-                      setAgentCliId(e.target.value);
+                    onChange={(v) => {
+                      setAgentCliId(v);
                       setAgentModel("");
                     }}
+                    options={clis.map((c) => ({ value: c.id, label: `${c.name} (${c.provider})` }))}
                     className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-slate-100"
-                  >
-                    {clis.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name} ({c.provider})
-                      </option>
-                    ))}
-                  </select>
+                  />
                   <label className="block text-slate-400 mt-2 mb-1">실행 모델</label>
                   <ModelPicker
                     cliId={agentCliId}
@@ -3625,18 +3618,18 @@ ${recentSnippet || "진행 내역 기록 없음"}
                   <label className="block text-xs font-semibold text-slate-300 mb-1.5">
                     이 그룹에 바로 할당할 프로젝트 (선택 사항)
                   </label>
-                  <select
+                  <Select
                     value={selectedProjectForNewGroup}
-                    onChange={(e) => setSelectedProjectForNewGroup(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-slate-100 text-xs focus:outline-none focus:border-indigo-500 shadow-sm cursor-pointer transition"
-                  >
-                    <option value="">(선택 안 함 - 빈 그룹으로 생성)</option>
-                    {projectFolders.map((p) => (
-                      <option key={p.path} value={p.path}>
-                        📁 {getShortFolderName(p.path)} ({p.path})
-                      </option>
-                    ))}
-                  </select>
+                    onChange={setSelectedProjectForNewGroup}
+                    options={[
+                      { value: "", label: "(선택 안 함 - 빈 그룹으로 생성)" },
+                      ...projectFolders.map((p) => ({
+                        value: p.path,
+                        label: `📁 ${getShortFolderName(p.path)} (${p.path})`,
+                      })),
+                    ]}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-slate-100 text-xs shadow-sm transition"
+                  />
                 </div>
               )}
 
