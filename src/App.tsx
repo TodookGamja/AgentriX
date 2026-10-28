@@ -104,7 +104,7 @@ import { FolderPickerModal } from "./components/FolderPickerModal";
 import { AgentrixLogo } from "./components/AgentrixLogo";
 import { boardProtocol, parseBoardTasks } from "./lib/blackboardDispatch";
 import { countNewChars } from "./lib/tokenEstimate";
-import { forgetSessionInput, getSessionInputHistory, setInstructionKeyResolver } from "./lib/inputHistory";
+import { forgetSessionInput, getLastSubmission, getSubmissionVersion, getSessionInputHistory, setInstructionKeyResolver } from "./lib/inputHistory";
 import { permissionLaunch } from "./lib/permissionSettings";
 import type {
   ActiveNavTab,
@@ -170,6 +170,8 @@ export const App: React.FC = () => {
   const [splitLayout, setSplitLayout] = useState<"single" | "split-h" | "split-v" | "grid-4">("single");
   // 분할 각 슬롯(0~3)에 사용자가 직접 지정한 세션 ID들
   const [splitSlotSessionIds, setSplitSlotSessionIds] = useState<(string | null)[]>([null, null, null, null]);
+  const terminalDrafts = useRef<Record<string, { text: string; attachments: string[] }>>({});
+  const draggedSessionId = useRef<string | null>(null);
 
   const handleAssignSessionToSlot = (slotIdx: number, sessionId: string) => {
     setSplitSlotSessionIds((prev) => {
@@ -673,8 +675,9 @@ export const App: React.FC = () => {
   const sessionTokensRef = useRef<Record<string, number>>({});
   const seenLinesRef = useRef<Record<string, Set<string>>>({});
   const relayedSessionsRef = useRef<Set<string>>(new Set());
+  const pendingOptimizationNoticeRef = useRef<Set<string>>(new Set());
+  const optimizationRunningRef = useRef<Set<string>>(new Set());
   const compactAttemptedRef = useRef<Set<string>>(new Set());
-  const lastChunkAtRef = useRef<Record<string, number>>({});
   const realContextSessionsRef = useRef<Set<string>>(new Set());
   const contextSourceRef = useRef<Record<string, string>>({});
   const staleContextRef = useRef<Record<string, number>>({});
@@ -910,13 +913,17 @@ export const App: React.FC = () => {
 
     const initialCmd =
       agent.useWrapper && cliDef?.wrapperBinary ? "__WRAPPER__" : undefined;
+    const perm = permissionLaunch(agent.cliId);
 
     try {
       const session = await apiStartSession(
         agent.cliId,
         agent.projectPath,
         initialCmd,
-        agent.id
+        agent.id,
+        undefined,
+        perm.args,
+        perm.auto
       );
       addSession(session);
       setActiveNav("terminal");
@@ -1010,7 +1017,7 @@ export const App: React.FC = () => {
       const updated = await apiUpsertProjectAgent(payload);
       setProjectAgents(updated);
       showToast(
-        `'${agent.name}' 에이전트의 Headroom 래퍼가 ${!agent.useWrapper ? "활성화(ON)" : "해제(OFF)"}되었습니다.`,
+        `'${agent.name}' 에이전트의 Headroom 래퍼가 ${!agent.useWrapper ? "활성화(ON)" : "해제(OFF)"}되었습니다. 새로 시작하는 세션에 적용됩니다.`,
         "info"
       );
     } catch (err) {
@@ -1019,9 +1026,13 @@ export const App: React.FC = () => {
   };
 
   // 토큰 초과 시 또는 수동 요청 시 스마트 자동 세션 릴레이(인수인계) 실행
-  const handleAutoRelaySession = async (sessionId: string, isManual = false) => {
+  const handleAutoRelaySession = async (sessionId: string, isManual = false, completedAt = 0) => {
     const targetSession = sessions.find((s) => s.id === sessionId);
     if (!targetSession) return;
+    const lastSubmission = getLastSubmission(sessionId);
+    const submissionVersion = getSubmissionVersion(sessionId);
+    if (!isManual && (completedAt <= lastSubmission || completedAt < Date.parse(targetSession.startedAt))) return;
+    const workRestarted = () => !isManual && getSubmissionVersion(sessionId) !== submissionVersion;
 
     // 1. autoCompactFirst가 켜져 있고 수동이 아니며 아직 1차 /compact를 시도하지 않았다면:
     if (!isManual && tokenOptConfig.autoCompactFirst && !compactAttemptedRef.current.has(sessionId)) {
@@ -1034,10 +1045,6 @@ export const App: React.FC = () => {
         `⚡ [토큰 최적화] '${targetSession.name}' 컨텍스트 임계치 도달: 작업이 멈추면 1차 /compact 압축을 실행합니다. (압축 후에도 초과 시 새 세션으로 자동 인수인계)`,
         "info"
       );
-      // 응답 생성 중인 TUI는 /compact를 무시·거부하므로 출력이 3초 멈출 때(유휴)까지 기다린다 (최대 5분)
-      for (let i = 0; i < 300 && Date.now() - (lastChunkAtRef.current[sessionId] ?? 0) < 3000; i++) {
-        await new Promise((r) => setTimeout(r, 1000));
-      }
       try {
         await apiWriteToSession(sessionId, "/compact\r");
       } catch {}
@@ -1113,12 +1120,17 @@ ${recentSnippet || "진행 내역 기록 없음"}
     // 4. 신규 세션 생성 및 슬롯 배치 교체
     try {
       const cliDef = clis.find((c) => c.id === targetSession.cliId);
+      const relayAgent = targetSession.agentId && targetSession.cwd
+        ? (await apiGetProjectAgents(targetSession.cwd)).find((a) => a.id === targetSession.agentId)
+        : undefined;
+      const useWrapper = relayAgent?.useWrapper ?? targetSession.binaryPath.includes("Headroom Wrapper");
       const initialCmd =
-        targetSession.binaryPath.includes("Headroom Wrapper") && cliDef?.wrapperBinary
+        useWrapper && cliDef?.wrapperBinary
           ? "__WRAPPER__"
           : undefined;
 
       const perm = permissionLaunch(targetSession.cliId);
+      if (workRestarted()) { relayedSessionsRef.current.delete(sessionId); return; }
       const newSession = await apiStartSession(
         targetSession.cliId,
         targetSession.cwd,
@@ -1126,8 +1138,14 @@ ${recentSnippet || "진행 내역 기록 없음"}
         targetSession.agentId || undefined,
         undefined,
         perm.args,
-        perm.auto
+        perm.auto,
+        !isManual
       );
+      if (workRestarted()) {
+        await apiStopSession(newSession.id);
+        relayedSessionsRef.current.delete(sessionId);
+        return;
+      }
 
       newSession.name = newSessionName;
       if (tokenOptConfig.preserveRolePrompt && targetSession.rolePrompt) {
@@ -1136,8 +1154,9 @@ ${recentSnippet || "진행 내역 기록 없음"}
       }
 
       // 백그라운드 릴레이: 보고 있던 화면/세션을 바꾸지 않는다. (보던 세션이 교체 대상일 때만 새 세션으로 이어 보기)
+      terminalDrafts.current[newSession.id] = terminalDrafts.current[targetSession.id] ?? { text: "", attachments: [] };
       useAppStore.setState((st) => ({
-        sessions: [...st.sessions, newSession],
+        sessions: st.sessions.flatMap((s) => s.id === targetSession.id ? [newSession, s] : [s]),
         activeSessionId:
           st.activeSessionId === targetSession.id ? newSession.id : st.activeSessionId,
       }));
@@ -1150,7 +1169,9 @@ ${recentSnippet || "진행 내역 기록 없음"}
       // 5. 새 세션에 md 파일 읽기 및 연속 작업 지침 자동 주입
       setTimeout(async () => {
         try {
-          const handoffPrompt = `.ai-agents/SESSION_HANDOFF.md를 읽으세요. 거기 적힌 '직전 세션이 받은 지시' 중 아직 끝나지 않은 것을 지금 이어서 끝까지 수행하세요. 확인·요약만 하고 멈추지 마세요.\r`;
+          const handoffPrompt = isManual
+            ? `.ai-agents/SESSION_HANDOFF.md를 읽으세요. 거기 적힌 '직전 세션이 받은 지시' 중 아직 끝나지 않은 것을 지금 이어서 끝까지 수행하세요. 확인·요약만 하고 멈추지 마세요.\r`
+            : `.ai-agents/SESSION_HANDOFF.md를 읽고 완료된 이전 작업의 맥락을 파악한 뒤 다음 지시를 기다리세요.\r`;
           await apiWriteToSession(newSession.id, handoffPrompt);
         } catch {}
       }, 6000);
@@ -1158,6 +1179,11 @@ ${recentSnippet || "진행 내역 기록 없음"}
       // 6. 🔥 핵심: 기존 세션 즉시 완전 종료 및 PC 메모리/자원 회수!
       if (tokenOptConfig.closeOldSession ?? true) {
         setTimeout(async () => {
+          if (workRestarted()) {
+            relayedSessionsRef.current.delete(sessionId);
+            showToast("기존 세션에 새 입력이 있어 종료하지 않았습니다.", "info");
+            return;
+          }
           try {
             await apiStopSession(targetSession.id);
           } catch {}
@@ -1166,8 +1192,10 @@ ${recentSnippet || "진행 내역 기록 없음"}
           setSessionTokens({ ...sessionTokensRef.current });
           delete sessionRecentOutputRef.current[targetSession.id];
           delete seenLinesRef.current[targetSession.id];
+          delete terminalDrafts.current[targetSession.id];
           compactAttemptedRef.current.delete(targetSession.id);
           relayedSessionsRef.current.delete(targetSession.id);
+          pendingOptimizationNoticeRef.current.delete(targetSession.id);
           forgetSessionInput(targetSession.id);
           realContextSessionsRef.current.delete(targetSession.id);
           delete contextSourceRef.current[targetSession.id];
@@ -1192,7 +1220,6 @@ ${recentSnippet || "진행 내역 기록 없음"}
   // 실시간 PTY 청크 수신 시 토큰 추정 및 자동 임계치 감지
   // 원문 길이로 세면 TUI 재그리기·스크롤로 추정 토큰이 폭증하므로 처음 보는 줄만 센다 (countNewChars)
   const handleSessionOutputChunk = (sessionId: string, text: string) => {
-    lastChunkAtRef.current[sessionId] = Date.now();
     const plain = text.replace(/\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-_]/g, "");
     const newChars = countNewChars(text, (seenLinesRef.current[sessionId] ??= new Set()));
 
@@ -1206,16 +1233,22 @@ ${recentSnippet || "진행 내역 기록 없음"}
   const applySessionTokens = (sessionId: string, total: number) => {
     sessionTokensRef.current[sessionId] = total;
     setSessionTokens({ ...sessionTokensRef.current });
+    if (total < tokenOptConfig.contextThresholdTokens) pendingOptimizationNoticeRef.current.delete(sessionId);
     if (
       tokenOptConfig.autoRelayEnabled &&
       total >= tokenOptConfig.contextThresholdTokens &&
-      !relayedSessionsRef.current.has(sessionId)
+      !pendingOptimizationNoticeRef.current.has(sessionId)
     ) {
-      handleAutoRelaySession(sessionId, false);
+      pendingOptimizationNoticeRef.current.add(sessionId);
+      showToast("토큰 한도에 도달했습니다. 작업 완료가 확인되면 자동 최적화하며, 확인되지 않으면 수동 실행이 필요합니다.", "info");
     }
   };
   const applySessionTokensRef = useRef(applySessionTokens);
   applySessionTokensRef.current = applySessionTokens;
+  const autoRelayRef = useRef(handleAutoRelaySession);
+  autoRelayRef.current = handleAutoRelaySession;
+  const tokenOptConfigRef = useRef(tokenOptConfig);
+  tokenOptConfigRef.current = tokenOptConfig;
 
   // 실측 컨텍스트 토큰: CLI 로그(Claude·Codex·Antigravity·OpenCode)에서 10초마다 읽는다. 로그가 없는 CLI는 null → 위 화면 추정치 유지
   useEffect(() => {
@@ -1230,9 +1263,15 @@ ${recentSnippet || "진행 내역 기록 없음"}
         contextSourceRef.current[s.id] = ctx.source;
         realContextSessionsRef.current.add(s.id);
         // /compact 직후엔 로그의 마지막 값이 압축 전 수치 그대로라, 새 호출로 값이 바뀔 때까지 무시 (안 그러면 곧장 새 세션으로 넘어감)
-        if (staleContextRef.current[s.id] === ctx.tokens) continue;
+        if (staleContextRef.current[s.id] === ctx.tokens && (!ctx.completedAt || ctx.completedAt <= getLastSubmission(s.id))) continue;
         delete staleContextRef.current[s.id];
         applySessionTokensRef.current(s.id, ctx.tokens);
+        if (tokenOptConfigRef.current.autoRelayEnabled && ctx.tokens >= tokenOptConfigRef.current.contextThresholdTokens &&
+            ctx.completedAt && ctx.completedAt > getLastSubmission(s.id) && !optimizationRunningRef.current.has(s.id) &&
+            !relayedSessionsRef.current.has(s.id)) {
+          optimizationRunningRef.current.add(s.id);
+          void autoRelayRef.current(s.id, false, ctx.completedAt).finally(() => optimizationRunningRef.current.delete(s.id));
+        }
       }
     };
     const id = window.setInterval(tick, 10000);
@@ -1261,7 +1300,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
       const refreshed = await apiGetProjectAgents(selectedProjectPath);
       setProjectAgents(refreshed);
       showToast(
-        `모든 에이전트의 Headroom 토큰 감싸기가 ${enable ? "일괄 활성화(ON)" : "일괄 해제(OFF)"}되었습니다.`,
+        `모든 에이전트의 Headroom 토큰 감싸기가 ${enable ? "일괄 활성화(ON)" : "일괄 해제(OFF)"}되었습니다. 새로 시작하는 세션에 적용됩니다.`,
         "success"
       );
     } catch (err) {
@@ -1500,6 +1539,8 @@ ${recentSnippet || "진행 내역 기록 없음"}
 
   const handleStopSession = (sessionId: string, e: React.MouseEvent) => {
     e.stopPropagation();
+    delete terminalDrafts.current[sessionId];
+    pendingOptimizationNoticeRef.current.delete(sessionId);
     // 1. UI에서 즉시 세션 탭 제거하여 사용자 체감 렉(지연) 0ms 달성
     removeSession(sessionId);
     const remaining = currentProjectSessions.filter((s) => s.id !== sessionId);
@@ -1603,7 +1644,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
     setRegistryItems(reg);
     setUsageDashboard(usage);
     showToast(
-      `항목 상태가 ${enabled ? "활성화(ON)" : "비활성화(OFF)"}로 변경되었습니다.`,
+      `항목 상태가 ${enabled ? "활성화(ON)" : "비활성화(OFF)"}로 변경되었습니다.${itemId === "headroom-mcp" ? " 새로 시작하는 세션에 적용됩니다." : ""}`,
       "info"
     );
   };
@@ -1705,7 +1746,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
   };
 
   const headroomItem = registryItems.find((i) => i.id === "headroom-mcp");
-  const headroomEnabled = headroomItem?.enabled ?? true;
+  const headroomEnabled = headroomItem?.enabled ?? false;
   const cavemanEnabled =
     registryItems.find((i) => i.id === "caveman-skill")?.enabled ?? true;
 
@@ -1748,7 +1789,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
   });
 
   const handleCycleMiniCli = () => {
-    const supported = ["claude", "antigravity", "codex", "grok"];
+    const supported = ["claude", "antigravity", "codex", "grok", "cursor"];
     const currIdx = supported.indexOf(lastFocusedCliId);
     const nextCli = supported[(currIdx + 1) % supported.length];
     setLastFocusedCliId(nextCli);
@@ -1896,8 +1937,8 @@ ${recentSnippet || "진행 내역 기록 없음"}
     sidebarQuota && (sidebarQuota.hasOfficialQuota || sidebarQuota.resetsAt5h)
   );
 
-  const activeCliName = (isSidebarQuotaValid ? sidebarQuota?.cliName : null) ?? focusedCliDef?.name ?? cachedMiniQuota.cliName;
-  const activePlanLabel = (isSidebarQuotaValid ? sidebarQuota?.planLabel : null) ?? cachedMiniQuota.planLabel;
+  const activeCliName = focusedCliId === "cursor" ? (focusedCliDef?.name ?? "Cursor Agent CLI") : (isSidebarQuotaValid ? sidebarQuota?.cliName : null) ?? focusedCliDef?.name ?? cachedMiniQuota.cliName;
+  const activePlanLabel = focusedCliId === "cursor" ? (sidebarQuota?.hasOfficialQuota ? sidebarQuota.planLabel : "") : (isSidebarQuotaValid ? sidebarQuota?.planLabel : null) ?? cachedMiniQuota.planLabel;
   const activeAccentColor = focusedCliDef?.accentColor ?? cachedMiniQuota.accentColor;
   const activeRemainPct5h = isSidebarQuotaValid ? Math.round(sidebarQuota!.remainingPercent5h) : cachedMiniQuota.remainPct5h;
   const activeRemainPctWk = isSidebarQuotaValid ? Math.round(sidebarQuota!.remainingPercentWeekly) : cachedMiniQuota.remainPctWeekly;
@@ -2538,9 +2579,9 @@ ${recentSnippet || "진행 내역 기록 없음"}
                                                 projectSubView === "session" &&
                                                 activeSessionId === s.id;
                                               return (
-                                                <div
-                                                  key={s.id}
-                                                  onClick={() => {
+                        <div
+                          key={s.id}
+                          onClick={() => {
                                                     setSelectedProjectPath(proj.path);
                                                     setActiveNav("terminal");
                                                     setActiveSessionId(s.id);
@@ -2676,7 +2717,16 @@ ${recentSnippet || "진행 내역 기록 없음"}
               </div>
             </div>
 
-            {/* 5시간 한도 게이지 */}
+                {focusedCliId === "cursor" ? (
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span className="text-slate-400 font-medium">월간 전체 사용량</span>
+                      <span className="text-slate-400">확인 불가</span>
+                    </div>
+                    <p className="text-[10px] text-slate-500">Cursor 월간 사용량 미연동</p>
+                  </div>
+                ) : (<>
+                {/* 5시간 한도 게이지 */}
             <div className="space-y-1">
               <div className="flex items-center justify-between text-[11px]">
                 <span className="text-slate-400 font-medium">5시간 잔여</span>
@@ -2740,7 +2790,8 @@ ${recentSnippet || "진행 내역 기록 없음"}
               </div>
             </div>
 
-            {/* 토큰 최적화 도구 상태 뱃지 */}
+                </>)}
+                {/* 토큰 최적화 도구 상태 뱃지 */}
             <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-[10px]">
               <span
                 className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border ${
@@ -2865,7 +2916,29 @@ ${recentSnippet || "진행 내역 기록 없음"}
                   return (
                     <div
                       key={s.id}
-                      onClick={() => {
+                      draggable
+                      onDragStart={(e) => {
+                        draggedSessionId.current = s.id;
+                        e.dataTransfer.effectAllowed = "move";
+                        e.dataTransfer.setData("text/plain", s.id);
+                      }}
+                      onDragOver={(e) => { if (draggedSessionId.current) e.preventDefault(); }}
+                      onDragEnd={() => { draggedSessionId.current = null; }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        const dragged = draggedSessionId.current;
+                        draggedSessionId.current = null;
+                        if (!dragged || dragged === s.id) return;
+                        useAppStore.setState((st) => {
+                          const from = st.sessions.findIndex((item) => item.id === dragged);
+                          const to = st.sessions.findIndex((item) => item.id === s.id);
+                          if (from < 0 || to < 0) return st;
+                          const next = [...st.sessions];
+                          next.splice(to, 0, next.splice(from, 1)[0]);
+                          return { sessions: next };
+                        });
+                      }}
+                                          onClick={() => {
                         setActiveNav("terminal");
                         setActiveSessionId(s.id);
                         setProjectSubView("session");
@@ -2999,6 +3072,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
                 analysis={projectAnalysis}
                 agents={projectAgents}
                 clis={clis}
+              headroomEnabled={headroomEnabled}
                 runningSessions={currentProjectSessions}
                 onAddRecommendedAgent={handleAddRecommendedAgent}
                 onAddAllRecommended={handleAddAllRecommended}
@@ -3159,6 +3233,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
                   <div className="flex-1 min-h-0 min-w-0 w-full h-full">
                     <TerminalPane
                       session={session}
+                      drafts={terminalDrafts}
                       cliDef={cliDef}
                       isVisible={
                         activeNav === "terminal" && projectSubView === "session"
@@ -3198,6 +3273,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
                   <TerminalPane
                     key={hiddenSession.id}
                     session={hiddenSession}
+                    drafts={terminalDrafts}
                     cliDef={clis.find((c) => c.id === hiddenSession.cliId)}
                     isVisible={false}
                     splitActive={false}
@@ -4198,7 +4274,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
                 ? "border-emerald-500 shadow-2xl shadow-emerald-950/80"
                 : "border-indigo-500 shadow-2xl shadow-indigo-950/80"
             }`}
-            style={{ minWidth: "280px", maxWidth: "460px" }}
+            style={{ minWidth: "min(280px, calc(100vw - 3rem))", maxWidth: "min(460px, calc(100vw - 3rem))" }}
           >
             {toast.tone === "error" ? (
               <AlertTriangle className={`w-5 h-5 shrink-0 ${isLight ? "text-rose-600" : "text-rose-400"}`} />
@@ -4208,7 +4284,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
               <Sparkles className={`w-5 h-5 shrink-0 ${isLight ? "text-indigo-600" : "text-indigo-400"}`} />
             )}
             <span
-              className="agentrix-toast-text text-xs font-bold leading-relaxed flex-1 break-words"
+              className="agentrix-toast-text text-xs font-bold leading-relaxed flex-1 min-w-0 break-all"
             >
               {toast.text}
             </span>

@@ -408,17 +408,6 @@ fn build_platform_command(
         String::new()
     };
 
-    let auto_flags = if agent_meta.is_some() {
-        match cli_def.id.as_str() {
-            "antigravity" => " --dangerously-skip-permissions --mode auto",
-            "claude" => " --dangerously-skip-permissions",
-            "codex" => " --sandbox workspace-write --ask-for-approval never",
-            "grok" => " --yolo",
-            _ => "",
-        }
-    } else {
-        ""
-    };
     // Codex TUI는 기동이 느리고 시작 직후 PTY 입력을 버려서 지연 타이핑 브리핑이 유실됨 →
     // 역할 지침을 초기 프롬프트 인자로 넘김 (App.tsx는 codex에 대해 지연 브리핑을 생략)
     let auto_flags = match agent_meta {
@@ -426,9 +415,9 @@ fn build_platform_command(
             let prompt = a.role_prompt.split_whitespace().collect::<Vec<_>>().join(" ").replace('"', "'");
             // OpenCode는 위치 인자가 프로젝트 경로라서 --prompt 로 전달
             let flag = if cli_def.id == "opencode" { " --prompt" } else { "" };
-            format!("{}{} '{}'", auto_flags, flag, ps_escape_single_quoted(&prompt))
+            format!("{} '{}'", flag, ps_escape_single_quoted(&prompt))
         }
-        _ => auto_flags.to_string(),
+        _ => String::new(),
     };
 
     if cli_def.id == "powershell" {
@@ -538,6 +527,28 @@ fn build_platform_command(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agent_launch_uses_selected_permissions_without_adding_a_sandbox() {
+        let mut cli = crate::cli::builtin_clis().into_iter().find(|c| c.id == "codex").unwrap();
+        cli.resolved_binary = Some("C:\\tools\\codex.cmd".into());
+        let agent = ProjectAgentRecord {
+            id: "agent".into(), project_path: "C:\\project".into(), name: "Agent".into(),
+            role_title: "Developer".into(), cli_id: "codex".into(), use_wrapper: false,
+            avatar_emoji: "".into(), accent_color: "".into(), role_prompt: "Do the work".into(),
+            auto_brief: true, created_at: "".into(), model: "".into(),
+        };
+        cli.args = vec!["--sandbox".into(), "danger-full-access".into(), "--ask-for-approval".into(), "never".into()];
+        let (cmd, _) = build_platform_command(&cli, None, "C:\\project", Some(&agent));
+        let script = cmd.get_argv().last().unwrap().to_string_lossy();
+        assert!(script.contains("'--sandbox' 'danger-full-access' '--ask-for-approval' 'never'"));
+        assert!(!script.contains("workspace-write"));
+        assert!(script.contains("Do the work"));
+        cli.args.clear();
+        let (cmd, _) = build_platform_command(&cli, None, "C:\\project", Some(&agent));
+        let script = cmd.get_argv().last().unwrap().to_string_lossy();
+        assert!(!script.contains("--sandbox"));
+    }
 
     #[test]
     fn headroom_executable_wraps_cli_id_and_preserves_permission_arguments() {

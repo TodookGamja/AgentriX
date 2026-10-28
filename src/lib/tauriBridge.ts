@@ -256,7 +256,8 @@ export async function apiStartSession(
   agentId?: string,
   model?: string,
   permissionArgs?: string[],
-  permissionAuto?: boolean
+  permissionAuto?: boolean,
+  suppressBrief?: boolean
 ): Promise<SessionInfo> {
   if (isTauriRuntime()) {
     return invoke<SessionInfo>("start_session", {
@@ -267,6 +268,7 @@ export async function apiStartSession(
       model: model || null,
       permissionArgs: permissionArgs ?? null,
       permissionAuto: permissionAuto ?? false,
+      suppressBrief: suppressBrief ?? false,
     });
   }
   const id = `sess-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -309,7 +311,7 @@ export async function apiWriteToSession(sessionId: string, data: string): Promis
 export async function apiGetSessionContext(
   session: SessionInfo,
   claimed: string[]
-): Promise<{ tokens: number; window: number | null; source: string } | null> {
+): Promise<{ tokens: number; window: number | null; source: string; completedAt: number | null } | null> {
   if (!isTauriRuntime()) return null;
   return invoke("get_session_context", {
     cliId: session.cliId,

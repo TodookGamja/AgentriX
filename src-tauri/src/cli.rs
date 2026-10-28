@@ -85,7 +85,6 @@ pub fn builtin_clis() -> Vec<CliDefinition> {
             binary_candidates: vec![
                 "grok.exe".into(),
                 "grok.cmd".into(),
-                "hgrok.cmd".into(),
                 "grok".into(),
             ],
             resolved_binary: None,
@@ -309,6 +308,9 @@ pub fn resolve_cli_binary(
         }
         let dir_path = Path::new(dir);
         for cand in candidates {
+            if cli_id == "cursor" && cand.eq_ignore_ascii_case("agent.exe") && is_grok_bin(&dir_path) {
+                continue;
+            }
             let full = dir_path.join(cand);
             if full.is_file() {
                 return Some(full);
@@ -336,7 +338,6 @@ pub fn resolve_cli_binary(
             }
             fallbacks.push(npm_dir.join("claude.cmd"));
             fallbacks.push(local_bin.join("claude.exe"));
-            fallbacks.push(local_bin.join("hclaude.cmd"));
         }
         "codex" => {
             fallbacks.push(npm_dir.join("codex.cmd"));
@@ -352,11 +353,10 @@ pub fn resolve_cli_binary(
                     }
                 }
             }
-            fallbacks.push(local_bin.join("hcodex.cmd"));
         }
         "grok" => {
             fallbacks.push(home.join(".grok").join("bin").join("grok.exe"));
-            fallbacks.push(local_bin.join("hgrok.cmd"));
+            fallbacks.push(home.join(".grok").join("bin").join("agent.exe"));
         }
         "cursor" => {
             fallbacks.push(
@@ -368,7 +368,6 @@ pub fn resolve_cli_binary(
                     .join("bin")
                     .join("cursor.cmd"),
             );
-            fallbacks.push(home.join(".grok").join("bin").join("agent.exe"));
         }
         "antigravity" => {
             fallbacks.push(local_appdata.join("agy").join("bin").join("agy.exe"));
@@ -388,9 +387,21 @@ pub fn resolve_cli_binary(
     None
 }
 
+fn is_grok_bin(path: &Path) -> bool {
+    let normalized = path.to_string_lossy().replace('/', "\\").to_ascii_lowercase();
+    normalized.trim_end_matches('\\').ends_with("\\.grok\\bin")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grok_agent_directory_is_not_a_cursor_agent_directory() {
+        assert!(is_grok_bin(Path::new("C:/Users/test/.grok/bin")));
+        assert!(is_grok_bin(Path::new("C:\\Users\\test\\.GROK\\bin\\")));
+        assert!(!is_grok_bin(Path::new("C:/Users/test/.local/bin")));
+    }
 
     #[test]
     fn builtin_clis_when_loaded_returns_all_target_clis_including_grok_and_opencode() {

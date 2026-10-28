@@ -809,8 +809,9 @@ fn start_session(
     model: Option<String>,
     permission_args: Option<Vec<String>>,
     permission_auto: Option<bool>,
+    suppress_brief: Option<bool>,
 ) -> Result<SessionInfo, String> {
-    let (mut cli_def, mut injected_env, agent_meta) = {
+    let (mut cli_def, mut injected_env, mut agent_meta, headroom_enabled) = {
         let conn = state.db.lock().map_err(|e| e.to_string())?;
         if let Some(ref dir) = cwd {
             if !dir.trim().is_empty() {
@@ -832,8 +833,15 @@ fn start_session(
             None
         };
 
-        (def, env, found_agent)
+        let headroom_enabled = db::get_registry_items(&conn)
+            .map_err(|e| e.to_string())?
+            .iter()
+            .any(|item| item.id == "headroom-mcp" && item.enabled);
+        (def, env, found_agent, headroom_enabled)
     };
+    if suppress_brief.unwrap_or(false) {
+        if let Some(agent) = agent_meta.as_mut() { agent.auto_brief = false; }
+    }
 
     // 실행 모델: 명시값 > 에이전트 저장값 > CLI 기본 (모든 지원 CLI가 --model 플래그 사용)
     let model = model
@@ -842,11 +850,8 @@ fn start_session(
     if let Some(m) = model {
         cli_def.args.extend(["--model".to_string(), m.trim().to_string()]);
     }
-    // 팀 에이전트는 pty.rs에서 CLI별 자동 승인 플래그를 붙임 → 플래그가 없는 OpenCode는 환경변수로 동일하게 처리
-    if agent_meta.is_none() {
-        cli_def.args.extend(permission_args.unwrap_or_default());
-    }
-    if cli_id == "opencode" && (agent_meta.is_some() || permission_auto.unwrap_or(false)) {
+    cli_def.args.extend(permission_args.unwrap_or_default());
+    if cli_id == "opencode" && permission_auto.unwrap_or(false) {
         injected_env.insert("OPENCODE_PERMISSION".into(), r#"{"*":"allow"}"#.into());
     }
 
@@ -854,10 +859,27 @@ fn start_session(
         cli_def,
         cwd,
         injected_env,
-        initial_command,
+        headroom_command(initial_command, headroom_enabled),
         agent_meta,
         Some(app),
     )
+}
+
+fn headroom_command(command: Option<String>, enabled: bool) -> Option<String> {
+    command.filter(|value| enabled || value != "__WRAPPER__")
+}
+
+#[cfg(test)]
+mod headroom_launch_tests {
+    use super::headroom_command;
+
+    #[test]
+    fn disabled_headroom_blocks_wrapper_only() {
+        assert_eq!(headroom_command(Some("__WRAPPER__".into()), false), None);
+        assert_eq!(headroom_command(Some("__WRAPPER__".into()), true).as_deref(), Some("__WRAPPER__"));
+        assert_eq!(headroom_command(Some("echo ok".into()), false).as_deref(), Some("echo ok"));
+        assert_eq!(headroom_command(None, false), None);
+    }
 }
 
 /// CLI별 선택 가능한 모델 목록 (모델 호출 없이 각 CLI가 제공하는 목록을 읽음)

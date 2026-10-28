@@ -2,6 +2,16 @@
 // 사용자 키 입력(한 글자씩)과 프로그램 주입(텍스트+\r)이 모두 apiWriteToSession을 거치므로 거기서 호출된다.
 // 이력은 세션이 아니라 "프로젝트 폴더+에이전트" 키로 localStorage에 저장 → 릴레이·앱 재시작 후에도 같은 에이전트가 이어받음.
 const lineBufs = new Map<string, string>();
+const lastSubmission = new Map<string, number>();
+const submissionVersion = new Map<string, number>();
+
+export function getLastSubmission(sessionId: string): number {
+  return lastSubmission.get(sessionId) ?? 0;
+}
+
+export function getSubmissionVersion(sessionId: string): number {
+  return submissionVersion.get(sessionId) ?? 0;
+}
 const memStore = new Map<string, string[]>(); // localStorage 없는 환경(node 검사)용
 
 let keyOf = (sessionId: string) => sessionId;
@@ -28,6 +38,10 @@ function saveHistory(sessionId: string, hist: string[]): void {
 }
 
 export function recordSessionInput(sessionId: string, data: string): void {
+  if (/[\r\n]/.test(data)) {
+    lastSubmission.set(sessionId, Date.now());
+    submissionVersion.set(sessionId, getSubmissionVersion(sessionId) + 1);
+  }
   let buf = lineBufs.get(sessionId) ?? "";
   // 방향키·붙여넣기 마커 등 제어 시퀀스는 버림
   for (const ch of data.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b./g, "")) {
@@ -48,5 +62,7 @@ export function recordSessionInput(sessionId: string, data: string): void {
 }
 
 export function forgetSessionInput(sessionId: string): void {
+  lastSubmission.delete(sessionId);
+  submissionVersion.delete(sessionId);
   lineBufs.delete(sessionId); // 이력 자체는 에이전트 키로 남겨 다음 세션이 이어받는다
 }

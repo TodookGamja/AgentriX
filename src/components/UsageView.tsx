@@ -397,7 +397,7 @@ export const UsageView: React.FC<UsageViewProps> = ({
             { id: "codex", name: "Codex CLI", plan: "ChatGPT Plus" },
             { id: "grok", name: "Grok CLI", plan: "SuperGrok" },
             { id: "antigravity", name: "Antigravity (agy)", plan: "Google DeepMind" },
-            { id: "cursor", name: "Cursor Agent CLI", plan: "Cursor Pro" },
+                { id: "cursor", name: "Cursor Agent CLI", plan: "" },
             { id: "opencode", name: "OpenCode CLI", plan: "OpenCode OSS" },
           ];
 
@@ -511,6 +511,15 @@ export const UsageView: React.FC<UsageViewProps> = ({
                     </div>
                   </div>
 
+                  {q.cliId === "cursor" ? (
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-slate-300 font-semibold">월간 전체 사용량</span>
+                        <span className="text-slate-400">확인 불가</span>
+                      </div>
+                      <p className="text-[11px] text-slate-500">Cursor 월간 사용량이 연동되지 않았습니다.</p>
+                    </div>
+                  ) : (<>
                   {/* 5시간 세션 한도 게이지 */}
                   <div className="space-y-1">
                     <div className="flex items-center justify-between text-xs">
@@ -573,8 +582,9 @@ export const UsageView: React.FC<UsageViewProps> = ({
                     </div>
                   </div>
 
+                  </>)}
                   {/* 기타 모델 그룹별 개별 쿼터 (예: Antigravity의 Claude and GPT models, Gemini 4 Argon 등) */}
-                  {q.subGroups && q.subGroups.length > 0 && (
+                  {q.cliId !== "cursor" && q.subGroups && q.subGroups.length > 0 && (
                     <div className="pt-2 border-t border-slate-800/80 space-y-2">
                       <div className="text-[11px] font-bold text-slate-300 flex items-center justify-between">
                         <span className="flex items-center gap-1.5">

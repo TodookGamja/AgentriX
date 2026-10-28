@@ -2,14 +2,14 @@
 export type PermMode = "full_auto" | "manual" | "custom";
 
 export const DEFAULT_CLI_FLAGS: Record<string, { flag: string; desc: string }> = {
-  claude: { flag: "--dangerously-skip-permissions", desc: "Claude 공식 무인 권한 스킵" },
-  codex: { flag: "--sandbox workspace-write --ask-for-approval never", desc: "Codex 공식 전자율 실행" },
-  grok: { flag: "--yolo", desc: "Grok 공식 Yolo 승인 스킵" },
-  antigravity: { flag: "--dangerously-skip-permissions --mode auto", desc: "에이전틱 계획 & 승인 자동화" },
-  cursor: { flag: "--trust", desc: "Cursor 워크스페이스 신뢰 모드" },
-  opencode: { flag: "", desc: "환경변수로 모든 권한 자동 승인" },
-  aider: { flag: "--yes-always", desc: "Aider 자동 파일 변경 승인" },
-  ollama: { flag: "--yolo", desc: "로컬 모델 자동 승인" },
+  claude: { flag: '--dangerously-skip-permissions --settings {\\"sandbox\\":{\\"enabled\\":false}}', desc: "Claude 승인 생략 및 샌드박스 해제" },
+  codex: { flag: "--sandbox danger-full-access --ask-for-approval never", desc: "Codex 전체 파일 접근, 승인 없이 실행" },
+  grok: { flag: "--yolo --sandbox off", desc: "Grok 승인 생략 및 샌드박스 해제" },
+  antigravity: { flag: "--dangerously-skip-permissions --mode auto --sandbox=false", desc: "Antigravity 자동 승인 및 샌드박스 해제" },
+  cursor: { flag: "--force --sandbox disabled --trust", desc: "Cursor 자동 승인 및 샌드박스 해제" },
+  opencode: { flag: "", desc: "모든 권한 자동 승인; 별도 샌드박스는 실행 환경에 따름" },
+  aider: { flag: "--yes-always", desc: "자동 파일 변경 승인; 별도 샌드박스 해제는 확인되지 않음" },
+  ollama: { flag: "", desc: "Ollama CLI에는 해당 승인·샌드박스 플래그가 없음" },
 };
 
 const KEY = "agentrix_perm_settings";

@@ -53,6 +53,7 @@ interface ProjectWorkspaceViewProps {
   analysis: ProjectAnalysisResult | null;
   agents: ProjectAgentRecord[];
   clis: CliDefinition[];
+  headroomEnabled: boolean;
   runningSessions: SessionInfo[];
   onAddRecommendedAgent: (rec: ProjectAgentInput) => Promise<void>;
   onAddAllRecommended: (recs: ProjectAgentInput[]) => Promise<void>;
@@ -79,6 +80,7 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
   analysis,
   agents,
   clis,
+  headroomEnabled,
   runningSessions,
   onAddRecommendedAgent,
   onAddAllRecommended,
@@ -138,7 +140,7 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
     (r) => !isRecAlreadyAdded(r)
   );
 
-  const allHeadroomActive = agents.length > 0 && agents.every((a) => a.useWrapper);
+  const allHeadroomActive = headroomEnabled && agents.length > 0 && agents.every((a) => a.useWrapper);
 
   const handleTriggerAutoRelay = () => {
     setShowAutoRelayModal(true);
@@ -216,7 +218,7 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
               <span className="text-slate-300">
-                일반 CLI 실행 권한 모드:{" "}
+                CLI 및 에이전트 실행 권한 모드:{" "}
                 <strong className="text-emerald-300 font-bold">
                   {permMode === "full_auto"
                     ? "⚡ 도구별 맞춤 자동 승인 (Full-Auto)"
@@ -227,7 +229,7 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
               </span>
               <span className="text-slate-500 hidden sm:inline">
                 {permMode === "full_auto"
-                  ? "— 지원되는 CLI에 자동 승인 설정을 전달합니다"
+                  ? "— Claude·Codex·Grok·Cursor·Antigravity의 샌드박스를 해제하고 자동 승인을 설정합니다"
                   : permMode === "manual"
                   ? "— 실행 권한 스킵 플래그를 붙이지 않고 매 실행 시 확인합니다"
                   : "— 사용자가 직접 수정한 도구별 플래그를 적용합니다"}
@@ -280,7 +282,7 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
                         : "text-slate-400 hover:text-slate-200"
                     }`}
                   >
-                    ⚡ 완전 자동 (Full-Auto)
+                    ⚡ 전체 권한 (Full-Auto)
                   </button>
                   <button
                     type="button"
@@ -373,7 +375,7 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
 
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 2xl:grid-cols-6 gap-2.5">
             {clis.map((cli) => {
-              const isApplied = Boolean(cli.wrapperBinary);
+                const isApplied = headroomEnabled && Boolean(cli.wrapperBinary);
 
               return (
                 <div
@@ -478,7 +480,8 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
             {/* 전체 Headroom 일괄 토글 버튼 */}
             {agents.length > 0 && onToggleAllAgentsWrapper && (
               <button
-                onClick={() => onToggleAllAgentsWrapper(!allHeadroomActive)}
+                  onClick={() => onToggleAllAgentsWrapper(!allHeadroomActive)}
+                  disabled={!headroomEnabled}
                 className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold transition ${
                   allHeadroomActive
                     ? "bg-emerald-600/20 text-emerald-300 border-emerald-500/40 hover:bg-emerald-600/30"
@@ -604,15 +607,16 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
                       <button
                         type="button"
                         onClick={() => onToggleAgentWrapper && onToggleAgentWrapper(agent)}
+                        disabled={!headroomEnabled}
                         className={`px-2 py-0.5 rounded text-[10px] font-semibold transition border flex items-center gap-1 ${
-                          agent.useWrapper
+                          headroomEnabled && agent.useWrapper
                             ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/30"
                             : "bg-slate-900 text-slate-400 border-slate-800 hover:text-emerald-300 hover:border-emerald-500/30"
                         }`}
                         title="클릭하여 이 에이전트의 Headroom 토큰 최적화 래퍼를 켭니다/끕니다"
                       >
                         <Sparkles className="w-2.5 h-2.5 text-emerald-400" />
-                        Headroom: {agent.useWrapper ? "ON" : "OFF"}
+                        Headroom: {headroomEnabled && agent.useWrapper ? "ON" : "OFF"}
                       </button>
 
                       {running && (

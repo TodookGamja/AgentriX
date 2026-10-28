@@ -111,13 +111,13 @@ export const TokenOptimizationModal: React.FC<TokenOptimizationModalProps> = ({
             <div className="flex items-center justify-between">
               <div>
                 <div className="font-bold text-slate-200 text-xs flex items-center gap-1.5">
-                  <span>컨텍스트 한도 초과 시 자동 세션 인수인계 (Auto-Relay)</span>
+                <span>작업 완료 후 자동 최적화</span>
                   <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 text-[10px] font-bold">
                     추천
                   </span>
                 </div>
                 <div className="text-[11px] text-slate-400 mt-0.5">
-                  대화가 길어져 토큰 소모가 급증할 때, 작업 맥락을 요약하여 깨끗한 새 세션으로 자동 전달합니다.
+                Claude, Codex, OpenCode의 완료 기록을 확인한 뒤 실행합니다. 완료 여부나 세션을 확인할 수 없으면 수동 실행이 필요합니다.
                 </div>
               </div>
               <label className="relative inline-flex items-center cursor-pointer shrink-0 ml-3">

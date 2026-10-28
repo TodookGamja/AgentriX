@@ -29,6 +29,7 @@ import { FilePickerModal } from "./FilePickerModal";
 
 interface TerminalPaneProps {
   session: SessionInfo;
+  drafts: React.MutableRefObject<Record<string, { text: string; attachments: string[] }>>;
   cliDef?: CliDefinition;
   isVisible: boolean;
   isFocused?: boolean;
@@ -54,6 +55,7 @@ const QUICK_COMMANDS = [
 
 export const TerminalPane: React.FC<TerminalPaneProps> = ({
   session,
+  drafts,
   cliDef,
   isVisible,
   isFocused = false,
@@ -78,7 +80,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [isFilePickerOpen, setIsFilePickerOpen] = useState(false);
-  const [attachments, setAttachments] = useState<string[]>([]);
+  const [attachments, setAttachments] = useState<string[]>(() => drafts.current[session.id]?.attachments ?? []);
 
   // 채팅창 높이 (상단 핸들 드래그로 조절, localStorage 저장)
   const [chatHeight, setChatHeight] = useState<number>(
@@ -103,7 +105,10 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
   };
 
   // 하단 전용 채팅창 상태
-  const [promptText, setPromptText] = useState("");
+  const [promptText, setPromptText] = useState(() => drafts.current[session.id]?.text ?? "");
+  useEffect(() => {
+    drafts.current[session.id] = { text: promptText, attachments };
+  }, [drafts, session.id, promptText, attachments]);
   const [broadcastToSplit, setBroadcastToSplit] = useState(false);
   const [broadcastToProject, setBroadcastToProject] = useState(false);
   const [promptHistory, setPromptHistory] = useState<string[]>([]);
