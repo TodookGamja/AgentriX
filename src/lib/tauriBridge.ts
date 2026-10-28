@@ -3,6 +3,10 @@ import { invoke } from "@tauri-apps/api/core";
 export async function apiCheckNpmCliUpdates(): Promise<Record<string, { current: string; latest: string }>> {
   return invoke("check_npm_cli_updates");
 }
+
+export async function apiInstallNpmCliUpdate(packageName: string): Promise<void> {
+  return invoke("install_npm_cli_update", { package: packageName });
+}
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import type {
   ApiKeyStatus,

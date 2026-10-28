@@ -6,6 +6,10 @@ async function main() {
     const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
     const version = pkg.version;
     const tag = `v${version}`;
+    const notes = fs.readFileSync(path.join('release-notes', `${tag}.md`), 'utf8');
+    if (!notes.includes('## 한국어') || !notes.includes('## English')) {
+        throw new Error(`Release notes for ${tag} must include Korean and English sections.`);
+    }
     const owner = 'TodookGamja';
     const repo = 'AgentriX';
 
@@ -72,16 +76,7 @@ async function main() {
             tag_name: tag,
             target_commitish: 'main',
             name: `AgentriX ${tag} - 업데이트 릴리즈 (Official Release)`,
-            body: `## 🚀 AgentriX ${tag} 업데이트 안내
-
-### ✨ 이번 버전(${tag}) 주요 수정 및 개선 사항
-- **🪟 창 이동이 안 되던 문제 수정 (v1.0.9 회귀)**: 타이틀바 드래그 권한 누락 및 하위 요소 드래그 미인식 → 타이틀바 어디를 잡아도 이동, 더블클릭 최대화/복원 1회 토글 유지
-
-### 📦 다운로드 안내
-- **단일 무설치 실행 파일**: \`AgentriX.exe\` (다운로드 후 바로 실행)
-- **포터블 압축 패키지**: \`AgentriX-Portable-${tag}-win-x64.zip\`
-- **윈도우 정식 설치 인스톨러**: \`AgentriX-Setup-${tag}.exe\`
-`,
+            body: notes,
             draft: false,
             prerelease: false
         };

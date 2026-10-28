@@ -228,157 +228,6 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
             </span>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 2xl:grid-cols-6 gap-2.5">
-            {clis.map((cli) => {
-              const isApplied = Boolean(cli.wrapperBinary);
-
-              return (
-                <div
-                  key={cli.id}
-                  className="p-1.5 rounded-xl bg-slate-950/60 border border-slate-800/80 hover:border-slate-700/80 transition space-y-1.5 shadow-sm"
-                >
-                <div className="flex items-center justify-between gap-1.5">
-                  <button
-                    onClick={() => onStartRawCli(cli.id, undefined, (permMode === "manual" ? "" : permMode === "custom" ? cliFlags[cli.id] ?? "" : DEFAULT_CLI_FLAGS[cli.id]?.flag ?? "").trim().split(/\s+/).filter(Boolean), permMode === "full_auto")}
-                    className="inline-flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-800/60 text-slate-100 text-xs font-semibold transition min-w-0 truncate flex-1"
-                    title={`${cli.name} 일반 CLI 즉시 실행`}
-                  >
-                    <span
-                      className="w-2 h-2 rounded-full shrink-0"
-                      style={{ backgroundColor: cli.accentColor }}
-                    />
-                    <span className="truncate">{cli.name}</span>
-                  </button>
-                  {isApplied ? (
-                    <button
-                      onClick={() => onStartRawCli(cli.id, "__WRAPPER__", (permMode === "manual" ? "" : permMode === "custom" ? cliFlags[cli.id] ?? "" : DEFAULT_CLI_FLAGS[cli.id]?.flag ?? "").trim().split(/\s+/).filter(Boolean), permMode === "full_auto")}
-                      className="px-2 py-1 rounded-lg bg-emerald-600/15 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/30 text-xs font-bold transition flex items-center gap-1 shadow-sm shrink-0"
-                      title={cli.id === "opencode" ? "Headroom 래퍼로 실행합니다. 사용자 지정 API 공급자의 프록시 지원은 Headroom 버전에 따라 다릅니다." : `${cli.name}을(를) Headroom 토큰 최적화 모드로 즉시 실행`}
-                    >
-                      <Sparkles className="w-3 h-3 text-emerald-400" />
-                      Headroom
-                    </button>
-                  ) : <span className="text-[10px] text-slate-500" title="지원되는 Headroom 실행 파일이나 CLI 래퍼가 감지되지 않았습니다">Headroom 미감지</span>}
-                </div>
-                <CliModelField cliId={cli.id} />
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-
-      {/* =====================================================================
-          2. 중단: 전담 역할 에이전트 팀 & 시냅스 협업 지도
-         ===================================================================== */}
-      <div className="rounded-2xl bg-slate-900/90 border border-slate-800 p-5 space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3 flex-wrap">
-            <div>
-              <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
-                <Bot className="w-4 h-4 text-fuchsia-400" />
-                [{projectName}] 전담 역할 에이전트 ({agents.length}명)
-              </h3>
-              <div className="text-xs text-slate-400 mt-1 space-y-0.5">
-                <p>· 사용자는 총괄 PM에게만 지시하며, 에이전트들이 서로 대화를 주고받으며 협업합니다.</p>
-                <p>· [무인 자율 협업 가동] 시 사용자 확인 질문 없이 즉시 연동됩니다.</p>
-              </div>
-            </div>
-
-            {/* 보기 전환 탭: 팀 카드 vs 시냅스 지도 */}
-            <div className="flex rounded-xl bg-slate-950 p-1 border border-slate-800 text-xs font-medium">
-              <button
-                onClick={() => setWorkspaceDisplayMode("cards")}
-                className={`px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 ${
-                  workspaceDisplayMode === "cards"
-                    ? "bg-indigo-600 text-white font-bold shadow"
-                    : "text-slate-400 hover:text-slate-200"
-                }`}
-              >
-                <Bot className="w-3.5 h-3.5" />
-                역할 팀 카드
-              </button>
-              <button
-                onClick={() => setWorkspaceDisplayMode("synapse")}
-                className={`px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 ${
-                  workspaceDisplayMode === "synapse"
-                    ? "bg-fuchsia-600 text-white font-bold shadow"
-                    : "text-slate-400 hover:text-slate-200"
-                }`}
-              >
-                <BrainCircuit className="w-3.5 h-3.5 text-cyan-300" />
-                🧠 시냅스 협업 지도
-              </button>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              onClick={onOpenBlackboard}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-700 text-xs font-medium transition"
-              title="에이전트 공유 마크다운 메모장(.ai-agents/BLACKBOARD.md)을 엽니다."
-            >
-              <ClipboardList className="w-3.5 h-3.5 text-cyan-400" />
-              에이전트 공유 메모장
-            </button>
-
-            {runningSessions.length > 0 && (
-              <button
-                onClick={onOpenDispatchModal}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-fuchsia-600/20 hover:bg-fuchsia-600/30 text-fuchsia-200 border border-fuchsia-500/40 text-xs font-bold transition"
-              >
-                <Send className="w-3.5 h-3.5" />
-                동시 지시 ({runningSessions.length})
-              </button>
-            )}
-
-            {/* 전체 Headroom 일괄 토글 버튼 */}
-            {agents.length > 0 && onToggleAllAgentsWrapper && (
-              <button
-                onClick={() => onToggleAllAgentsWrapper(!allHeadroomActive)}
-                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold transition ${
-                  allHeadroomActive
-                    ? "bg-emerald-600/20 text-emerald-300 border-emerald-500/40 hover:bg-emerald-600/30"
-                    : "bg-slate-950 hover:bg-slate-800 text-slate-300 border-slate-700"
-                }`}
-                title="현재 프로젝트의 모든 에이전트를 Headroom 토큰 절약 래퍼로 감싸서 실행합니다"
-              >
-                <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
-                전체 Headroom {allHeadroomActive ? "ON" : "OFF"}
-              </button>
-            )}
-
-            {agents.length > 0 && (
-              <>
-                <button
-                  onClick={handleTriggerAutoRelay}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-indigo-600 via-fuchsia-600 to-emerald-600 hover:from-indigo-500 hover:to-emerald-500 text-white text-xs font-bold shadow-lg transition whitespace-nowrap shrink-0"
-                  title="총괄 PM에게 목표를 내리면 에이전트 간 서로 대화하며 무인으로 작업을 자율 수행합니다"
-                >
-                  <Sparkles className="w-3.5 h-3.5 text-amber-300" />
-                  ⚡ 무인 자율 협업 가동
-                </button>
-                <button
-                  onClick={onSpawnAllAgents}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow transition whitespace-nowrap shrink-0"
-                  title="현재 프로젝트에 편성된 모든 AI 에이전트 터미널을 한 번에 가동합니다 (앱 재실행 후 원클릭 세션 복원)"
-                >
-                  <Play className="w-3.5 h-3.5" />
-                  팀 전원 일괄 출근 (세션 가동)
-                </button>
-              </>
-            )}
-
-            <button
-              onClick={onOpenCreateCustomAgent}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition whitespace-nowrap shrink-0"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              직접 에이전트 추가
-            </button>
-          </div>
-        </div>
-
         {/* 권한 & 자율 연동 상태 바 (모드 선택 및 도구별 플래그 직접 설정) */}
         <div className="flex flex-col gap-2 p-3.5 rounded-xl bg-slate-950/80 border border-slate-800/90 text-xs">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -537,6 +386,157 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
               </div>
             </div>
           )}
+        </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 2xl:grid-cols-6 gap-2.5">
+            {clis.map((cli) => {
+              const isApplied = Boolean(cli.wrapperBinary);
+
+              return (
+                <div
+                  key={cli.id}
+                  className="p-1.5 rounded-xl bg-slate-950/60 border border-slate-800/80 hover:border-slate-700/80 transition space-y-1.5 shadow-sm"
+                >
+                <div className="flex items-center justify-between gap-1.5">
+                  <button
+                    onClick={() => onStartRawCli(cli.id, undefined, (permMode === "manual" ? "" : permMode === "custom" ? cliFlags[cli.id] ?? "" : DEFAULT_CLI_FLAGS[cli.id]?.flag ?? "").trim().split(/\s+/).filter(Boolean), permMode === "full_auto")}
+                    className="inline-flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-800/60 text-slate-100 text-xs font-semibold transition min-w-0 truncate flex-1"
+                    title={`${cli.name} 일반 CLI 즉시 실행`}
+                  >
+                    <span
+                      className="w-2 h-2 rounded-full shrink-0"
+                      style={{ backgroundColor: cli.accentColor }}
+                    />
+                    <span className="truncate">{cli.name}</span>
+                  </button>
+                  {isApplied ? (
+                    <button
+                      onClick={() => onStartRawCli(cli.id, "__WRAPPER__", (permMode === "manual" ? "" : permMode === "custom" ? cliFlags[cli.id] ?? "" : DEFAULT_CLI_FLAGS[cli.id]?.flag ?? "").trim().split(/\s+/).filter(Boolean), permMode === "full_auto")}
+                      className="px-2 py-1 rounded-lg bg-emerald-600/15 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/30 text-xs font-bold transition flex items-center gap-1 shadow-sm shrink-0"
+                      title={cli.id === "opencode" ? "Headroom 래퍼로 실행합니다. 사용자 지정 API 공급자의 프록시 지원은 Headroom 버전에 따라 다릅니다." : `${cli.name}을(를) Headroom 토큰 최적화 모드로 즉시 실행`}
+                    >
+                      <Sparkles className="w-3 h-3 text-emerald-400" />
+                      Headroom
+                    </button>
+                  ) : <span className="text-[10px] text-slate-500" title="지원되는 Headroom 실행 파일이나 CLI 래퍼가 감지되지 않았습니다">Headroom 미감지</span>}
+                </div>
+                <CliModelField cliId={cli.id} />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* =====================================================================
+          2. 중단: 전담 역할 에이전트 팀 & 시냅스 협업 지도
+         ===================================================================== */}
+      <div className="rounded-2xl bg-slate-900/90 border border-slate-800 p-5 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
+            <div>
+              <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
+                <Bot className="w-4 h-4 text-fuchsia-400" />
+                [{projectName}] 전담 역할 에이전트 ({agents.length}명)
+              </h3>
+              <div className="text-xs text-slate-400 mt-1 space-y-0.5">
+                <p>· 사용자는 총괄 PM에게만 지시하며, 에이전트들이 서로 대화를 주고받으며 협업합니다.</p>
+                <p>· [무인 자율 협업 가동] 시 사용자 확인 질문 없이 즉시 연동됩니다.</p>
+              </div>
+            </div>
+
+            {/* 보기 전환 탭: 팀 카드 vs 시냅스 지도 */}
+            <div className="flex rounded-xl bg-slate-950 p-1 border border-slate-800 text-xs font-medium">
+              <button
+                onClick={() => setWorkspaceDisplayMode("cards")}
+                className={`px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 ${
+                  workspaceDisplayMode === "cards"
+                    ? "bg-indigo-600 text-white font-bold shadow"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                <Bot className="w-3.5 h-3.5" />
+                역할 팀 카드
+              </button>
+              <button
+                onClick={() => setWorkspaceDisplayMode("synapse")}
+                className={`px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 ${
+                  workspaceDisplayMode === "synapse"
+                    ? "bg-fuchsia-600 text-white font-bold shadow"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                <BrainCircuit className="w-3.5 h-3.5 text-cyan-300" />
+                🧠 시냅스 협업 지도
+              </button>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={onOpenBlackboard}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-700 text-xs font-medium transition"
+              title="에이전트 공유 마크다운 메모장(.ai-agents/BLACKBOARD.md)을 엽니다."
+            >
+              <ClipboardList className="w-3.5 h-3.5 text-cyan-400" />
+              에이전트 공유 메모장
+            </button>
+
+            {runningSessions.length > 0 && (
+              <button
+                onClick={onOpenDispatchModal}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-fuchsia-600/20 hover:bg-fuchsia-600/30 text-fuchsia-200 border border-fuchsia-500/40 text-xs font-bold transition"
+              >
+                <Send className="w-3.5 h-3.5" />
+                동시 지시 ({runningSessions.length})
+              </button>
+            )}
+
+            {/* 전체 Headroom 일괄 토글 버튼 */}
+            {agents.length > 0 && onToggleAllAgentsWrapper && (
+              <button
+                onClick={() => onToggleAllAgentsWrapper(!allHeadroomActive)}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold transition ${
+                  allHeadroomActive
+                    ? "bg-emerald-600/20 text-emerald-300 border-emerald-500/40 hover:bg-emerald-600/30"
+                    : "bg-slate-950 hover:bg-slate-800 text-slate-300 border-slate-700"
+                }`}
+                title="현재 프로젝트의 모든 에이전트를 Headroom 토큰 절약 래퍼로 감싸서 실행합니다"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+                전체 Headroom {allHeadroomActive ? "ON" : "OFF"}
+              </button>
+            )}
+
+            {agents.length > 0 && (
+              <>
+                <button
+                  onClick={handleTriggerAutoRelay}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-indigo-600 via-fuchsia-600 to-emerald-600 hover:from-indigo-500 hover:to-emerald-500 text-white text-xs font-bold shadow-lg transition whitespace-nowrap shrink-0"
+                  title="총괄 PM에게 목표를 내리면 에이전트 간 서로 대화하며 무인으로 작업을 자율 수행합니다"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                  ⚡ 무인 자율 협업 가동
+                </button>
+                <button
+                  onClick={onSpawnAllAgents}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow transition whitespace-nowrap shrink-0"
+                  title="현재 프로젝트에 편성된 모든 AI 에이전트 터미널을 한 번에 가동합니다 (앱 재실행 후 원클릭 세션 복원)"
+                >
+                  <Play className="w-3.5 h-3.5" />
+                  팀 전원 일괄 출근 (세션 가동)
+                </button>
+              </>
+            )}
+
+            <button
+              onClick={onOpenCreateCustomAgent}
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition whitespace-nowrap shrink-0"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              직접 에이전트 추가
+            </button>
+          </div>
         </div>
 
         {/* 메인 뷰: 시냅스 지도 또는 카드 목록 */}

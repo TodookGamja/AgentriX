@@ -551,9 +551,36 @@ async fn check_npm_cli_updates() -> Result<serde_json::Value, String> {
     }).await.map_err(|e| e.to_string())?
 }
 
+const NPM_CLIS: [&str; 5] = ["@openai/codex", "@anthropic-ai/claude-code", "opencode-ai", "@xai/grok-cli", "@google/gemini-cli"];
+
+#[tauri::command]
+async fn install_npm_cli_update(package: String) -> Result<(), String> {
+    if !NPM_CLIS.contains(&package.as_str()) {
+        return Err("지원하지 않는 npm CLI입니다.".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(windows)]
+        let mut cmd = {
+            use std::os::windows::process::CommandExt;
+            let mut cmd = std::process::Command::new("cmd.exe");
+            cmd.args(["/D", "/C", "npm.cmd"]);
+            cmd.creation_flags(0x08000000);
+            cmd
+        };
+        #[cfg(not(windows))]
+        let mut cmd = std::process::Command::new("npm");
+        let output = cmd.args(["install", "-g", &format!("{package}@latest")]).output()
+            .map_err(|e| format!("npm 실행 실패: {e}"))?;
+        if !output.status.success() {
+            return Err(format!("설치 실패: {}", String::from_utf8_lossy(&output.stderr)));
+        }
+        Ok(())
+    }).await.map_err(|e| e.to_string())?
+}
+
 fn npm_cli_updates(parsed: &serde_json::Value) -> serde_json::Value {
     let mut updates = serde_json::Map::new();
-    for package in ["@openai/codex", "@anthropic-ai/claude-code", "opencode-ai", "@xai/grok-cli", "@google/gemini-cli"] {
+    for package in NPM_CLIS {
         if let Some(value) = parsed.get(package) { updates.insert(package.to_string(), value.clone()); }
     }
     serde_json::Value::Object(updates)
@@ -565,6 +592,12 @@ fn npm_updates_only_include_supported_clis() {
     let result = npm_cli_updates(&serde_json::json!({"opencode-ai": {"current": "1.0", "latest": "2.0"}, "unrelated": {"current": "1"}}));
     assert_eq!(result["opencode-ai"]["latest"], "2.0");
     assert!(result.get("unrelated").is_none());
+}
+
+#[test]
+fn npm_update_rejects_unsupported_package() {
+    let result = tauri::async_runtime::block_on(install_npm_cli_update("unrelated;command".into()));
+    assert!(result.is_err());
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1566,6 +1599,7 @@ fn main() {
             analyze_project_workspace,
             get_project_deep_context,
             check_npm_cli_updates,
+            install_npm_cli_update,
             get_detected_cli_credentials,
             run_cli_deep_analysis,
             start_session,

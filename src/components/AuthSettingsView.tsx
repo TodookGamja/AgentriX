@@ -15,7 +15,7 @@ import {
   Wand2,
 } from "lucide-react";
 import type { ApiKeyStatus, CliDefinition, CustomCliInput } from "../types/types";
-import { apiCheckNpmCliUpdates } from "../lib/tauriBridge";
+import { apiCheckNpmCliUpdates, apiInstallNpmCliUpdate } from "../lib/tauriBridge";
 
 interface AuthSettingsViewProps {
   clis: CliDefinition[];
@@ -190,6 +190,7 @@ export const AuthSettingsView: React.FC<AuthSettingsViewProps> = ({
   const [inputs, setInputs] = useState<Record<string, string>>({});
   const [cliUpdates, setCliUpdates] = useState<Record<string, { current: string; latest: string }> | null>(null);
   const [cliUpdateStatus, setCliUpdateStatus] = useState("");
+  const [installingCli, setInstallingCli] = useState<string | null>(null);
   const [showAddCliModal, setShowAddCliModal] = useState(false);
   const [modalTab, setModalTab] = useState<"preset" | "manual">("preset");
 
@@ -340,7 +341,7 @@ export const AuthSettingsView: React.FC<AuthSettingsViewProps> = ({
       </div>
 
       <div className="rounded-xl border border-slate-700 p-4 text-sm text-slate-300">
-        <button type="button" disabled={cliUpdateStatus === "확인 중..."} className="rounded-lg bg-slate-700 px-3 py-2 hover:bg-slate-600 disabled:opacity-50" onClick={async () => {
+        <button type="button" disabled={cliUpdateStatus === "확인 중..." || !!installingCli} className="rounded-lg bg-slate-700 px-3 py-2 hover:bg-slate-600 disabled:opacity-50" onClick={async () => {
           setCliUpdateStatus("확인 중...");
           setCliUpdates(null);
           try {
@@ -352,7 +353,19 @@ export const AuthSettingsView: React.FC<AuthSettingsViewProps> = ({
         <p className="mt-2 text-xs text-slate-400">npm 전역 설치된 Codex, Claude, OpenCode, Grok, Gemini만 확인합니다.</p>
         {cliUpdateStatus && <p className="mt-2">{cliUpdateStatus}</p>}
         {cliUpdates && Object.entries(cliUpdates).map(([name, info]) => (
-          <p key={name} className="mt-1 text-xs">{name}: {info.current} → {info.latest} · <code>npm install -g {name}@latest</code></p>
+          <div key={name} className="mt-2 flex items-center gap-3 text-xs">
+            <span>{name}: {info.current} → {info.latest}</span>
+            <button type="button" disabled={!!installingCli} className="rounded-lg bg-indigo-600 px-3 py-1.5 hover:bg-indigo-500 disabled:opacity-50" onClick={async () => {
+              setInstallingCli(name);
+              setCliUpdateStatus(`${name} 설치 중...`);
+              try {
+                await apiInstallNpmCliUpdate(name);
+                setCliUpdates((previous) => { const remaining = { ...previous }; delete remaining[name]; return remaining; });
+                setCliUpdateStatus(`${name} 업데이트 설치 완료`);
+              } catch (err) { setCliUpdateStatus(`${name} 설치 실패: ${String(err)}`); }
+              finally { setInstallingCli(null); }
+            }}>{installingCli === name ? "설치 중..." : "업데이트 설치"}</button>
+          </div>
         ))}
       </div>
 
