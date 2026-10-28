@@ -311,6 +311,8 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
 
     // Ctrl + +/-/0 키보드 단축키를 xterm이 씹지 않고 폰트 조절로 처리
     term.attachCustomKeyEventHandler((e) => {
+      // Alt+숫자는 터미널 전환 단축키 → CLI로 ESC+숫자가 전달되지 않게 xterm에서 제외
+      if (e.altKey && /^(Digit|Numpad)[0-9]$/.test(e.code)) return false;
       if (e.ctrlKey && (e.key === "=" || e.key === "+" || e.key === "-" || e.key === "0")) {
         if (e.type === "keydown") {
           if (e.key === "=" || e.key === "+") changeFontSize(1);

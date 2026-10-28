@@ -316,10 +316,11 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
                   { id: "antigravity", name: "Antigravity", provider: "Google" },
                   { id: "cursor", name: "Cursor Agent", provider: "Anysphere" },
                   { id: "opencode", name: "OpenCode", provider: "OpenCode" },
-                ]).map((cli) => {
+                ]).filter((cli) => cli.id !== "powershell" && cli.id !== "cmd").map((cli) => {
+                  // 셸(PowerShell/CMD)은 승인 개념이 없어 제외, 알려지지 않은 CLI는 빈 플래그(직접 수정 모드에서 입력)
                   const defaultInfo = DEFAULT_CLI_FLAGS[cli.id] || {
-                    flag: "--yolo",
-                    desc: `${cli.name} 자율 실행 플래그`,
+                    flag: "",
+                    desc: "알려진 자동 승인 플래그 없음 — 직접 수정에서 입력",
                   };
                   const currentVal =
                     permMode === "manual"

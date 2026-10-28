@@ -928,8 +928,8 @@ export const App: React.FC = () => {
         "success"
       );
 
-      // codex는 pty.rs에서 초기 프롬프트 인자로 전달됨
-      if (agent.autoBrief && agent.rolePrompt.trim() && agent.cliId !== "codex") {
+      // codex/opencode는 pty.rs에서 초기 프롬프트 인자로 전달됨
+      if (agent.autoBrief && agent.rolePrompt.trim() && agent.cliId !== "codex" && agent.cliId !== "opencode") {
         window.setTimeout(() => {
           const cleanPrompt = agent.rolePrompt.replace(/[\r\n]+/g, " ").trim();
           const briefing = `${cleanPrompt}\r\n`;
@@ -2050,11 +2050,17 @@ ${recentSnippet || "진행 내역 기록 없음"}
         handleWindowToggleMaximize();
         return;
       }
-      // Alt + 1 ~ 4: 분할 터미널 슬롯 즉시 포커스 이동
-      if (e.altKey && ["1", "2", "3", "4"].includes(e.key)) {
+      // Alt + 1 ~ 9, 0(=10): 터미널 즉시 포커스 이동
+      const altDigit = /^Digit([0-9])$|^Numpad([0-9])$/.exec(e.code);
+      if (e.altKey && !e.ctrlKey && altDigit) {
         e.preventDefault();
-        const idx = parseInt(e.key, 10) - 1;
-        const targetSession = resolvedPaneSessions[idx];
+        e.stopPropagation();
+        const n = parseInt(altDigit[1] || altDigit[2], 10);
+        const idx = n === 0 ? 9 : n - 1; // Alt+0 = 10번째
+        const targetSession =
+          splitLayout === "single" || idx >= 4
+            ? currentProjectSessions[idx]
+            : resolvedPaneSessions[idx];
         if (targetSession) {
           setActiveNav("terminal");
           setProjectSubView("session");
@@ -2081,9 +2087,10 @@ ${recentSnippet || "진행 내역 기록 없음"}
         return;
       }
     };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [splitLayout, resolvedPaneSessions]);
+    // capture: xterm이 키를 먼저 소비해도(한글 IME 포함) 항상 동작
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
+  }, [splitLayout, resolvedPaneSessions, currentProjectSessions]);
 
   const handleWindowMinimize = () => {
     apiWindowMinimize().catch(() => {});
