@@ -2067,11 +2067,11 @@ ${recentSnippet || "진행 내역 기록 없음"}
           - 우: 시스템 상태 배지 + 창 제어 컨트롤(최소화, 최대화/복원, 닫기)
          ===================================================================== */}
       <header
-        data-tauri-drag-region
+        data-tauri-drag-region="deep"
         className="relative h-10 min-h-[40px] max-h-[40px] bg-slate-900/95 backdrop-blur border-b border-slate-800/80 flex items-center justify-between px-3 select-none z-50 shrink-0 cursor-default"
       >
         {/* 좌: 사이드바 열기 / 닫기 버튼 */}
-        <div className="flex items-center z-10" data-tauri-drag-region>
+        <div className="flex items-center z-10" data-tauri-drag-region="deep">
           <button
             onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
             className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-slate-100 hover:bg-slate-800 transition text-xs font-bold"
@@ -2090,7 +2090,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
 
         {/* 중: 윈도우 정중앙 절대좌표 앱 로고 & 프로그램 이름 (좌우 버튼에 전혀 간섭받지 않고 정중앙 고정) */}
         <div
-          data-tauri-drag-region
+          data-tauri-drag-region="deep"
           className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center gap-2 select-none cursor-default z-0 pointer-events-none"
         >
           <AgentrixLogo

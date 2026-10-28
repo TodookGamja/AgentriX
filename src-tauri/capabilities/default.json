@@ -1,12 +1,1 @@
-{
-  "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "default",
-  "description": "Default capability for the main window",
-  "windows": ["main"],
-  "permissions": [
-    "core:default",
-    "core:event:default",
-    "core:window:default",
-    "core:app:default"
-  ]
-}
+{"$schema": "../gen/schemas/desktop-schema.json", "identifier": "default", "description": "Default capability for the main window", "windows": ["main"], "permissions": ["core:default", "core:event:default", "core:window:default", "core:app:default", "core:window:allow-start-dragging"]}

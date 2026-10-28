@@ -8,7 +8,7 @@ echo.
 set RELEASE_DIR=release
 if not exist "%RELEASE_DIR%" mkdir "%RELEASE_DIR%"
 
-set VERSION=1.0.9
+set VERSION=1.0.10
 
 echo [1/3] 프론트엔드 프로덕션 빌드 중... (v%VERSION%)
 call npm run build
@@ -40,12 +40,7 @@ call npx tauri build
 if %ERRORLEVEL% neq 0 (
     echo [WARNING] Tauri bundle installer 생성 중 경고가 발생했습니다.
 ) else (
-    for /r "src-tauri\target\release\bundle\nsis" %%f in (*.exe) do (
-        copy /y "%%f" "%RELEASE_DIR%\AgentriX-Setup-v%VERSION%.exe" > nul
-    )
-    for /r "target\release\bundle\nsis" %%f in (*.exe) do (
-        copy /y "%%f" "%RELEASE_DIR%\AgentriX-Setup-v%VERSION%.exe" > nul
-    )
+    copy /y "target\release\bundle\nsis\AgentriX_%VERSION%_x64-setup.exe" "%RELEASE_DIR%\AgentriX-Setup-v%VERSION%.exe" > nul
 )
 
 echo.
