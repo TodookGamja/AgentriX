@@ -907,7 +907,8 @@ export const App: React.FC = () => {
         "success"
       );
 
-      if (agent.autoBrief && agent.rolePrompt.trim()) {
+      // codex는 pty.rs에서 초기 프롬프트 인자로 전달됨
+      if (agent.autoBrief && agent.rolePrompt.trim() && agent.cliId !== "codex") {
         window.setTimeout(() => {
           const cleanPrompt = agent.rolePrompt.replace(/[\r\n]+/g, " ").trim();
           const briefing = `${cleanPrompt}\r\n`;

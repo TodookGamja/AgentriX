@@ -412,6 +412,15 @@ fn build_platform_command(
     } else {
         ""
     };
+    // Codex TUI는 기동이 느리고 시작 직후 PTY 입력을 버려서 지연 타이핑 브리핑이 유실됨 →
+    // 역할 지침을 초기 프롬프트 인자로 넘김 (App.tsx는 codex에 대해 지연 브리핑을 생략)
+    let auto_flags = match agent_meta {
+        Some(a) if cli_def.id == "codex" && a.auto_brief && !a.role_prompt.trim().is_empty() => {
+            let prompt = a.role_prompt.split_whitespace().collect::<Vec<_>>().join(" ").replace('"', "'");
+            format!("{} '{}'", auto_flags, ps_escape_single_quoted(&prompt))
+        }
+        _ => auto_flags.to_string(),
+    };
 
     if cli_def.id == "powershell" {
         let mut cmd = CommandBuilder::new("powershell.exe");
