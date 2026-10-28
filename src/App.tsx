@@ -183,6 +183,9 @@ export const App: React.FC = () => {
   const [projectListCollapsed, setProjectListCollapsed] = useState<boolean>(() => {
     return localStorage.getItem("ai_cli_proj_list_collapsed") === "true";
   });
+  const [collapsedProjects, setCollapsedProjects] = useState<Record<string, boolean>>(() => {
+    try { return JSON.parse(localStorage.getItem("ai_cli_collapsed_projects") || "{}"); } catch { return {}; }
+  });
 
   // 프로젝트별 그룹 매핑 (projectPath -> groupName)
   const [projectGroups, setProjectGroups] = useState<Record<string, string>>(() => {
@@ -844,7 +847,9 @@ export const App: React.FC = () => {
   const handleStartRawCliSession = async (
     cliId: string,
     initialCommand?: string,
-    customCwd?: string
+    customCwd?: string,
+    permissionArgs?: string[],
+    permissionAuto?: boolean
   ) => {
     const targetCwd = customCwd || selectedProjectPath;
     if (!targetCwd) {
@@ -862,7 +867,7 @@ export const App: React.FC = () => {
     }
 
     try {
-      const session = await apiStartSession(cliId, targetCwd, initialCommand, undefined, getCliDefaultModel(cliId));
+      const session = await apiStartSession(cliId, targetCwd, initialCommand, undefined, getCliDefaultModel(cliId), permissionArgs, permissionAuto);
       addSession(session);
       setActiveNav("terminal");
       setProjectSubView("session");
@@ -1558,7 +1563,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
       setRegistryItems(reg);
       setBackups(baks);
       showToast(
-        `[${cliId.toUpperCase()}] 설정 적용 완료! ${
+        `[${cliId.toUpperCase()}] 설정 ${res.status === "removed" ? "해제" : "적용"} 완료! ${
           res.backupPath ? `(백업 생성됨: ${res.backupPath})` : ""
         }`,
         "success"
@@ -2407,6 +2412,16 @@ ${recentSnippet || "진행 내역 기록 없음"}
                                           }`}
                                         >
                                           <div className="flex items-center gap-2 min-w-0">
+                                            <button type="button" aria-expanded={!collapsedProjects[proj.path]} aria-label={`${proj.name} ${collapsedProjects[proj.path] ? "펼치기" : "접기"}`} onClick={(e) => {
+                                              e.stopPropagation();
+                                              setCollapsedProjects((prev) => {
+                                                const next = { ...prev, [proj.path]: !prev[proj.path] };
+                                                localStorage.setItem("ai_cli_collapsed_projects", JSON.stringify(next));
+                                                return next;
+                                              });
+                                            }} className="p-1 rounded hover:bg-slate-700">
+                                              <ChevronRight className={`w-3 h-3 transition-transform ${collapsedProjects[proj.path] ? "" : "rotate-90"}`} />
+                                            </button>
                                             <FolderOpen
                                               className={`w-3.5 h-3.5 shrink-0 transition-colors ${
                                                 isSelected ? "text-indigo-500 dark:text-indigo-400" : "text-slate-400"
@@ -2451,7 +2466,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
                                         </div>
 
                                         {/* 해당 프로젝트에서 실행 중인 에이전트/CLI 세션 트리 표시 */}
-                                        {(projSessions.length > 0 || idleAgents.length > 0) && (
+                                        {!collapsedProjects[proj.path] && (projSessions.length > 0 || idleAgents.length > 0) && (
                                           <div className="border-l-2 border-slate-800/80 ml-3 pl-2.5 my-1 space-y-1">
                                             {projSessions.map((s) => {
                                               const isSessionActive =
@@ -2937,16 +2952,12 @@ ${recentSnippet || "진행 내역 기록 없음"}
                   setActiveSessionId(sessionId);
                   setProjectSubView("session");
                 }}
-                onStartRawCli={async (cliId, initialCmd) => {
-                  await handleStartRawCliSession(cliId, initialCmd);
+                onStartRawCli={async (cliId, initialCmd, permissionArgs, permissionAuto) => {
+                  await handleStartRawCliSession(cliId, initialCmd, undefined, permissionArgs, permissionAuto);
                 }}
                 onOpenBlackboard={handleOpenBlackboard}
                 onOpenDispatchModal={() => setShowDispatchModal(true)}
                 onOpenAiDeepModal={handleOpenAiDeepModal}
-                headroomAppliedClis={headroomItem?.appliedClis}
-                onApplyHeadroomToCli={async (cliId) => {
-                  await handleApplyToCli("headroom-mcp", cliId);
-                }}
                 onStartAutoRelay={handleStartAutonomousCollaboration}
                 onStartAutoRelayWithGoal={handleStartAutonomousRelayWithGoal}
                 onToggleAgentWrapper={handleToggleAgentWrapper}

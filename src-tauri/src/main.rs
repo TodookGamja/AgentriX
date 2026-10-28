@@ -521,6 +521,52 @@ fn get_project_deep_context(project_path: String) -> Result<db::ProjectDeepConte
     db::get_project_deep_context(&project_path).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+async fn check_npm_cli_updates() -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        #[cfg(windows)]
+        let mut cmd = {
+            use std::os::windows::process::CommandExt;
+            let mut cmd = std::process::Command::new("cmd.exe");
+            cmd.args(["/D", "/C", "npm.cmd"]);
+            cmd.creation_flags(0x08000000);
+            cmd
+        };
+        #[cfg(not(windows))]
+        let mut cmd = std::process::Command::new("npm");
+        let output = cmd.args(["outdated", "-g", "--json"]).output().map_err(|e| format!("npm 실행 실패: {e}"))?;
+        if !output.status.success() && output.status.code() != Some(1) {
+            return Err(format!("업데이트 확인 실패: {}", String::from_utf8_lossy(&output.stderr)));
+        }
+        if !output.status.success() && output.stdout.iter().all(u8::is_ascii_whitespace) {
+            return Err(format!("업데이트 확인 실패: {}", String::from_utf8_lossy(&output.stderr)));
+        }
+        let parsed: serde_json::Value = if output.stdout.iter().all(u8::is_ascii_whitespace) {
+            serde_json::json!({})
+        } else {
+            serde_json::from_slice(&output.stdout).map_err(|e| format!("npm 결과 확인 실패: {e}"))?
+        };
+        if let Some(error) = parsed.get("error") { return Err(format!("npm 오류: {error}")); }
+        Ok(npm_cli_updates(&parsed))
+    }).await.map_err(|e| e.to_string())?
+}
+
+fn npm_cli_updates(parsed: &serde_json::Value) -> serde_json::Value {
+    let mut updates = serde_json::Map::new();
+    for package in ["@openai/codex", "@anthropic-ai/claude-code", "opencode-ai", "@xai/grok-cli", "@google/gemini-cli"] {
+        if let Some(value) = parsed.get(package) { updates.insert(package.to_string(), value.clone()); }
+    }
+    serde_json::Value::Object(updates)
+}
+
+#[cfg(test)]
+#[test]
+fn npm_updates_only_include_supported_clis() {
+    let result = npm_cli_updates(&serde_json::json!({"opencode-ai": {"current": "1.0", "latest": "2.0"}, "unrelated": {"current": "1"}}));
+    assert_eq!(result["opencode-ai"]["latest"], "2.0");
+    assert!(result.get("unrelated").is_none());
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DetectedCliCredential {
@@ -713,8 +759,10 @@ fn start_session(
     initial_command: Option<String>,
     agent_id: Option<String>,
     model: Option<String>,
+    permission_args: Option<Vec<String>>,
+    permission_auto: Option<bool>,
 ) -> Result<SessionInfo, String> {
-    let (mut cli_def, injected_env, agent_meta) = {
+    let (mut cli_def, mut injected_env, agent_meta) = {
         let conn = state.db.lock().map_err(|e| e.to_string())?;
         if let Some(ref dir) = cwd {
             if !dir.trim().is_empty() {
@@ -745,6 +793,12 @@ fn start_session(
         .or_else(|| agent_meta.as_ref().map(|a| a.model.clone()).filter(|m| !m.trim().is_empty()));
     if let Some(m) = model {
         cli_def.args.extend(["--model".to_string(), m.trim().to_string()]);
+    }
+    if agent_meta.is_none() {
+        cli_def.args.extend(permission_args.unwrap_or_default());
+        if cli_id == "opencode" && permission_auto.unwrap_or(false) {
+            injected_env.insert("OPENCODE_PERMISSION".into(), r#"{"*":"allow"}"#.into());
+        }
     }
 
     state.pty.start_session_with_def(
@@ -1511,6 +1565,7 @@ fn main() {
             trust_project_folder,
             analyze_project_workspace,
             get_project_deep_context,
+            check_npm_cli_updates,
             get_detected_cli_credentials,
             run_cli_deep_analysis,
             start_session,

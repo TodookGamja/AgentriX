@@ -175,7 +175,7 @@ pub fn builtin_clis() -> Vec<CliDefinition> {
             args: vec![],
             env_keys: vec!["OPENAI_API_KEY".into(), "ANTHROPIC_API_KEY".into()],
             login_command: "opencode auth".into(),
-            config_path: home.join(".config").join("opencode").join("config.json"),
+            config_path: home.join(".config").join("opencode").join("opencode.json"),
             skills_dir: home.join(".config").join("opencode").join("skills"),
             log_path: home.join(".config").join("opencode"),
             subscription_detected: home.join("AppData").join("Roaming").join("npm").join("opencode.cmd").exists(),
@@ -277,8 +277,11 @@ pub fn detect_clis_with_path(path_env: &str) -> Vec<CliDefinition> {
             let wp = local_bin.join(wname);
             if wp.is_file() {
                 def.wrapper_binary = Some(wp.to_string_lossy().into_owned());
-            } else if local_bin.join("headroom.exe").is_file() {
-                def.wrapper_binary = Some(wp.to_string_lossy().into_owned());
+            } else if matches!(def.id.as_str(), "claude" | "codex" | "grok" | "cursor" | "opencode") {
+                let candidates = vec!["headroom.exe".into(), "headroom.cmd".into(), "headroom".into()];
+                let local = local_bin.join(if cfg!(windows) { "headroom.exe" } else { "headroom" });
+                let found = if local.is_file() { Some(local) } else { resolve_cli_binary("headroom", &candidates, path_env) };
+                def.wrapper_binary = found.map(|p| p.to_string_lossy().into_owned());
             }
         }
     }

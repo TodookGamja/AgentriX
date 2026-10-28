@@ -1,4 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
+
+export async function apiCheckNpmCliUpdates(): Promise<Record<string, { current: string; latest: string }>> {
+  return invoke("check_npm_cli_updates");
+}
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import type {
   ApiKeyStatus,
@@ -245,7 +249,9 @@ export async function apiStartSession(
   cwd?: string,
   initialCommand?: string,
   agentId?: string,
-  model?: string
+  model?: string,
+  permissionArgs?: string[],
+  permissionAuto?: boolean
 ): Promise<SessionInfo> {
   if (isTauriRuntime()) {
     return invoke<SessionInfo>("start_session", {
@@ -254,6 +260,8 @@ export async function apiStartSession(
       initialCommand: initialCommand ?? null,
       agentId: agentId ?? null,
       model: model || null,
+      permissionArgs: permissionArgs ?? null,
+      permissionAuto: permissionAuto ?? false,
     });
   }
   const id = `sess-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;

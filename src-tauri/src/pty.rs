@@ -406,7 +406,6 @@ fn build_platform_command(
             "claude" => " --dangerously-skip-permissions",
             "codex" => " --sandbox workspace-write --ask-for-approval never",
             "grok" => " --yolo",
-            "opencode" => " --auto",
             _ => "",
         }
     } else {
@@ -437,18 +436,21 @@ fn build_platform_command(
     if let Some(init_cmd) = initial_command.filter(|s| !s.trim().is_empty()) {
         if init_cmd == "__WRAPPER__" {
             let (exec_cmd, label) = if let Some(ref wrapper) = cli_def.wrapper_binary {
+                let is_headroom = Path::new(wrapper).file_stem().and_then(|s| s.to_str()).map(|s| s.eq_ignore_ascii_case("headroom")).unwrap_or(false);
+                let command = if is_headroom {
+                    format!("& '{}' wrap '{}' --port 8788 --", ps_escape_single_quoted(wrapper), ps_escape_single_quoted(&cli_def.id))
+                } else {
+                    format!("& '{}'", ps_escape_single_quoted(wrapper))
+                };
+                (command, format!("{} (Headroom Wrapper)", wrapper))
+            } else if cli_def.resolved_binary.is_some() {
                 (
-                    format!("& '{}'", ps_escape_single_quoted(wrapper)),
-                    format!("{} (Headroom Wrapper)", wrapper),
-                )
-            } else if let Some(ref resolved) = cli_def.resolved_binary {
-                (
-                    format!("headroom wrap '{}' --port 8788 --", ps_escape_single_quoted(resolved)),
+                    format!("headroom wrap '{}' --port 8788 --", ps_escape_single_quoted(&cli_def.id)),
                     format!("headroom wrap {}", cli_def.name),
                 )
             } else {
                 (
-                    format!("headroom wrap {} --port 8788 --", cli_def.id),
+                    format!("headroom wrap '{}' --port 8788 --", ps_escape_single_quoted(&cli_def.id)),
                     format!("headroom wrap {}", cli_def.id),
                 )
             };
@@ -526,6 +528,19 @@ fn build_platform_command(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn headroom_executable_wraps_cli_id_and_preserves_permission_arguments() {
+        let mut cli = crate::cli::builtin_clis().into_iter().find(|c| c.id == "codex").unwrap();
+        cli.resolved_binary = Some("C:\\tools\\codex.cmd".into());
+        cli.wrapper_binary = Some("C:\\tools\\headroom.exe".into());
+        cli.args = vec!["--sandbox".into(), "workspace-write".into()];
+        let (cmd, _) = build_platform_command(&cli, Some("__WRAPPER__"), "C:\\project", None);
+        let script = cmd.get_argv().last().unwrap().to_string_lossy();
+        assert!(script.contains("'C:\\tools\\headroom.exe' wrap 'codex' --port 8788 --"));
+        assert!(script.contains("'--sandbox' 'workspace-write'"));
+        assert!(!script.contains("wrap 'C:\\tools\\codex.cmd'"));
+    }
 
     #[test]
     fn resolve_safe_cwd_when_system32_passed_falls_back_to_safe_project_directory() {

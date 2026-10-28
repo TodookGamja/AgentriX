@@ -297,7 +297,7 @@ export const McpSkillView: React.FC<McpSkillViewProps> = ({
                         ) : (
                           <Send className="w-3 h-3 text-slate-400" />
                         )}
-                        <span>{cli.name}에 적용</span>
+                        <span>{cli.name} {isApplied ? "해제" : "적용"}</span>
                       </button>
                     );
                   })}
@@ -382,7 +382,7 @@ export const McpSkillView: React.FC<McpSkillViewProps> = ({
               <div className="pt-3 border-t border-slate-800 flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-1 text-[11px] text-slate-400">
                   <Wrench className="w-3.5 h-3.5 text-slate-500" />
-                  <span>설치/적용된 CLI (클릭 시 배포):</span>
+                  <span>CLI별 적용/해제:</span>
                 </div>
                 <div className="flex flex-wrap gap-1.5">
                   {clis.map((cli) => {
@@ -398,7 +398,7 @@ export const McpSkillView: React.FC<McpSkillViewProps> = ({
                         }`}
                       >
                         {isApplied && <CheckCircle2 className="w-3 h-3 text-emerald-400" />}
-                        {cli.name}
+                        {cli.name} {isApplied ? "해제" : "적용"}
                       </button>
                     );
                   })}

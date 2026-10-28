@@ -15,6 +15,7 @@ import {
   Wand2,
 } from "lucide-react";
 import type { ApiKeyStatus, CliDefinition, CustomCliInput } from "../types/types";
+import { apiCheckNpmCliUpdates } from "../lib/tauriBridge";
 
 interface AuthSettingsViewProps {
   clis: CliDefinition[];
@@ -187,6 +188,8 @@ export const AuthSettingsView: React.FC<AuthSettingsViewProps> = ({
   onCheckUpdate,
 }) => {
   const [inputs, setInputs] = useState<Record<string, string>>({});
+  const [cliUpdates, setCliUpdates] = useState<Record<string, { current: string; latest: string }> | null>(null);
+  const [cliUpdateStatus, setCliUpdateStatus] = useState("");
   const [showAddCliModal, setShowAddCliModal] = useState(false);
   const [modalTab, setModalTab] = useState<"preset" | "manual">("preset");
 
@@ -334,6 +337,23 @@ export const AuthSettingsView: React.FC<AuthSettingsViewProps> = ({
           <Plus className="w-4 h-4" />
           새 CLI 도구 추가 / 설치 가져오기
         </button>
+      </div>
+
+      <div className="rounded-xl border border-slate-700 p-4 text-sm text-slate-300">
+        <button type="button" disabled={cliUpdateStatus === "확인 중..."} className="rounded-lg bg-slate-700 px-3 py-2 hover:bg-slate-600 disabled:opacity-50" onClick={async () => {
+          setCliUpdateStatus("확인 중...");
+          setCliUpdates(null);
+          try {
+            const updates = await apiCheckNpmCliUpdates();
+            setCliUpdates(updates);
+            setCliUpdateStatus(Object.keys(updates).length ? "업데이트 가능한 npm CLI" : "업데이트 가능한 npm CLI가 없습니다.");
+          } catch (err) { setCliUpdateStatus(`확인 실패: ${String(err)}`); }
+        }}>npm CLI 업데이트 확인</button>
+        <p className="mt-2 text-xs text-slate-400">npm 전역 설치된 Codex, Claude, OpenCode, Grok, Gemini만 확인합니다.</p>
+        {cliUpdateStatus && <p className="mt-2">{cliUpdateStatus}</p>}
+        {cliUpdates && Object.entries(cliUpdates).map(([name, info]) => (
+          <p key={name} className="mt-1 text-xs">{name}: {info.current} → {info.latest} · <code>npm install -g {name}@latest</code></p>
+        ))}
       </div>
 
       {/* 새 CLI 도구 등록 모달 */}

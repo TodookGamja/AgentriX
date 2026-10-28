@@ -944,6 +944,15 @@ pub fn analyze_project_workspace(project_path: &str) -> Result<ProjectAnalysisRe
     })
 }
 
+fn truncate_utf8(mut text: String, max_bytes: usize) -> String {
+    if text.len() > max_bytes {
+        let mut end = max_bytes;
+        while !text.is_char_boundary(end) { end -= 1; }
+        text.truncate(end);
+    }
+    text
+}
+
 pub fn get_project_deep_context(project_path: &str) -> Result<ProjectDeepContext> {
     let norm = normalize_project_path(project_path);
     let root = Path::new(&norm);
@@ -970,13 +979,7 @@ pub fn get_project_deep_context(project_path: &str) -> Result<ProjectDeepContext
         .find_map(|f| {
             let p = root.join(f);
             if p.is_file() {
-                std::fs::read_to_string(&p).ok().map(|s| {
-                    if s.len() > 3000 {
-                        s[..3000].to_string()
-                    } else {
-                        s
-                    }
-                })
+                std::fs::read_to_string(&p).ok().map(|s| truncate_utf8(s, 3000))
             } else {
                 None
             }
@@ -988,7 +991,7 @@ pub fn get_project_deep_context(project_path: &str) -> Result<ProjectDeepContext
             let p = root.join(f);
             if p.is_file() {
                 std::fs::read_to_string(&p).ok().map(|s| {
-                    format!("--- {} ---\n{}", f, if s.len() > 2000 { &s[..2000] } else { &s })
+                    format!("--- {} ---\n{}", f, truncate_utf8(s, 2000))
                 })
             } else {
                 None
@@ -1961,6 +1964,18 @@ mod tests {
             env_map.get("ANTHROPIC_API_KEY").map(|s| s.as_str()),
             Some("sk-ant-api03-secret9876")
         );
+    }
+
+    #[test]
+    fn deep_context_truncates_korean_without_panicking() {
+        let dir = std::env::temp_dir().join(format!("acm_deep_context_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("README.md"), format!("{}한글", "a".repeat(2999))).unwrap();
+        std::fs::write(dir.join("package.json"), format!("{}한글", "a".repeat(1999))).unwrap();
+        let context = get_project_deep_context(dir.to_str().unwrap()).unwrap();
+        assert_eq!(context.readme_snippet.unwrap().len(), 2999);
+        assert!(context.manifest_snippet.unwrap().ends_with(&"a".repeat(1999)));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

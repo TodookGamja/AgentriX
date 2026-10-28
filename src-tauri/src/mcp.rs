@@ -182,6 +182,7 @@ pub fn discover_local_cli_extensions(conn: &Connection) -> Result<usize> {
         ("grok", home.join(".grok").join("skills")),
         ("cursor", home.join(".cursor").join("skills")),
         ("antigravity", home.join(".gemini").join("config").join("skills")),
+        ("opencode", home.join(".config").join("opencode").join("skills")),
     ];
 
     let mut skill_clis: BTreeMap<String, (Vec<String>, String, String)> = BTreeMap::new();
@@ -197,6 +198,9 @@ pub fn discover_local_cli_extensions(conn: &Connection) -> Result<usize> {
                     continue;
                 }
                 let skill_md_path = path.join("SKILL.md");
+                if !skill_md_path.is_file() {
+                    continue;
+                }
                 let md_raw = if skill_md_path.is_file() {
                     std::fs::read_to_string(&skill_md_path).unwrap_or_default()
                 } else {
@@ -217,13 +221,25 @@ pub fn discover_local_cli_extensions(conn: &Connection) -> Result<usize> {
 
     for (folder_name, (clis, summary, md_raw)) in skill_clis {
         let item_id = format!("skill-{}", folder_name);
-        let preview_md: String = md_raw.chars().take(600).collect();
+        if md_raw.chars().count() > 600 {
+            let old: Option<String> = conn.query_row(
+                "SELECT config_json FROM registry_items WHERE id = ?1 AND kind = 'skill'",
+                params![item_id], |row| row.get(0),
+            ).ok();
+            if let Some(mut old_cfg) = old.and_then(|s| serde_json::from_str::<Value>(&s).ok()) {
+                let preview: String = md_raw.chars().take(600).collect();
+                if old_cfg.get("skillMarkdown").and_then(Value::as_str) == Some(preview.as_str()) {
+                    old_cfg["skillMarkdown"] = json!(md_raw);
+                    conn.execute("UPDATE registry_items SET config_json = ?1 WHERE id = ?2", params![old_cfg.to_string(), item_id])?;
+                }
+            }
+        }
         let cfg_str = serde_json::to_string_pretty(&json!({
             "skillFolder": folder_name,
-            "skillMarkdown": if preview_md.is_empty() {
+            "skillMarkdown": if md_raw.is_empty() {
                 format!("# {}\n{}", folder_name, summary)
             } else {
-                preview_md
+                md_raw
             }
         }))
         .unwrap_or_default();
@@ -340,7 +356,7 @@ pub fn apply_item_to_cli(
     cli_id: &str,
 ) -> Result<ApplyResult> {
     let items = get_registry_items(conn)?;
-    let item = items
+    let mut item = items
         .into_iter()
         .find(|i| i.id == item_id)
         .ok_or_else(|| anyhow::anyhow!("레지스트리 항목을 찾을 수 없습니다: {}", item_id))?;
@@ -350,9 +366,9 @@ pub fn apply_item_to_cli(
         .find(|c| c.id == cli_id)
         .ok_or_else(|| anyhow::anyhow!("지원하지 않는 CLI ID입니다: {}", cli_id))?;
 
-    let res = apply_item_to_paths(conn, &item, cli_id, &cli_def.config_path, &cli_def.skills_dir)?;
-
     let mut applied = item.applied_clis.clone();
+    item.enabled = !applied.iter().any(|c| c == cli_id);
+    let res = apply_item_to_paths(conn, &item, cli_id, &cli_def.config_path, &cli_def.skills_dir)?;
     if item.enabled {
         if !applied.iter().any(|c| c == cli_id) {
             applied.push(cli_id.to_string());
@@ -391,7 +407,9 @@ pub fn apply_item_to_paths(
                 .map(|e| e.eq_ignore_ascii_case("toml"))
                 .unwrap_or(false);
 
-            if is_toml {
+            if cli_id == "opencode" {
+                apply_mcp_to_opencode(config_path, &item.id, &cfg, item.enabled)?;
+            } else if is_toml {
                 apply_mcp_to_toml(config_path, &item.id, &cfg, item.enabled)?;
             } else {
                 apply_mcp_to_json(config_path, &item.id, &cfg, item.enabled)?;
@@ -454,25 +472,50 @@ pub fn apply_item_to_paths(
     }
 }
 
+fn apply_mcp_to_opencode(path: &Path, server_id: &str, cfg: &Value, enabled: bool) -> Result<()> {
+    let mut root: Value = if path.exists() {
+        serde_json::from_str(&std::fs::read_to_string(path)?)?
+    } else {
+        json!({})
+    };
+    let root_obj = root.as_object_mut().ok_or_else(|| anyhow::anyhow!("OpenCode config must be a JSON object"))?;
+    let mcp = root_obj.entry("mcp").or_insert_with(|| json!({}));
+    let servers = mcp.as_object_mut().ok_or_else(|| anyhow::anyhow!("OpenCode mcp must be a JSON object"))?;
+    if enabled {
+        let entry = if let Some(url) = cfg.get("url").and_then(Value::as_str) {
+            let mut entry = json!({"type": "remote", "url": url, "enabled": true});
+            if let Some(headers) = cfg.get("headers") { entry["headers"] = headers.clone(); }
+            entry
+        } else {
+            let command = cfg.get("command").and_then(Value::as_str).ok_or_else(|| anyhow::anyhow!("MCP command is required"))?;
+            let mut args = vec![json!(command)];
+            if let Some(extra) = cfg.get("args").and_then(Value::as_array) { args.extend(extra.iter().cloned()); }
+            json!({"type": "local", "command": args, "environment": cfg.get("env").cloned().unwrap_or_else(|| json!({})), "enabled": true})
+        };
+        servers.insert(server_id.to_string(), entry);
+    } else if servers.remove(server_id).is_none() {
+        let name = if server_id == "headroom-mcp" { Some("headroom") } else { server_id.strip_prefix("mcp-") };
+        if let Some(name) = name { servers.remove(name); }
+    }
+    std::fs::write(path, serde_json::to_string_pretty(&root)?)?;
+    Ok(())
+}
+
 fn apply_mcp_to_json(path: &Path, server_id: &str, cfg: &Value, enabled: bool) -> Result<()> {
     let mut root: Value = if path.exists() {
-        let raw = std::fs::read_to_string(path).unwrap_or_default();
-        serde_json::from_str(&raw).unwrap_or_else(|_| json!({}))
+        let raw = std::fs::read_to_string(path)?;
+        serde_json::from_str(&raw)?
     } else {
         json!({})
     };
 
-    if !root.is_object() {
-        root = json!({});
-    }
+    anyhow::ensure!(root.is_object(), "MCP config must be a JSON object");
 
     let root_obj = root.as_object_mut().unwrap();
     let mcp_servers = root_obj
         .entry("mcpServers")
         .or_insert_with(|| json!({}));
-    if !mcp_servers.is_object() {
-        *mcp_servers = json!({});
-    }
+    anyhow::ensure!(mcp_servers.is_object(), "mcpServers must be a JSON object");
 
     let servers_map = mcp_servers.as_object_mut().unwrap();
     if enabled {
@@ -488,7 +531,10 @@ fn apply_mcp_to_json(path: &Path, server_id: &str, cfg: &Value, enabled: bool) -
             }),
         );
     } else {
-        servers_map.remove(server_id);
+        if servers_map.remove(server_id).is_none() {
+            let discovered_name = if server_id == "headroom-mcp" { Some("headroom") } else { server_id.strip_prefix("mcp-") };
+            if let Some(name) = discovered_name { servers_map.remove(name); }
+        }
     }
 
     let formatted = serde_json::to_string_pretty(&root)?;
@@ -498,8 +544,8 @@ fn apply_mcp_to_json(path: &Path, server_id: &str, cfg: &Value, enabled: bool) -
 
 fn apply_mcp_to_toml(path: &Path, server_id: &str, cfg: &Value, enabled: bool) -> Result<()> {
     let mut root_table: toml::Table = if path.exists() {
-        let raw = std::fs::read_to_string(path).unwrap_or_default();
-        toml::from_str(&raw).unwrap_or_default()
+        let raw = std::fs::read_to_string(path)?;
+        toml::from_str(&raw)?
     } else {
         toml::Table::new()
     };
@@ -508,9 +554,7 @@ fn apply_mcp_to_toml(path: &Path, server_id: &str, cfg: &Value, enabled: bool) -
         .entry("mcp_servers")
         .or_insert_with(|| toml::Value::Table(toml::Table::new()));
 
-    if !mcp_entry.is_table() {
-        *mcp_entry = toml::Value::Table(toml::Table::new());
-    }
+    anyhow::ensure!(mcp_entry.is_table(), "mcp_servers must be a TOML table");
 
     let servers_table = mcp_entry.as_table_mut().unwrap();
     if enabled {
@@ -540,7 +584,10 @@ fn apply_mcp_to_toml(path: &Path, server_id: &str, cfg: &Value, enabled: bool) -
 
         servers_table.insert(server_id.to_string(), toml::Value::Table(srv));
     } else {
-        servers_table.remove(server_id);
+        if servers_table.remove(server_id).is_none() {
+            let discovered_name = if server_id == "headroom-mcp" { Some("headroom") } else { server_id.strip_prefix("mcp-") };
+            if let Some(name) = discovered_name { servers_table.remove(name); }
+        }
     }
 
     let serialized = toml::to_string_pretty(&root_table)?;
@@ -552,6 +599,58 @@ fn apply_mcp_to_toml(path: &Path, server_id: &str, cfg: &Value, enabled: bool) -
 mod tests {
     use super::*;
     use crate::db::{get_backups, setup_schema};
+
+    #[test]
+    fn opencode_mcp_uses_native_format_and_preserves_other_settings() {
+        let dir = std::env::temp_dir().join(format!("acm_opencode_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("opencode.json");
+        std::fs::write(&path, r#"{"model":"provider/model","mcp":{"other":{"type":"remote","url":"https://example.com"}}}"#).unwrap();
+        apply_mcp_to_opencode(&path, "headroom-mcp", &json!({"command":"headroom","args":["mcp","serve"],"env":{"A":"B"}}), true).unwrap();
+        let result: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(result["model"], "provider/model");
+        assert_eq!(result["mcp"]["headroom-mcp"]["command"], json!(["headroom", "mcp", "serve"]));
+        assert_eq!(result["mcp"]["headroom-mcp"]["environment"]["A"], "B");
+        apply_mcp_to_opencode(&path, "headroom-mcp", &json!({}), false).unwrap();
+        let result: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(result["mcp"].get("headroom-mcp").is_none());
+        assert!(result["mcp"].get("other").is_some());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn invalid_mcp_configs_are_not_overwritten() {
+        let dir = std::env::temp_dir().join(format!("acm_invalid_mcp_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let json_path = dir.join("config.json");
+        let toml_path = dir.join("config.toml");
+        std::fs::write(&json_path, "{invalid").unwrap();
+        std::fs::write(&toml_path, "[invalid").unwrap();
+        assert!(apply_mcp_to_json(&json_path, "test", &json!({}), true).is_err());
+        assert!(apply_mcp_to_toml(&toml_path, "test", &json!({}), true).is_err());
+        assert_eq!(std::fs::read_to_string(&json_path).unwrap(), "{invalid");
+        assert_eq!(std::fs::read_to_string(&toml_path).unwrap(), "[invalid");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn remove_discovered_server_by_its_original_name() {
+        let dir = std::env::temp_dir().join(format!("acm_remove_mcp_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let json_path = dir.join("config.json");
+        let toml_path = dir.join("config.toml");
+        std::fs::write(&json_path, r#"{"mcpServers":{"example":{"command":"test"},"other":{}}}"#).unwrap();
+        std::fs::write(&toml_path, "[mcp_servers.example]\ncommand = 'test'\n[mcp_servers.other]\n").unwrap();
+        apply_mcp_to_json(&json_path, "mcp-example", &json!({}), false).unwrap();
+        apply_mcp_to_toml(&toml_path, "mcp-example", &json!({}), false).unwrap();
+        let json: Value = serde_json::from_str(&std::fs::read_to_string(&json_path).unwrap()).unwrap();
+        let toml: toml::Table = toml::from_str(&std::fs::read_to_string(&toml_path).unwrap()).unwrap();
+        assert!(json["mcpServers"].get("example").is_none());
+        assert!(json["mcpServers"].get("other").is_some());
+        assert!(toml["mcp_servers"].get("example").is_none());
+        assert!(toml["mcp_servers"].get("other").is_some());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn apply_mcp_to_json_when_existing_claude_config_creates_backup_and_preserves_existing_keys() {

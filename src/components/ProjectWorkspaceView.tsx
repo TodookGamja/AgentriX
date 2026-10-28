@@ -61,12 +61,10 @@ interface ProjectWorkspaceViewProps {
   onSpawnAgent: (agent: ProjectAgentRecord) => Promise<void>;
   onSpawnAllAgents: () => Promise<void>;
   onFocusSession: (sessionId: string) => void;
-  onStartRawCli: (cliId: string, initialCommand?: string) => Promise<void>;
+  onStartRawCli: (cliId: string, initialCommand?: string, permissionArgs?: string[], permissionAuto?: boolean) => Promise<void>;
   onOpenBlackboard: () => void;
   onOpenDispatchModal: () => void;
   onOpenAiDeepModal?: () => void;
-  headroomAppliedClis?: string[];
-  onApplyHeadroomToCli?: (cliId: string) => Promise<void>;
   onStartAutoRelay?: () => Promise<void>;
   onStartAutoRelayWithGoal?: (goal: string) => Promise<void>;
   onToggleAgentWrapper?: (agent: ProjectAgentRecord) => Promise<void>;
@@ -93,8 +91,6 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
   onOpenBlackboard,
   onOpenDispatchModal,
   onOpenAiDeepModal,
-  headroomAppliedClis,
-  onApplyHeadroomToCli,
   onStartAutoRelay,
   onStartAutoRelayWithGoal,
   onToggleAgentWrapper,
@@ -109,14 +105,14 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
   const [showAutoRelayModal, setShowAutoRelayModal] = useState(false);
   const [relayGoalInput, setRelayGoalInput] = useState("");
   const [showPermissionSettings, setShowPermissionSettings] = useState(false);
-  const [permMode, setPermMode] = useState<"full_auto" | "manual" | "custom">("full_auto");
+  const [permMode, setPermMode] = useState<"full_auto" | "manual" | "custom">("manual");
   const [cliFlags, setCliFlags] = useState<Record<string, string>>({
     claude: "--dangerously-skip-permissions",
     codex: "--sandbox workspace-write --ask-for-approval never",
     grok: "--yolo",
     antigravity: "--dangerously-skip-permissions --mode auto",
     cursor: "--trust",
-    opencode: "--auto",
+    opencode: "",
     aider: "--yes-always",
     ollama: "--yolo",
   });
@@ -128,7 +124,7 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
     grok: { flag: "--yolo", desc: "Grok 공식 Yolo 승인 스킵" },
     antigravity: { flag: "--dangerously-skip-permissions --mode auto", desc: "에이전틱 계획 & 승인 자동화" },
     cursor: { flag: "--trust", desc: "Cursor 워크스페이스 신뢰 모드" },
-    opencode: { flag: "--auto", desc: "OpenCode 전자율 모드" },
+    opencode: { flag: "", desc: "환경변수로 모든 권한 자동 승인" },
     aider: { flag: "--yes-always", desc: "Aider 자동 파일 변경 승인" },
     ollama: { flag: "--yolo", desc: "로컬 모델 자동 승인" },
   };
@@ -234,9 +230,7 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
 
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 2xl:grid-cols-6 gap-2.5">
             {clis.map((cli) => {
-              const isApplied = Boolean(
-                headroomAppliedClis?.includes(cli.id) || cli.wrapperBinary
-              );
+              const isApplied = Boolean(cli.wrapperBinary);
 
               return (
                 <div
@@ -245,7 +239,7 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
                 >
                 <div className="flex items-center justify-between gap-1.5">
                   <button
-                    onClick={() => onStartRawCli(cli.id)}
+                    onClick={() => onStartRawCli(cli.id, undefined, (permMode === "manual" ? "" : permMode === "custom" ? cliFlags[cli.id] ?? "" : DEFAULT_CLI_FLAGS[cli.id]?.flag ?? "").trim().split(/\s+/).filter(Boolean), permMode === "full_auto")}
                     className="inline-flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-800/60 text-slate-100 text-xs font-semibold transition min-w-0 truncate flex-1"
                     title={`${cli.name} 일반 CLI 즉시 실행`}
                   >
@@ -257,23 +251,14 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
                   </button>
                   {isApplied ? (
                     <button
-                      onClick={() => onStartRawCli(cli.id, "__WRAPPER__")}
+                      onClick={() => onStartRawCli(cli.id, "__WRAPPER__", (permMode === "manual" ? "" : permMode === "custom" ? cliFlags[cli.id] ?? "" : DEFAULT_CLI_FLAGS[cli.id]?.flag ?? "").trim().split(/\s+/).filter(Boolean), permMode === "full_auto")}
                       className="px-2 py-1 rounded-lg bg-emerald-600/15 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/30 text-xs font-bold transition flex items-center gap-1 shadow-sm shrink-0"
-                      title={`${cli.name}을(를) Headroom 토큰 최적화 모드로 즉시 실행`}
+                      title={cli.id === "opencode" ? "Headroom 래퍼로 실행합니다. 사용자 지정 API 공급자의 프록시 지원은 Headroom 버전에 따라 다릅니다." : `${cli.name}을(를) Headroom 토큰 최적화 모드로 즉시 실행`}
                     >
                       <Sparkles className="w-3 h-3 text-emerald-400" />
                       Headroom
                     </button>
-                  ) : onApplyHeadroomToCli ? (
-                    <button
-                      onClick={() => onApplyHeadroomToCli(cli.id)}
-                      className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-emerald-500/15 text-slate-400 hover:text-emerald-300 border border-dashed border-slate-700 hover:border-emerald-500/40 text-[11px] font-medium transition flex items-center gap-1 shrink-0"
-                      title={`${cli.name}에 Headroom 토큰 최적화 도구를 추가 및 적용합니다`}
-                    >
-                      <Plus className="w-3 h-3 text-emerald-400" />
-                      추가
-                    </button>
-                  ) : null}
+                  ) : <span className="text-[10px] text-slate-500" title="지원되는 Headroom 실행 파일이나 CLI 래퍼가 감지되지 않았습니다">Headroom 미감지</span>}
                 </div>
                 <CliModelField cliId={cli.id} />
                 </div>
@@ -400,7 +385,7 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
               <span className="text-slate-300">
-                실행 권한 모드:{" "}
+                일반 CLI 실행 권한 모드:{" "}
                 <strong className="text-emerald-300 font-bold">
                   {permMode === "full_auto"
                     ? "⚡ 도구별 맞춤 자동 승인 (Full-Auto)"
@@ -411,7 +396,7 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
               </span>
               <span className="text-slate-500 hidden sm:inline">
                 {permMode === "full_auto"
-                  ? "— 각 CLI 공식 규격에 맞춰 권한 질문(Run this command?)을 스킵합니다"
+                  ? "— 지원되는 CLI에 자동 승인 설정을 전달합니다"
                   : permMode === "manual"
                   ? "— 실행 권한 스킵 플래그를 붙이지 않고 매 실행 시 확인합니다"
                   : "— 사용자가 직접 수정한 도구별 플래그를 적용합니다"}
