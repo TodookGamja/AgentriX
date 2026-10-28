@@ -1,5 +1,6 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Select } from "./Select";
+import { DEFAULT_CLI_FLAGS, loadPermSettings, savePermSettings, type PermMode } from "../lib/permissionSettings";
 import {
   Bot,
   BrainCircuit,
@@ -61,7 +62,7 @@ interface ProjectWorkspaceViewProps {
   onSpawnAgent: (agent: ProjectAgentRecord) => Promise<void>;
   onSpawnAllAgents: () => Promise<void>;
   onFocusSession: (sessionId: string) => void;
-  onStartRawCli: (cliId: string, initialCommand?: string, permissionArgs?: string[], permissionAuto?: boolean) => Promise<void>;
+  onStartRawCli: (cliId: string, initialCommand?: string) => Promise<void>;
   onOpenBlackboard: () => void;
   onOpenDispatchModal: () => void;
   onOpenAiDeepModal?: () => void;
@@ -105,29 +106,10 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
   const [showAutoRelayModal, setShowAutoRelayModal] = useState(false);
   const [relayGoalInput, setRelayGoalInput] = useState("");
   const [showPermissionSettings, setShowPermissionSettings] = useState(false);
-  const [permMode, setPermMode] = useState<"full_auto" | "manual" | "custom">("manual");
-  const [cliFlags, setCliFlags] = useState<Record<string, string>>({
-    claude: "--dangerously-skip-permissions",
-    codex: "--sandbox workspace-write --ask-for-approval never",
-    grok: "--yolo",
-    antigravity: "--dangerously-skip-permissions --mode auto",
-    cursor: "--trust",
-    opencode: "",
-    aider: "--yes-always",
-    ollama: "--yolo",
-  });
+  const [permMode, setPermMode] = useState<PermMode>(() => loadPermSettings().mode);
+  const [cliFlags, setCliFlags] = useState<Record<string, string>>(() => loadPermSettings().flags);
+  useEffect(() => savePermSettings(permMode, cliFlags), [permMode, cliFlags]);
   const [trustSaved, setTrustSaved] = useState(false);
-
-  const DEFAULT_CLI_FLAGS: Record<string, { flag: string; desc: string }> = {
-    claude: { flag: "--dangerously-skip-permissions", desc: "Claude 공식 무인 권한 스킵" },
-    codex: { flag: "--sandbox workspace-write -a never", desc: "Codex 공식 전자율 실행" },
-    grok: { flag: "--yolo", desc: "Grok 공식 Yolo 승인 스킵" },
-    antigravity: { flag: "--dangerously-skip-permissions --mode auto", desc: "에이전틱 계획 & 승인 자동화" },
-    cursor: { flag: "--trust", desc: "Cursor 워크스페이스 신뢰 모드" },
-    opencode: { flag: "", desc: "환경변수로 모든 권한 자동 승인" },
-    aider: { flag: "--yes-always", desc: "Aider 자동 파일 변경 승인" },
-    ollama: { flag: "--yolo", desc: "로컬 모델 자동 승인" },
-  };
 
   const handleTrustClick = async () => {
     if (onTrustProjectFolder) {
@@ -399,7 +381,7 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
                 >
                 <div className="flex items-center justify-between gap-1.5">
                   <button
-                    onClick={() => onStartRawCli(cli.id, undefined, (permMode === "manual" ? "" : permMode === "custom" ? cliFlags[cli.id] ?? "" : DEFAULT_CLI_FLAGS[cli.id]?.flag ?? "").trim().split(/\s+/).filter(Boolean), permMode === "full_auto")}
+                    onClick={() => onStartRawCli(cli.id, undefined)}
                     className="inline-flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-800/60 text-slate-100 text-xs font-semibold transition min-w-0 truncate flex-1"
                     title={`${cli.name} 일반 CLI 즉시 실행`}
                   >
@@ -411,7 +393,7 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
                   </button>
                   {isApplied ? (
                     <button
-                      onClick={() => onStartRawCli(cli.id, "__WRAPPER__", (permMode === "manual" ? "" : permMode === "custom" ? cliFlags[cli.id] ?? "" : DEFAULT_CLI_FLAGS[cli.id]?.flag ?? "").trim().split(/\s+/).filter(Boolean), permMode === "full_auto")}
+                      onClick={() => onStartRawCli(cli.id, "__WRAPPER__")}
                       className="px-2 py-1 rounded-lg bg-emerald-600/15 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/30 text-xs font-bold transition flex items-center gap-1 shadow-sm shrink-0"
                       title={cli.id === "opencode" ? "Headroom 래퍼로 실행합니다. 사용자 지정 API 공급자의 프록시 지원은 Headroom 버전에 따라 다릅니다." : `${cli.name}을(를) Headroom 토큰 최적화 모드로 즉시 실행`}
                     >

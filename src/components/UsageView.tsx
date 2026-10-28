@@ -452,11 +452,15 @@ export const UsageView: React.FC<UsageViewProps> = ({
                   ? "통합 세션 한도"
                   : q.cliId === "antigravity"
                   ? "5시간 세션 (기본 Gemini)"
+                  : q.cliId === "cursor"
+                  ? "Cursor 모델 (월간)"
                   : "5시간 세션 한도";
 
               const labelWk =
                 q.cliId === "antigravity"
                   ? "주간 한도 (기본 Gemini)"
+                  : q.cliId === "cursor"
+                  ? "기타 모델 (월간)"
                   : "주간 한도 (7일)";
 
               return (

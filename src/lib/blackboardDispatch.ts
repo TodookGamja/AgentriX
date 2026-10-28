@@ -56,3 +56,9 @@ export function parseBoardTasks(board: string, agentIds: string[]): BoardTask[] 
   }
   return tasks;
 }
+
+// PM이 디스패처가 읽을 수 있는 형식으로 작업표를 쓰도록 표 형식과 팀원 ID를 알려주는 한 줄 지침 (PTY 주입용, 개행 없음)
+export function boardProtocol(agents: { id: string; name: string; roleTitle: string }[]): string {
+  const roster = agents.map((a) => `\`${a.id}\`=${a.name}(${a.roleTitle})`).join(", ");
+  return `[작업표 규칙] .ai-agents/BLACKBOARD.md에 "| ID | 작업 | 담당 | 선행 | 기준 | 상태 |" 표로 작업을 적으세요. ID는 T1, T2…, 담당 칸에는 아래 에이전트 ID를 백틱으로 정확히 쓰고, 상태는 ⏳ 대기 / 🔥 착수 / ✅ 완료 중 하나만 씁니다. 🔥 착수로 바꾸면 담당 에이전트 터미널에 자동 전달되고, ✅ 완료되면 당신에게 보고됩니다. BLACKBOARD.md는 셸 명령(PowerShell 등)이 아닌 파일 편집 도구로 UTF-8 그대로 수정하세요(한글·이모지 깨짐 방지). 팀원: ${roster}`;
+}

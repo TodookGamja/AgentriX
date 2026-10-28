@@ -73,6 +73,7 @@ import {
   apiUpsertProjectAgent,
   apiUpsertRegistryItem,
   apiWriteToSession,
+  apiGetSessionContext,
   apiWindowMinimize,
   apiWindowToggleMaximize,
   apiWindowClose,
@@ -92,7 +93,8 @@ import { ProjectWorkspaceView } from "./components/ProjectWorkspaceView";
 import { UsageView } from "./components/UsageView";
 import { McpSkillView } from "./components/McpSkillView";
 import { AuthSettingsView } from "./components/AuthSettingsView";
-import { TeamModeView } from "./components/TeamModeView";
+import { AvatarDisplay, TeamModeView } from "./components/TeamModeView";
+import { ProfileModal } from "./components/ProfileModal";
 import {
   TokenOptimizationModal,
   TokenOptimizationConfig,
@@ -100,7 +102,10 @@ import {
 import { AiDeepTeamModal } from "./components/AiDeepTeamModal";
 import { FolderPickerModal } from "./components/FolderPickerModal";
 import { AgentrixLogo } from "./components/AgentrixLogo";
-import { parseBoardTasks } from "./lib/blackboardDispatch";
+import { boardProtocol, parseBoardTasks } from "./lib/blackboardDispatch";
+import { countNewChars } from "./lib/tokenEstimate";
+import { forgetSessionInput, getSessionInputHistory, setInstructionKeyResolver } from "./lib/inputHistory";
+import { permissionLaunch } from "./lib/permissionSettings";
 import type {
   ActiveNavTab,
   CustomCliInput,
@@ -111,6 +116,13 @@ import type {
   ProjectFolderRecord,
   UserProfile,
 } from "./types/types";
+
+// 지시 이력은 같은 프로젝트의 같은 에이전트(없으면 CLI)끼리 공유: 릴레이된 새 세션·재시작 후 세션이 그대로 이어받음
+// ponytail: 에이전트 없이 같은 폴더에 같은 CLI 세션을 여러 개 띄우면 이력이 섞임, 문제되면 세션 이름까지 키에 포함
+setInstructionKeyResolver((id) => {
+  const s = useAppStore.getState().sessions.find((x) => x.id === id);
+  return s ? `${s.cwd}|${s.agentId || s.cliId}` : id;
+});
 
 export function getShortFolderName(pathStr?: string): string {
   if (!pathStr) return "기본폴더";
@@ -456,6 +468,7 @@ export const App: React.FC = () => {
   });
 
   // 최초 기동 시 신규 사용자 프로필 온보딩 모달 표시 여부
+  const [showProfileModal, setShowProfileModal] = useState(false);
   const [isOnboardingProfileOpen, setIsOnboardingProfileOpen] = useState<boolean>(() => {
     try {
       return !localStorage.getItem("ai_cli_profile_configured");
@@ -661,6 +674,10 @@ export const App: React.FC = () => {
   const seenLinesRef = useRef<Record<string, Set<string>>>({});
   const relayedSessionsRef = useRef<Set<string>>(new Set());
   const compactAttemptedRef = useRef<Set<string>>(new Set());
+  const lastChunkAtRef = useRef<Record<string, number>>({});
+  const realContextSessionsRef = useRef<Set<string>>(new Set());
+  const contextSourceRef = useRef<Record<string, string>>({});
+  const staleContextRef = useRef<Record<string, number>>({});
 
   const handleSaveTokenOptConfig = (cfg: TokenOptimizationConfig) => {
     setTokenOptConfig(cfg);
@@ -847,9 +864,7 @@ export const App: React.FC = () => {
   const handleStartRawCliSession = async (
     cliId: string,
     initialCommand?: string,
-    customCwd?: string,
-    permissionArgs?: string[],
-    permissionAuto?: boolean
+    customCwd?: string
   ) => {
     const targetCwd = customCwd || selectedProjectPath;
     if (!targetCwd) {
@@ -867,7 +882,8 @@ export const App: React.FC = () => {
     }
 
     try {
-      const session = await apiStartSession(cliId, targetCwd, initialCommand, undefined, getCliDefaultModel(cliId), permissionArgs, permissionAuto);
+      const perm = permissionLaunch(cliId);
+      const session = await apiStartSession(cliId, targetCwd, initialCommand, undefined, getCliDefaultModel(cliId), perm.args, perm.auto);
       addSession(session);
       setActiveNav("terminal");
       setProjectSubView("session");
@@ -966,7 +982,7 @@ export const App: React.FC = () => {
       setTimeout(() => {
         apiWriteToSession(
           pmSession.id,
-          "프로젝트 무인 자율 협업 파이프라인이 가동되었습니다. .ai-agents/BLACKBOARD.md의 요구사항을 읽고 하위 작업을 분해하여 각 에이전트에게 할당하고 작업을 시작하세요.\r"
+          `프로젝트 무인 자율 협업 파이프라인이 가동되었습니다. .ai-agents/BLACKBOARD.md의 요구사항을 읽고 하위 작업을 분해하여 각 에이전트에게 할당하고 작업을 시작하세요. ${boardProtocol(projectAgents)}\r`
         ).catch(() => {});
       }, 2000);
     }
@@ -1010,16 +1026,21 @@ export const App: React.FC = () => {
     // 1. autoCompactFirst가 켜져 있고 수동이 아니며 아직 1차 /compact를 시도하지 않았다면:
     if (!isManual && tokenOptConfig.autoCompactFirst && !compactAttemptedRef.current.has(sessionId)) {
       compactAttemptedRef.current.add(sessionId);
+      if (realContextSessionsRef.current.has(sessionId)) staleContextRef.current[sessionId] = sessionTokensRef.current[sessionId];
+      // 토큰 수치를 50%로 먼저 낮춘다: 대기 중 들어오는 다음 청크가 같은 임계치로 다시 호출해 곧장 릴레이로 넘어가는 것을 막음
+      sessionTokensRef.current[sessionId] = Math.round(tokenOptConfig.contextThresholdTokens * 0.5);
+      setSessionTokens({ ...sessionTokensRef.current });
       showToast(
-        `⚡ [토큰 최적화] '${targetSession.name}' 컨텍스트 임계치 도달: 1차 /compact 압축을 실행합니다. (압축 후에도 초과 시 새 세션으로 자동 인수인계)`,
+        `⚡ [토큰 최적화] '${targetSession.name}' 컨텍스트 임계치 도달: 작업이 멈추면 1차 /compact 압축을 실행합니다. (압축 후에도 초과 시 새 세션으로 자동 인수인계)`,
         "info"
       );
+      // 응답 생성 중인 TUI는 /compact를 무시·거부하므로 출력이 3초 멈출 때(유휴)까지 기다린다 (최대 5분)
+      for (let i = 0; i < 300 && Date.now() - (lastChunkAtRef.current[sessionId] ?? 0) < 3000; i++) {
+        await new Promise((r) => setTimeout(r, 1000));
+      }
       try {
         await apiWriteToSession(sessionId, "/compact\r");
       } catch {}
-      // 1차 컴팩트 실행 후 토큰 수치를 가상으로 50% 수준으로 조정하여 사용자가 계속 진행할 수 있게 함
-      sessionTokensRef.current[sessionId] = Math.round(tokenOptConfig.contextThresholdTokens * 0.5);
-      setSessionTokens({ ...sessionTokensRef.current });
       return; // 새 세션을 열지 않고 1차 압축 효과를 유지함
     }
 
@@ -1035,6 +1056,10 @@ export const App: React.FC = () => {
       .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "")
       .trim()
       .slice(-1400);
+    const instructions = getSessionInputHistory(sessionId);
+    const instructionList = instructions.length
+      ? instructions.map((t, i) => `### 지시 ${i + 1}\n\`\`\`\n${t}\n\`\`\``).join("\n\n")
+      : "기록된 지시 없음";
 
     const relayMatch = targetSession.name.match(/릴레이\s*(\d+)/);
     const relayCount = relayMatch ? parseInt(relayMatch[1], 10) + 1 : 1;
@@ -1049,6 +1074,11 @@ export const App: React.FC = () => {
 
 ---
 
+## 📝 직전 세션이 받은 지시 (시간순, 마지막이 가장 최근)
+${instructionList}
+
+---
+
 ## 📋 직전 세션 최근 진행 요약 및 터미널 출력
 \`\`\`
 ${recentSnippet || "진행 내역 기록 없음"}
@@ -1057,8 +1087,8 @@ ${recentSnippet || "진행 내역 기록 없음"}
 ---
 
 ## 🎯 신규 세션 연속 작업 지침
-1. 위 작업 로그와 현재 프로젝트 파일 구조를 확인하세요.
-2. 직전 세션에서 진행 중이던 중단점부터 작업을 지체 없이 이어서 수행하세요.
+1. 위 "받은 지시"가 당신의 실제 작업입니다. 현재 프로젝트 파일 상태와 터미널 출력을 보고 어디까지 끝났는지 판단하세요.
+2. 끝나지 않은 지시를 중단점부터 직접 끝까지 수행하세요. 상황 확인이나 요약만 하고 멈추지 마세요.
 3. 작업 완료 또는 주요 진척 사항은 .ai-agents/BLACKBOARD.md 에 기록하세요.
 `;
 
@@ -1088,11 +1118,15 @@ ${recentSnippet || "진행 내역 기록 없음"}
           ? "__WRAPPER__"
           : undefined;
 
+      const perm = permissionLaunch(targetSession.cliId);
       const newSession = await apiStartSession(
         targetSession.cliId,
         targetSession.cwd,
         initialCmd,
-        targetSession.agentId || undefined
+        targetSession.agentId || undefined,
+        undefined,
+        perm.args,
+        perm.auto
       );
 
       newSession.name = newSessionName;
@@ -1116,7 +1150,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
       // 5. 새 세션에 md 파일 읽기 및 연속 작업 지침 자동 주입
       setTimeout(async () => {
         try {
-          const handoffPrompt = `.ai-agents/SESSION_HANDOFF.md 파일을 확인하고 직전 세션에서 진행하던 작업을 이어서 완료해 주세요.\r`;
+          const handoffPrompt = `.ai-agents/SESSION_HANDOFF.md를 읽으세요. 거기 적힌 '직전 세션이 받은 지시' 중 아직 끝나지 않은 것을 지금 이어서 끝까지 수행하세요. 확인·요약만 하고 멈추지 마세요.\r`;
           await apiWriteToSession(newSession.id, handoffPrompt);
         } catch {}
       }, 6000);
@@ -1134,6 +1168,10 @@ ${recentSnippet || "진행 내역 기록 없음"}
           delete seenLinesRef.current[targetSession.id];
           compactAttemptedRef.current.delete(targetSession.id);
           relayedSessionsRef.current.delete(targetSession.id);
+          forgetSessionInput(targetSession.id);
+          realContextSessionsRef.current.delete(targetSession.id);
+          delete contextSourceRef.current[targetSession.id];
+          delete staleContextRef.current[targetSession.id];
         }, 1200);
 
         showToast(
@@ -1152,37 +1190,54 @@ ${recentSnippet || "진행 내역 기록 없음"}
   };
 
   // 실시간 PTY 청크 수신 시 토큰 추정 및 자동 임계치 감지
-  // TUI는 스피너·입력창을 초당 수십 번 다시 그리므로 원문 길이로 세면 추정 토큰이 폭증한다.
-  // ANSI 제어문자를 걷어내고, 숫자만 바뀐 줄(경과 시간·카운터)을 같은 줄로 보아 처음 보는 줄만 센다.
+  // 원문 길이로 세면 TUI 재그리기·스크롤로 추정 토큰이 폭증하므로 처음 보는 줄만 센다 (countNewChars)
   const handleSessionOutputChunk = (sessionId: string, text: string) => {
+    lastChunkAtRef.current[sessionId] = Date.now();
     const plain = text.replace(/\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-_]/g, "");
-    const seen = (seenLinesRef.current[sessionId] ??= new Set());
-    let newChars = 0;
-    for (const line of plain.split(/[\r\n]+/)) {
-      const key = line.replace(/\d+/g, "#").replace(/\s+/g, " ").trim();
-      if (key.length < 2 || seen.has(key)) continue;
-      seen.add(key);
-      newChars += key.length;
-    }
-    // ponytail: 줄 캐시 상한 5000개, 넘으면 비우고 다시 셈 (추정치가 조금 늘 수 있음)
-    if (seen.size > 5000) seen.clear();
+    const newChars = countNewChars(text, (seenLinesRef.current[sessionId] ??= new Set()));
 
     const prevLog = sessionRecentOutputRef.current[sessionId] || "";
     sessionRecentOutputRef.current[sessionId] = (prevLog + plain).slice(-3000);
-    if (newChars === 0) return;
+    // 실측(CLI 로그) 토큰을 받는 세션은 화면 추정치를 더하지 않는다
+    if (newChars === 0 || realContextSessionsRef.current.has(sessionId)) return;
+    applySessionTokens(sessionId, (sessionTokensRef.current[sessionId] || 0) + Math.round(newChars / 3.8));
+  };
 
-    const nextTotal = (sessionTokensRef.current[sessionId] || 0) + Math.round(newChars / 3.8);
-    sessionTokensRef.current[sessionId] = nextTotal;
+  const applySessionTokens = (sessionId: string, total: number) => {
+    sessionTokensRef.current[sessionId] = total;
     setSessionTokens({ ...sessionTokensRef.current });
-
     if (
       tokenOptConfig.autoRelayEnabled &&
-      nextTotal >= tokenOptConfig.contextThresholdTokens &&
+      total >= tokenOptConfig.contextThresholdTokens &&
       !relayedSessionsRef.current.has(sessionId)
     ) {
       handleAutoRelaySession(sessionId, false);
     }
   };
+  const applySessionTokensRef = useRef(applySessionTokens);
+  applySessionTokensRef.current = applySessionTokens;
+
+  // 실측 컨텍스트 토큰: CLI 로그(Claude·Codex·Antigravity·OpenCode)에서 10초마다 읽는다. 로그가 없는 CLI는 null → 위 화면 추정치 유지
+  useEffect(() => {
+    const tick = async () => {
+      for (const s of useAppStore.getState().sessions) {
+        // 같은 폴더의 다른 세션이 이미 잡은 로그는 제외 (팀 모드에서 에이전트끼리 로그가 섞이지 않게)
+        const claimed = Object.entries(contextSourceRef.current)
+          .filter(([id]) => id !== s.id)
+          .map(([, src]) => src);
+        const ctx = await apiGetSessionContext(s, claimed).catch(() => null);
+        if (!ctx) continue;
+        contextSourceRef.current[s.id] = ctx.source;
+        realContextSessionsRef.current.add(s.id);
+        // /compact 직후엔 로그의 마지막 값이 압축 전 수치 그대로라, 새 호출로 값이 바뀔 때까지 무시 (안 그러면 곧장 새 세션으로 넘어감)
+        if (staleContextRef.current[s.id] === ctx.tokens) continue;
+        delete staleContextRef.current[s.id];
+        applySessionTokensRef.current(s.id, ctx.tokens);
+      }
+    };
+    const id = window.setInterval(tick, 10000);
+    return () => window.clearInterval(id);
+  }, []);
 
   const handleToggleAllAgentsWrapper = async (enable: boolean) => {
     if (!selectedProjectPath || projectAgents.length === 0) return;
@@ -1249,7 +1304,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
         ) || sessions.find((s) => s.cwd === selectedProjectPath);
 
       if (pmSession) {
-        const pmDirective = `[무인 자율 협업 오케스트레이션 지침] 사용자 목표: "${goal.replace(/[\r\n]+/g, " ")}". 당신은 총괄 PM 리더입니다. 요구사항을 분석하여 .ai-agents/BLACKBOARD.md에 설계 결정을 남기고, 각 도메인 에이전트에게 작업을 순차 전달하세요. 사용자는 당신의 보고만을 기다립니다. 즉시 작업을 시작하세요.\r\n`;
+        const pmDirective = `[무인 자율 협업 오케스트레이션 지침] 사용자 목표: "${goal.replace(/[\r\n]+/g, " ")}". 당신은 총괄 PM 리더입니다. 요구사항을 분석하여 .ai-agents/BLACKBOARD.md에 설계 결정을 남기고, 각 도메인 에이전트에게 작업을 순차 전달하세요. 사용자는 당신의 보고만을 기다립니다. 즉시 작업을 시작하세요. ${boardProtocol(projectAgents)}\r\n`;
         apiWriteToSession(pmSession.id, pmDirective).catch(() => {});
       }
     }, 2000);
@@ -1930,7 +1985,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
       const tasks = parseBoardTasks(board, agents.map((a) => a.id));
       const pmSession = projSessions.find(
         (s) => s.name.includes("PM") || s.agentRole?.includes("PM") || s.agentRole?.includes("리더")
-      );
+      ) ?? projSessions[0];
       const doneIds: string[] = [];
       for (const t of tasks) {
         const key = `${t.taskId}:${t.status}:${t.agentId}`;
@@ -1946,13 +2001,15 @@ ${recentSnippet || "진행 내역 기록 없음"}
         try {
           await apiWriteToSession(
             target.id,
-            `[PM 배정] .ai-agents/BLACKBOARD.md 작업표의 ${t.taskId} 작업을 수행하세요. 완료하면 해당 행의 상태를 ✅ 완료로 바꾸고 결과를 한 줄 메모로 남기세요.\r`
+            `[PM 배정] .ai-agents/BLACKBOARD.md 작업표의 ${t.taskId} 작업을 수행하세요. 완료하면 해당 행의 상태를 ✅ 완료로 바꾸고 결과를 한 줄 메모로 남기세요. BLACKBOARD.md는 셸 명령이 아닌 파일 편집 도구로 수정하세요(한글 깨짐 방지).\r`
           );
           sent.add(key);
           showToast(`📋 ${t.taskId} → '${target.name}' 자동 배정`, "info");
         } catch {}
       }
-      if (pmSession && doneIds.length > 0) {
+      // 표 전체가 ✅면 PM이 이미 최종 보고 중이므로 완료 알림을 또 보내지 않는다 (중복 라운드 방지)
+      const allDone = tasks.length > 0 && tasks.every((t) => t.status === "done");
+      if (pmSession && doneIds.length > 0 && !allDone) {
         apiWriteToSession(
           pmSession.id,
           `[완료 보고] ${doneIds.join(", ")} 작업이 ✅ 완료되었습니다. .ai-agents/BLACKBOARD.md를 확인하고 선행 조건이 풀린 다음 작업의 상태를 🔥 착수로 바꾸세요. 남은 작업이 없으면 사용자에게 최종 보고하세요.\r`
@@ -2540,19 +2597,14 @@ ${recentSnippet || "진행 내역 기록 없음"}
             {/* 1. 사용자 프로필 미니 카드 (클릭 시 프로필 설정 모달) */}
             <div
               onClick={() => {
-                setOnboardName(userProfile.name);
-                setOnboardRole(userProfile.role);
-                setOnboardDept(userProfile.department);
-                setOnboardCli(userProfile.favoriteCli);
-                setOnboardEmoji(userProfile.avatarEmoji);
-                setIsOnboardingProfileOpen(true);
+                setShowProfileModal(true);
               }}
               className="flex items-center justify-between p-2 rounded-xl bg-slate-800/70 hover:bg-slate-800 border border-slate-700/60 transition cursor-pointer select-none group"
               title="내 프로필 및 개발 환경 설정 변경"
             >
               <div className="flex items-center gap-2 min-w-0">
                 <span className="text-base leading-none p-1 rounded-lg bg-slate-900 border border-slate-700/60 shrink-0">
-                  {userProfile.avatarEmoji || "👨‍💻"}
+                  <AvatarDisplay value={userProfile.avatarEmoji} size="sm" />
                 </span>
                 <div className="min-w-0">
                   <span className="text-xs font-bold text-slate-200 group-hover:text-indigo-400 transition truncate block">
@@ -2952,8 +3004,8 @@ ${recentSnippet || "진행 내역 기록 없음"}
                   setActiveSessionId(sessionId);
                   setProjectSubView("session");
                 }}
-                onStartRawCli={async (cliId, initialCmd, permissionArgs, permissionAuto) => {
-                  await handleStartRawCliSession(cliId, initialCmd, undefined, permissionArgs, permissionAuto);
+                onStartRawCli={async (cliId, initialCmd) => {
+                  await handleStartRawCliSession(cliId, initialCmd);
                 }}
                 onOpenBlackboard={handleOpenBlackboard}
                 onOpenDispatchModal={() => setShowDispatchModal(true)}
@@ -3201,7 +3253,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
               onAddMember={handleAddTeamMember}
               onDeleteMember={handleDeleteTeamMember}
               userProfile={userProfile}
-              onUpdateUserProfile={handleUpdateUserProfile}
+              onOpenProfile={() => setShowProfileModal(true)}
               myUsage={myUsage}
               clis={clis}
             />
@@ -3927,6 +3979,15 @@ ${recentSnippet || "진행 내역 기록 없음"}
         </div>
       )}
 
+      {showProfileModal && (
+        <ProfileModal
+          userProfile={userProfile}
+          clis={clis}
+          onSave={handleUpdateUserProfile}
+          onClose={() => setShowProfileModal(false)}
+        />
+      )}
+
       {/* 모달 9: 신규 사용자 최초 온보딩 & 나만의 프로필 설정 모달 */}
       {isOnboardingProfileOpen && (
         <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-md flex items-center justify-center p-4 select-none animate-in fade-in duration-200">
@@ -3935,7 +3996,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
             <div className="px-6 py-5 bg-gradient-to-r from-indigo-950/80 via-slate-900 to-slate-950 border-b border-slate-800 flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-2xl bg-indigo-600 flex items-center justify-center text-white text-xl shadow-lg shadow-indigo-500/30">
-                  {onboardEmoji}
+                  <AvatarDisplay value={onboardEmoji} size="lg" />
                 </div>
                 <div>
                   <h3 className="text-base font-bold text-slate-100 flex items-center gap-2">

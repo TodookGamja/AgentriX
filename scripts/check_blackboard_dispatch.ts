@@ -45,3 +45,25 @@ assert.deepEqual(parseBoardTasks(board3, ids), [
 ]);
 
 console.log("All blackboard dispatch parser tests passed successfully!");
+
+// 4. 심층 팀빌딩 에이전트(deep-ai-*): PM이 이름만 쓰면 매칭 불가 → 프로토콜로 ID를 알려줘야 연결됨
+{
+  const { boardProtocol } = await import("../src/lib/blackboardDispatch.ts");
+  const deep = [
+    { id: "deep-ai-app-1-m1x", name: "총괄 PM", roleTitle: "리더" },
+    { id: "deep-ai-app-2-m1x", name: "백엔드 엔지니어", roleTitle: "API" },
+    { id: "deep-ai-app-3-m1x", name: "QA 엔지니어", roleTitle: "테스트" },
+  ];
+  const deepIds = deep.map((a) => a.id);
+  const byName = `| ID | 작업 | 담당 | 선행 | 기준 | 상태 |\n|---|---|---|---|---|---|\n| T1 | API | 백엔드 엔지니어 | — | ok | 🔥 착수 |`;
+  assert.deepEqual(parseBoardTasks(byName, deepIds), []);
+  const proto = boardProtocol(deep);
+  assert.ok(!/[\r\n]/.test(proto), "PTY 주입용이라 개행이 없어야 함");
+  for (const id of deepIds) assert.ok(proto.includes(`\`${id}\``));
+  const byProto = `| ID | 작업 | 담당 | 선행 | 기준 | 상태 |\n|---|---|---|---|---|---|\n| T1 | API | \`deep-ai-app-2-m1x\` | — | ok | 🔥 착수 |\n| T2 | 테스트 | \`deep-ai-app-3-m1x\` | T1 | ok | ✅ 완료 |`;
+  assert.deepEqual(parseBoardTasks(byProto, deepIds), [
+    { taskId: "T1", agentId: "deep-ai-app-2-m1x", status: "start" },
+    { taskId: "T2", agentId: "deep-ai-app-3-m1x", status: "done" },
+  ]);
+  console.log("Deep team protocol check passed!");
+}

@@ -8,6 +8,7 @@ export async function apiInstallNpmCliUpdate(packageName: string): Promise<void>
   return invoke("install_npm_cli_update", { package: packageName });
 }
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
+import { recordSessionInput } from "./inputHistory";
 import type {
   ApiKeyStatus,
   ApplyResult,
@@ -284,6 +285,7 @@ export async function apiStartSession(
 }
 
 export async function apiWriteToSession(sessionId: string, data: string): Promise<void> {
+  recordSessionInput(sessionId, data);
   if (isTauriRuntime()) {
     // TUI(Claude/Codex 등)는 "텍스트+\r" 한 덩어리를 붙여넣기로 인식해 Enter를 줄바꿈으로 삼킨다.
     // 텍스트를 먼저 쓰고 붙여넣기 처리가 끝난 뒤 Enter를 별도 키 입력으로 보낸다. (단일 키 입력은 그대로 통과)
@@ -301,6 +303,21 @@ export async function apiWriteToSession(sessionId: string, data: string): Promis
   const prev = fallbackBuffers.get(sessionId) ?? "";
   fallbackBuffers.set(sessionId, prev + data);
   fallbackListeners.forEach((cb) => cb({ sessionId, data }));
+}
+
+// CLI 로그에서 읽은 실제 컨텍스트 토큰. 로그가 없는 CLI(grok·cursor·새 CLI)나 브라우저 실행이면 null
+export async function apiGetSessionContext(
+  session: SessionInfo,
+  claimed: string[]
+): Promise<{ tokens: number; window: number | null; source: string } | null> {
+  if (!isTauriRuntime()) return null;
+  return invoke("get_session_context", {
+    cliId: session.cliId,
+    sessionId: session.id,
+    cwd: session.cwd,
+    startedAt: session.startedAt,
+    claimed,
+  });
 }
 
 export async function apiResizeSession(

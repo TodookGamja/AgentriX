@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { useState } from "react";
 import { Select } from "./Select";
 import {
   Bar,
@@ -14,12 +14,10 @@ import {
   Activity,
   Award,
   CheckCircle2,
-  Image as ImageIcon,
   RefreshCw,
   Settings,
   Sparkles,
   Trash2,
-  Upload,
   UserPlus,
   Users,
   X,
@@ -32,7 +30,7 @@ interface TeamModeViewProps {
   onAddMember?: (name: string, role: string, dept: string, cli: string) => Promise<void>;
   onDeleteMember?: (memberId: string) => Promise<void>;
   userProfile?: UserProfile;
-  onUpdateUserProfile?: (profile: UserProfile) => void;
+  onOpenProfile?: () => void;
   clis: CliDefinition[];
   myUsage?: {
     rolling5h: number;
@@ -80,45 +78,6 @@ export const AvatarDisplay: React.FC<{
   );
 };
 
-// 프로필 설정용 테마별 대규모 이모지 프리셋 카테고리
-const EMOJI_CATEGORIES = [
-  {
-    id: "dev",
-    name: "개발자 & 엔지니어",
-    emojis: [
-      "👨‍💻", "👩‍💻", "🧑‍💻", "👨‍🔬", "👩‍🔬", "🧑‍🚀", "👨‍🎨", "🕵️‍♂️",
-      "🧙‍♂️", "🦸‍♂️", "🥷", "⚡", "🚀", "👑", "🔥", "💡",
-      "🏆", "🎖️", "⭐", "💎",
-    ],
-  },
-  {
-    id: "tech",
-    name: "AI & 로봇 & 사이버",
-    emojis: [
-      "🤖", "🦾", "👾", "💻", "🖥️", "⚙️", "🔮", "🧬",
-      "📡", "🛸", "🔋", "🛡️", "🎯", "🕹️", "💾", "🌐",
-      "📟", "🧭", "🔬", "🔭",
-    ],
-  },
-  {
-    id: "animals",
-    name: "마스코트 & 동물",
-    emojis: [
-      "🦊", "🐱", "🐶", "🦁", "🐯", "🐼", "🐨", "🐸",
-      "🐙", "🦄", "🦅", "🦉", "🐲", "🦖", "🦈", "🐝",
-      "🦔", "🐧", "🐒", "🐺",
-    ],
-  },
-  {
-    id: "fun",
-    name: "표정 & 캐릭터 & 펀",
-    emojis: [
-      "😎", "🤠", "🥳", "👻", "👽", "🎃", "🥑", "☕",
-      "🍕", "🎮", "🏎️", "🛹", "✨", "🎉", "🌈", "🍟",
-      "🍦", "🎸", "🥊", "🎳",
-    ],
-  },
-];
 
 export const TeamModeView: React.FC<TeamModeViewProps> = ({
   members,
@@ -132,7 +91,7 @@ export const TeamModeView: React.FC<TeamModeViewProps> = ({
     favoriteCli: "claude",
     avatarEmoji: "👨‍💻",
   },
-  onUpdateUserProfile,
+  onOpenProfile,
   myUsage = {
     rolling5h: 0,
     weekly: 0,
@@ -157,16 +116,6 @@ export const TeamModeView: React.FC<TeamModeViewProps> = ({
   const [newConnectTarget, setNewConnectTarget] = useState("");
   const [newQuotaLimit, setNewQuotaLimit] = useState("500k");
 
-  // 내 프로필 설정 모달 상태
-  const [showProfileModal, setShowProfileModal] = useState(false);
-  const [profName, setProfName] = useState(userProfile.name);
-  const [profRole, setProfRole] = useState(userProfile.role);
-  const [profDept, setProfDept] = useState(userProfile.department);
-  const [profCli, setProfCli] = useState(userProfile.favoriteCli);
-  const [profEmoji, setProfEmoji] = useState(userProfile.avatarEmoji);
-  const [activeEmojiCategory, setActiveEmojiCategory] = useState("dev");
-
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const totalTeamWeekly = members.reduce((acc, m) => acc + m.weeklyTokens, myUsage.weekly);
   const totalTeamCost = members.reduce((acc, m) => acc + m.costUsd, myUsage.costUsd);
@@ -181,52 +130,6 @@ export const TeamModeView: React.FC<TeamModeViewProps> = ({
     await onAddMember(newName.trim(), newRole.trim(), newDept.trim(), newCli);
     setNewName("");
     setShowAddModal(false);
-  };
-
-  const handleProfileSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!profName.trim()) return;
-    if (onUpdateUserProfile) {
-      onUpdateUserProfile({
-        name: profName.trim(),
-        role: profRole.trim(),
-        department: profDept.trim(),
-        favoriteCli: profCli,
-        avatarEmoji: profEmoji,
-      });
-    }
-    setShowProfileModal(false);
-  };
-
-  const openProfileModal = () => {
-    setProfName(userProfile.name);
-    setProfRole(userProfile.role);
-    setProfDept(userProfile.department);
-    setProfCli(userProfile.favoriteCli);
-    setProfEmoji(userProfile.avatarEmoji);
-    setActiveEmojiCategory("dev");
-    setShowProfileModal(true);
-  };
-
-  // 이미지 파일 업로드 핸들러 (Base64 변환)
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (!file.type.startsWith("image/")) {
-      alert("이미지 파일(PNG, JPG, SVG, WebP 등)만 선택할 수 있습니다.");
-      return;
-    }
-
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const dataUrl = event.target?.result as string;
-      if (dataUrl) {
-        setProfEmoji(dataUrl);
-      }
-    };
-    reader.readAsDataURL(file);
-    e.target.value = "";
   };
 
   return (
@@ -244,7 +147,7 @@ export const TeamModeView: React.FC<TeamModeViewProps> = ({
 
         <div className="flex items-center gap-2">
           <button
-            onClick={openProfileModal}
+            onClick={onOpenProfile}
             className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-indigo-600 dark:text-indigo-300 border border-indigo-500/30 text-xs font-bold transition shadow-sm active:scale-95"
           >
             <Settings className="w-3.5 h-3.5" />
@@ -300,7 +203,7 @@ export const TeamModeView: React.FC<TeamModeViewProps> = ({
             <div className="font-extrabold text-slate-100">{myUsage.weekly.toLocaleString()}</div>
           </div>
           <button
-            onClick={openProfileModal}
+            onClick={onOpenProfile}
             className="px-3 py-1.5 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-700 dark:text-indigo-200 text-xs font-bold border border-indigo-500/40 transition active:scale-95"
           >
             프로필 수정
@@ -468,7 +371,7 @@ export const TeamModeView: React.FC<TeamModeViewProps> = ({
               </td>
               <td className="py-3 px-4 text-center whitespace-nowrap">
                 <button
-                  onClick={openProfileModal}
+                  onClick={onOpenProfile}
                   className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-indigo-300 text-[11px] font-semibold border border-indigo-500/30 transition shadow-sm active:scale-95"
                   title="내 프로필 수정"
                 >
@@ -735,187 +638,6 @@ export const TeamModeView: React.FC<TeamModeViewProps> = ({
         </div>
       )}
 
-      {/* 내 프로필 설정 모달 (아바타 이모지 카테고리 60여 종 + 커스텀 이미지 파일 업로드 지원) */}
-      {showProfileModal && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <form
-            onSubmit={handleProfileSubmit}
-            className="w-full max-w-lg rounded-2xl bg-slate-900 border border-slate-700 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
-          >
-            <div className="px-5 py-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between shrink-0">
-              <div className="flex items-center gap-2">
-                <Settings className="w-4 h-4 text-indigo-400" />
-                <h3 className="text-sm font-bold text-slate-100">내 프로필 설정</h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowProfileModal(false)}
-                className="p-1 rounded text-slate-400 hover:text-slate-100 transition"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="p-5 space-y-4 text-xs overflow-y-auto flex-1">
-              {/* 아바타 선택 및 이미지 업로드 영역 */}
-              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
-                <div className="flex items-center justify-between">
-                  <label className="text-slate-300 font-bold flex items-center gap-1.5">
-                    <ImageIcon className="w-3.5 h-3.5 text-indigo-400" />
-                    프로필 아바타 (이모지 또는 이미지 파일)
-                  </label>
-                  {/* 숨겨진 파일 인풋 */}
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*"
-                    onChange={handleImageUpload}
-                    className="hidden"
-                  />
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-200 border border-indigo-500/40 text-[11px] font-semibold transition shadow-sm active:scale-95"
-                      title="내 컴퓨터의 이미지 파일(PNG, JPG, SVG, WebP) 업로드"
-                    >
-                      <Upload className="w-3 h-3" />
-                      이미지 파일 등록
-                    </button>
-                    {(profEmoji.startsWith("data:image/") ||
-                      profEmoji.startsWith("http")) && (
-                      <button
-                        type="button"
-                        onClick={() => setProfEmoji("👨‍💻")}
-                        className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-rose-900/40 hover:text-rose-300 text-slate-400 text-[10px] transition"
-                        title="이모지로 되돌리기"
-                      >
-                        이미지 삭제
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-3">
-                  <div className="p-2 rounded-2xl bg-slate-900 border border-indigo-500/40 shadow-inner flex items-center justify-center shrink-0">
-                    <AvatarDisplay value={profEmoji} size="xl" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <span className="text-[11px] text-slate-400 block mb-1">
-                      직접 이모지 입력 또는 아래 프리셋/이미지 선택
-                    </span>
-                    <input
-                      value={profEmoji.startsWith("data:image/") ? "[사용자 업로드 이미지 적용됨]" : profEmoji}
-                      onChange={(e) => setProfEmoji(e.target.value)}
-                      disabled={profEmoji.startsWith("data:image/")}
-                      className="w-full px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-100 text-xs focus:outline-none focus:border-indigo-500 disabled:text-indigo-400 disabled:font-medium font-mono"
-                    />
-                  </div>
-                </div>
-
-                {/* 이모지 카테고리 탭 */}
-                <div className="space-y-2 pt-1 border-t border-slate-800/80">
-                  <div className="flex items-center gap-1 overflow-x-auto no-scrollbar pb-1">
-                    {EMOJI_CATEGORIES.map((cat) => (
-                      <button
-                        key={cat.id}
-                        type="button"
-                        onClick={() => setActiveEmojiCategory(cat.id)}
-                        className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition whitespace-nowrap ${
-                          activeEmojiCategory === cat.id
-                            ? "bg-indigo-600 text-white shadow-sm"
-                            : "bg-slate-900 text-slate-400 hover:text-slate-200"
-                        }`}
-                      >
-                        {cat.name}
-                      </button>
-                    ))}
-                  </div>
-
-                  {/* 선택된 카테고리의 이모지 그리드 */}
-                  <div className="grid grid-cols-8 sm:grid-cols-10 gap-1.5 p-2 rounded-xl bg-slate-900/80 border border-slate-800 max-h-36 overflow-y-auto">
-                    {EMOJI_CATEGORIES.find((c) => c.id === activeEmojiCategory)?.emojis.map(
-                      (emoji) => (
-                        <button
-                          key={emoji}
-                          type="button"
-                          onClick={() => setProfEmoji(emoji)}
-                          className={`text-lg p-1.5 rounded-lg border transition hover:scale-110 active:scale-95 flex items-center justify-center ${
-                            profEmoji === emoji
-                              ? "bg-indigo-600/40 border-indigo-500 shadow-sm"
-                              : "bg-slate-950 border-slate-800 hover:border-slate-600"
-                          }`}
-                        >
-                          {emoji}
-                        </button>
-                      )
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-slate-300 mb-1 font-semibold">이름 (닉네임)</label>
-                <input
-                  required
-                  value={profName}
-                  onChange={(e) => setProfName(e.target.value)}
-                  placeholder="예: 홍길동, Alex"
-                  className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-100 focus:outline-none focus:border-indigo-500"
-                />
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-slate-300 mb-1 font-semibold">담당 역할 / 직무</label>
-                  <input
-                    value={profRole}
-                    onChange={(e) => setProfRole(e.target.value)}
-                    placeholder="예: Lead Architect & Developer"
-                    className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-100 focus:outline-none focus:border-indigo-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-slate-300 mb-1 font-semibold">부서 / 팀명</label>
-                  <input
-                    value={profDept}
-                    onChange={(e) => setProfDept(e.target.value)}
-                    placeholder="예: Platform Engineering"
-                    className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-100 focus:outline-none focus:border-indigo-500"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-slate-300 mb-1 font-semibold">주력 사용 CLI</label>
-                <Select
-                  value={profCli}
-                  onChange={setProfCli}
-                  options={cliOptions}
-                  className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-100"
-                />
-              </div>
-            </div>
-
-            <div className="px-5 py-3.5 bg-slate-950 border-t border-slate-800 flex justify-end gap-2 shrink-0">
-              <button
-                type="button"
-                onClick={() => setShowProfileModal(false)}
-                className="px-3.5 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs hover:bg-slate-700 transition"
-              >
-                취소
-              </button>
-              <button
-                type="submit"
-                className="px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition shadow"
-              >
-                프로필 저장
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
     </div>
   );
 };

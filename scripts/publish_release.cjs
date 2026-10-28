@@ -2,16 +2,61 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 
+const owner = 'TodookGamja';
+const repo = 'AgentriX';
+
+// release-notes/<tag>.md에는 "## 한국어" / "## English" 아래 항목(- **🔧 제목**: 설명)만 적고, 양식은 여기서 고정 생성
+function renderNotes(tag, prevTag) {
+    const src = fs.readFileSync(path.join('release-notes', `${tag}.md`), 'utf8');
+    const section = (name) => {
+        const m = src.match(new RegExp(`## ${name}\\s*\\n([\\s\\S]*?)(?=\\n## |$)`));
+        const items = (m ? m[1] : '').split(/\r?\n/).filter((l) => l.startsWith('- '));
+        if (!items.length) throw new Error(`release-notes/${tag}.md: "## ${name}" 섹션에 "- " 항목이 없습니다.`);
+        return items.join('\n');
+    };
+    const ko = section('한국어');
+    const en = section('English');
+    return `## 🚀 AgentriX ${tag} 업데이트 안내
+
+### ✨ 이번 버전(${tag}) 주요 수정 및 개선 사항
+${ko}
+
+### 📦 다운로드 안내
+- **단일 무설치 실행 파일**: \`AgentriX.exe\` (다운로드 후 바로 실행)
+- **포터블 압축 패키지**: \`AgentriX-Portable-${tag}-win-x64.zip\`
+- **윈도우 정식 설치 인스톨러**: \`AgentriX-Setup-${tag}.exe\`
+
+---
+
+## 🚀 AgentriX ${tag} Release Notes
+
+### ✨ What's New in ${tag}
+${en}
+
+### 📦 Downloads
+- **Single portable executable**: \`AgentriX.exe\` (run directly after download)
+- **Portable ZIP package**: \`AgentriX-Portable-${tag}-win-x64.zip\`
+- **Windows installer**: \`AgentriX-Setup-${tag}.exe\`
+${prevTag ? `
+**Full Changelog**: https://github.com/${owner}/${repo}/compare/${prevTag}...${tag}
+` : ''}`;
+}
+
+const releaseName = (tag) => `AgentriX ${tag} - 업데이트 릴리즈 (Official Release)`;
+
+// 미리보기: node scripts/publish_release.cjs --notes v1.1.0 v1.0.10
+if (process.argv[2] === '--notes') {
+    process.stdout.write(renderNotes(process.argv[3], process.argv[4]));
+    process.exit(0);
+}
+
 async function main() {
     const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
     const version = pkg.version;
     const tag = `v${version}`;
-    const notes = fs.readFileSync(path.join('release-notes', `${tag}.md`), 'utf8');
-    if (!notes.includes('## 한국어') || !notes.includes('## English')) {
-        throw new Error(`Release notes for ${tag} must include Korean and English sections.`);
-    }
-    const owner = 'TodookGamja';
-    const repo = 'AgentriX';
+    const prevTag = (await (await fetch(`https://api.github.com/repos/${owner}/${repo}/releases?per_page=10`)).json())
+        .map((r) => r.tag_name).find((t) => t !== tag);
+    const notes = renderNotes(tag, prevTag);
 
     console.log(`Starting automated release for ${tag}...`);
 
@@ -75,7 +120,7 @@ async function main() {
         const createBody = {
             tag_name: tag,
             target_commitish: 'main',
-            name: `AgentriX ${tag} - 업데이트 릴리즈 (Official Release)`,
+            name: releaseName(tag),
             body: notes,
             draft: false,
             prerelease: false

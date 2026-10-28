@@ -118,7 +118,7 @@ pub fn resolve_safe_cwd(cwd: Option<String>) -> String {
 impl PtyManager {
     pub fn start_session_with_def(
         &self,
-        cli_def: CliDefinition,
+        mut cli_def: CliDefinition,
         cwd: Option<String>,
         injected_env: HashMap<String, String>,
         initial_command: Option<String>,
@@ -148,6 +148,13 @@ impl PtyManager {
             crate::db::sync_agent_files_on_disk(agent);
         }
 
+        let session_id = Uuid::new_v4().to_string();
+        // Claude 로그 파일명(<id>.jsonl)을 PTY 세션 ID로 고정 → 실제 컨텍스트 토큰을 이 세션의 로그에서 정확히 읽음 (context.rs)
+        let resumes = cli_def.args.iter().any(|a| matches!(a.as_str(), "--resume" | "-r" | "--continue" | "-c" | "--session-id"));
+        if cli_def.id == "claude" && !resumes {
+            cli_def.args.extend(["--session-id".to_string(), session_id.clone()]);
+        }
+
         let (mut cmd, binary_label) = build_platform_command(
             &cli_def,
             initial_command.as_deref(),
@@ -156,6 +163,8 @@ impl PtyManager {
         );
 
         cmd.cwd(&safe_cwd);
+        // OpenCode는 실제 cwd보다 상속된 PWD를 작업 폴더로 우선 사용함 → 앱을 다른 폴더의 셸에서 띄우면 엉뚱한 폴더에서 작업하므로 맞춰줌
+        cmd.env("PWD", &safe_cwd);
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
 
@@ -195,7 +204,6 @@ impl PtyManager {
         let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
         drop(pair.slave);
 
-        let session_id = Uuid::new_v4().to_string();
         let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
         let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
         let output_buffer = Arc::new(Mutex::new(OutputBuffer::default()));

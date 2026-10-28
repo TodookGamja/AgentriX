@@ -2,6 +2,7 @@
 
 
 pub mod cli;
+pub mod context;
 pub mod db;
 pub mod handoff;
 pub mod mcp;
@@ -783,6 +784,20 @@ fn trust_project_folder(project_path: String) -> Result<(), String> {
     Ok(())
 }
 
+/// 세션의 실제 컨텍스트 토큰 (CLI 로그 기반). 로그가 없는 CLI는 None → 프론트가 화면 추정치 사용
+#[tauri::command]
+async fn get_session_context(
+    cli_id: String,
+    session_id: String,
+    cwd: String,
+    started_at: String,
+    claimed: Vec<String>,
+) -> Result<Option<context::ContextUsage>, String> {
+    tokio::task::spawn_blocking(move || context::read_context(&cli_id, &session_id, &cwd, &started_at, &claimed))
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn start_session(
     state: State<'_, AppState>,
@@ -827,11 +842,12 @@ fn start_session(
     if let Some(m) = model {
         cli_def.args.extend(["--model".to_string(), m.trim().to_string()]);
     }
+    // 팀 에이전트는 pty.rs에서 CLI별 자동 승인 플래그를 붙임 → 플래그가 없는 OpenCode는 환경변수로 동일하게 처리
     if agent_meta.is_none() {
         cli_def.args.extend(permission_args.unwrap_or_default());
-        if cli_id == "opencode" && permission_auto.unwrap_or(false) {
-            injected_env.insert("OPENCODE_PERMISSION".into(), r#"{"*":"allow"}"#.into());
-        }
+    }
+    if cli_id == "opencode" && (agent_meta.is_some() || permission_auto.unwrap_or(false)) {
+        injected_env.insert("OPENCODE_PERMISSION".into(), r#"{"*":"allow"}"#.into());
     }
 
     state.pty.start_session_with_def(
@@ -1578,6 +1594,7 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            get_session_context,
             detect_clis,
             add_custom_cli,
             delete_custom_cli,
