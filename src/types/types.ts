@@ -263,12 +263,14 @@ export interface DirectoryItem {
   path: string;
   is_dir: boolean;
   is_hidden: boolean;
+  size?: number;
+  extension?: string;
 }
 
 export interface QuickAccessItem {
   name: string;
   path: string;
-  kind: "home" | "desktop" | "documents" | "downloads" | "drive" | "project";
+  kind: "home" | "desktop" | "documents" | "downloads" | "pictures" | "drive" | "project";
 }
 
 export interface DirectoryListing {

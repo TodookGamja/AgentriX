@@ -1409,19 +1409,20 @@ ${recentSnippet || "진행 내역 기록 없음"}
     }
   };
 
-  const handleStopSession = async (sessionId: string, e: React.MouseEvent) => {
+  const handleStopSession = (sessionId: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    try {
-      await apiStopSession(sessionId);
-      removeSession(sessionId);
-      const remaining = currentProjectSessions.filter((s) => s.id !== sessionId);
-      if (remaining.length === 0) {
-        setProjectSubView("overview");
-      }
-      showToast("세션이 종료되었습니다.", "info");
-    } catch (err) {
-      showToast(`세션 종료 오류: ${String(err)}`, "error");
+    // 1. UI에서 즉시 세션 탭 제거하여 사용자 체감 렉(지연) 0ms 달성
+    removeSession(sessionId);
+    const remaining = currentProjectSessions.filter((s) => s.id !== sessionId);
+    if (remaining.length === 0) {
+      setProjectSubView("overview");
     }
+    showToast("세션이 종료되었습니다.", "info");
+
+    // 2. 백엔드 PTY 및 프로세스 트리 정리는 백그라운드에서 비동기로 수행
+    apiStopSession(sessionId).catch((err) => {
+      console.warn("세션 백그라운드 종료 경고:", err);
+    });
   };
 
   const handleBroadcastPrompt = async (text: string) => {
@@ -1957,11 +1958,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
 
   const handleConfirmExitAll = async () => {
     setShowExitConfirmModal(false);
-    for (const s of sessions) {
-      try {
-        await apiStopSession(s.id);
-      } catch {}
-    }
+    await Promise.allSettled(sessions.map((s) => apiStopSession(s.id)));
     apiWindowExit().catch(() => apiWindowClose().catch(() => {}));
   };
 

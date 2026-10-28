@@ -85,9 +85,27 @@ export async function apiPickProjectFolder(theme?: string): Promise<string | nul
   return null;
 }
 
-export async function apiListDirectoryEntries(path?: string): Promise<DirectoryListing | null> {
+export async function apiListDirectoryEntries(
+  path?: string,
+  includeFiles: boolean = false
+): Promise<DirectoryListing | null> {
   if (isTauriRuntime()) {
-    return invoke<DirectoryListing>("list_directory_entries", { path });
+    return invoke<DirectoryListing>("list_directory_entries", {
+      path,
+      includeFiles,
+    });
+  }
+  return null;
+}
+
+export async function apiReadFileAsBase64(path: string): Promise<string | null> {
+  if (isTauriRuntime() && path) {
+    try {
+      return await invoke<string>("read_file_as_base64", { path });
+    } catch (err) {
+      console.warn("Base64 읽기 오류:", err);
+      return null;
+    }
   }
   return null;
 }

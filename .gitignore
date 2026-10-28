@@ -49,6 +49,7 @@ Thumbs.db
 desktop.ini
 
 # Project Harness Temp & Logs
+.attachments/
 .ai-agents/
 .claude/
 hive/

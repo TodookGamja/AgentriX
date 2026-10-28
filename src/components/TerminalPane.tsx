@@ -25,6 +25,7 @@ import {
   apiSaveClipboardImage,
   apiWriteToSession,
 } from "../lib/tauriBridge";
+import { FilePickerModal } from "./FilePickerModal";
 
 interface TerminalPaneProps {
   session: SessionInfo;
@@ -77,6 +78,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
   const cursorRef = useRef<number>(0);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
+  const [isFilePickerOpen, setIsFilePickerOpen] = useState(false);
 
   // 하단 전용 채팅창 상태
   const [promptText, setPromptText] = useState("");
@@ -153,6 +155,17 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       }
     }
     e.target.value = "";
+  };
+
+  // AgentriX 테마 커스텀 파일 피커에서 파일들이 선택되었을 때
+  const handleCustomFilePickerSelect = async (paths: string[]) => {
+    if (!paths || paths.length === 0) return;
+    const payload = paths.map((p) => `"${p}"`).join(" ") + " ";
+    await apiWriteToSession(session.id, payload);
+    if (termRef.current) {
+      termRef.current.write(payload);
+      termRef.current.focus();
+    }
   };
 
   // 포커스 진입 시 xterm 자동 포커스
@@ -659,7 +672,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
             </button>
           )}
 
-          {/* 파일 / 이미지 첨부 (클립보드 Ctrl+V 및 드래그 앤 드롭 지원) */}
+          {/* 파일 / 이미지 첨부 (테마 맞춤형 모달 UI 및 클립보드 Ctrl+V 및 드래그 앤 드롭 지원) */}
           <input
             type="file"
             ref={fileInputRef}
@@ -668,11 +681,11 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
             multiple
           />
           <button
-            onClick={() => fileInputRef.current?.click()}
-            className="inline-flex items-center gap-1 px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition text-[11px] font-semibold whitespace-nowrap shrink-0"
-            title="이미지 또는 파일 선택 (경로가 터미널에 자동 입력됩니다 / Ctrl+V 붙여넣기 및 드래그 앤 드롭 지원)"
+            onClick={() => setIsFilePickerOpen(true)}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition text-[11px] font-semibold whitespace-nowrap shrink-0 shadow-sm"
+            title="이미지 또는 파일 선택 (테마 맞춤 파일 탐색기 열기 / Ctrl+V 붙여넣기 및 드래그 앤 드롭 지원)"
           >
-            <Paperclip className="w-3 h-3 text-indigo-400 shrink-0" />
+            <Paperclip className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
             <span className="hidden sm:inline">파일/이미지 첨부</span>
           </button>
 
@@ -849,8 +862,16 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
                 }
               }}
               placeholder={`[${folderName}] ${session.name}에게 보낼 메시지나 파일/이미지 붙여넣기(Ctrl+V)...`}
-              className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700/90 focus:border-indigo-500 focus:outline-none text-xs text-slate-100 placeholder-slate-500 resize-none leading-relaxed"
+              className="w-full pl-3 pr-8 py-2 rounded-lg bg-slate-950 border border-slate-700/90 focus:border-indigo-500 focus:outline-none text-xs text-slate-100 placeholder-slate-500 resize-none leading-relaxed"
             />
+            <button
+              type="button"
+              onClick={() => setIsFilePickerOpen(true)}
+              className="absolute right-2.5 top-2.5 p-1 rounded-md text-slate-400 hover:text-indigo-400 hover:bg-slate-800 transition"
+              title="파일 또는 이미지 탐색 모달 열기"
+            >
+              <Paperclip className="w-3.5 h-3.5" />
+            </button>
           </div>
 
           <div className="flex flex-col gap-1 shrink-0">
@@ -875,6 +896,15 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
           </div>
         </div>
       </div>
+
+      {/* 테마 맞춤형 파일 & 이미지 선택 모달 */}
+      <FilePickerModal
+        isOpen={isFilePickerOpen}
+        onClose={() => setIsFilePickerOpen(false)}
+        onSelectFiles={handleCustomFilePickerSelect}
+        initialPath={session.cwd}
+        onFallbackNative={() => fileInputRef.current?.click()}
+      />
     </div>
   );
 };

@@ -202,13 +202,17 @@ pub struct DirectoryItem {
     pub path: String,
     pub is_dir: bool,
     pub is_hidden: bool,
+    #[serde(default)]
+    pub size: Option<u64>,
+    #[serde(default)]
+    pub extension: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuickAccessItem {
     pub name: String,
     pub path: String,
-    pub kind: String, // "home", "desktop", "documents", "downloads", "drive", "project"
+    pub kind: String, // "home", "desktop", "documents", "downloads", "pictures", "drive", "project"
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -223,6 +227,7 @@ pub struct DirectoryListing {
 fn list_directory_entries(
     state: State<'_, AppState>,
     path: Option<String>,
+    include_files: Option<bool>,
 ) -> Result<DirectoryListing, String> {
     let user_profile = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\Users".into());
     let default_root = if std::path::Path::new(&user_profile).exists() {
@@ -244,30 +249,47 @@ fn list_directory_entries(
     };
 
     let parent_path = resolved_path.parent().map(|p| p.to_string_lossy().to_string());
+    let should_include_files = include_files.unwrap_or(false);
 
     let mut items = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&resolved_path) {
         for entry in entries.flatten() {
             let p = entry.path();
             let is_dir = p.is_dir();
-            if !is_dir {
+            if !is_dir && !should_include_files {
                 continue;
             }
             let file_name = entry.file_name().to_string_lossy().to_string();
             let is_hidden = file_name.starts_with('.') || file_name.starts_with('$');
+            let ext = if !is_dir {
+                p.extension().map(|e| e.to_string_lossy().to_string().to_lowercase())
+            } else {
+                None
+            };
+            let size = if !is_dir {
+                entry.metadata().ok().map(|m| m.len())
+            } else {
+                None
+            };
             items.push(DirectoryItem {
                 name: file_name,
                 path: p.to_string_lossy().to_string(),
-                is_dir: true,
+                is_dir,
                 is_hidden,
+                size,
+                extension: ext,
             });
         }
     }
     items.sort_by(|a, b| {
-        match (a.is_hidden, b.is_hidden) {
-            (true, false) => std::cmp::Ordering::Greater,
-            (false, true) => std::cmp::Ordering::Less,
-            _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+        match (a.is_dir, b.is_dir) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => match (a.is_hidden, b.is_hidden) {
+                (true, false) => std::cmp::Ordering::Greater,
+                (false, true) => std::cmp::Ordering::Less,
+                _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+            },
         }
     });
 
@@ -279,6 +301,15 @@ fn list_directory_entries(
             name: "바탕 화면".into(),
             path: desktop.to_string_lossy().to_string(),
             kind: "desktop".into(),
+        });
+    }
+
+    let pictures = std::path::Path::new(&user_profile).join("Pictures");
+    if pictures.exists() {
+        quick_access.push(QuickAccessItem {
+            name: "사진".into(),
+            path: pictures.to_string_lossy().to_string(),
+            kind: "pictures".into(),
         });
     }
 
@@ -450,6 +481,36 @@ fn save_clipboard_image(
     std::fs::write(&file_path, &bytes).map_err(|e| e.to_string())?;
 
     Ok(file_path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn read_file_as_base64(path: String) -> Result<String, String> {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    let file_path = std::path::Path::new(&path);
+    if !file_path.exists() || !file_path.is_file() {
+        return Err("파일을 찾을 수 없습니다.".into());
+    }
+    let metadata = std::fs::metadata(file_path).map_err(|e| e.to_string())?;
+    if metadata.len() > 15 * 1024 * 1024 {
+        return Err("파일 크기가 15MB를 초과하여 미리보기를 지원하지 않습니다.".into());
+    }
+    let bytes = std::fs::read(file_path).map_err(|e| e.to_string())?;
+    let ext = file_path
+        .extension()
+        .map(|e| e.to_string_lossy().to_string().to_lowercase())
+        .unwrap_or_default();
+    let mime = match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "ico" => "image/x-icon",
+        "bmp" => "image/bmp",
+        _ => "application/octet-stream",
+    };
+    let b64 = B64.encode(&bytes);
+    Ok(format!("data:{};base64,{}", mime, b64))
 }
 
 #[tauri::command]
@@ -942,10 +1003,10 @@ fn is_newer_version(latest: &str, current: &str) -> bool {
 
 #[tauri::command]
 fn check_app_update() -> Result<AppUpdateInfo, String> {
-    let current_version = "1.0.3".to_string();
+    let current_version = env!("CARGO_PKG_VERSION").to_string();
     let url = "https://api.github.com/repos/TodookGamja/AgentriX/releases/latest";
     let resp = match ureq::get(url)
-        .set("User-Agent", "AgentriX-Updater/1.0.3")
+        .set("User-Agent", &format!("AgentriX-Updater/{}", current_version))
         .timeout(std::time::Duration::from_secs(5))
         .call()
     {
@@ -1468,6 +1529,7 @@ fn main() {
             perform_in_app_update,
             reset_app_data,
             save_clipboard_image,
+            read_file_as_base64,
         ])
         .run(tauri::generate_context!())
         .expect("Tauri 애플리케이션 실행 중 오류 발생");

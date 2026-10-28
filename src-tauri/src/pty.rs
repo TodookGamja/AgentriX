@@ -340,14 +340,24 @@ impl PtyManager {
         let mut sessions = self.sessions.lock().unwrap();
         if let Some(mut session) = sessions.remove(session_id) {
             #[cfg(target_os = "windows")]
-            if let Some(pid) = session.child.process_id() {
-                // Windows 환경에서 cmd/powershell 자식 프로세스 트리(/T) 전체를 강제 종료하여
-                // 고아 프로세스 잔존으로 인한 "Conversation already open in another instance" 충돌 원천 방지
-                let _ = std::process::Command::new("taskkill")
-                    .args(["/F", "/T", "/PID", &pid.to_string()])
-                    .output();
-            }
+            let pid_opt = session.child.process_id();
+
+            // PTY child 즉각 종료
             let _ = session.child.kill();
+
+            #[cfg(target_os = "windows")]
+            if let Some(pid) = pid_opt {
+                // Windows 환경에서 cmd/powershell 자식 프로세스 트리를 비동기 백그라운드 스레드에서 정리
+                // 1) CREATE_NO_WINDOW (0x08000000) 플래그로 검은색 콘솔창 깜빡임 팝업 원천 차단
+                // 2) 비동기 처리로 세션 닫을 때 메인 UI 스레드 렉(프리즈) 0% 달성
+                std::thread::spawn(move || {
+                    use std::os::windows::process::CommandExt;
+                    let mut cmd = std::process::Command::new("taskkill");
+                    cmd.args(["/F", "/T", "/PID", &pid.to_string()]);
+                    cmd.creation_flags(0x08000000);
+                    let _ = cmd.output();
+                });
+            }
         }
         Ok(())
     }
