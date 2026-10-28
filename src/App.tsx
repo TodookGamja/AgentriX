@@ -37,6 +37,7 @@ import {
   Zap,
 } from "lucide-react";
 import { useAppStore } from "./lib/store";
+import { ModelPicker, getCliDefaultModel } from "./components/ModelPicker";
 import {
   apiAddCustomCli,
   apiAddProjectFolder,
@@ -577,6 +578,8 @@ export const App: React.FC = () => {
   // 2. 선택된 프로젝트 분석 결과(맞춤 추천 에이전트 포함) & 현재 영입된 에이전트 목록
   const [projectAnalysis, setProjectAnalysis] = useState<ProjectAnalysisResult | null>(null);
   const [projectAgents, setProjectAgents] = useState<ProjectAgentRecord[]>([]);
+  // 사이드바 트리용: 모든 프로젝트의 등록 에이전트 (재실행 후 세션이 없어도 표시)
+  const [agentsByProject, setAgentsByProject] = useState<Record<string, ProjectAgentRecord[]>>({});
 
   // 프로젝트 폴더 선택 모달 상태 (앱 테마와 100% 일치하는 Agentrix 커스텀 폴더 브라우저)
   const [isFolderPickerOpen, setIsFolderPickerOpen] = useState(false);
@@ -592,6 +595,7 @@ export const App: React.FC = () => {
   const [agentColor, setAgentColor] = useState("#f97316");
   const [agentRolePrompt, setAgentRolePrompt] = useState("");
   const [agentAutoBrief, setAgentAutoBrief] = useState(true);
+  const [agentModel, setAgentModel] = useState("");
 
   // 프로젝트 공유 블랙보드(BLACKBOARD.md) 모달 상태
   const [showBlackboardModal, setShowBlackboardModal] = useState(false);
@@ -649,6 +653,8 @@ export const App: React.FC = () => {
 
   const [sessionTokens, setSessionTokens] = useState<Record<string, number>>({});
   const sessionRecentOutputRef = useRef<Record<string, string>>({});
+  const sessionTokensRef = useRef<Record<string, number>>({});
+  const seenLinesRef = useRef<Record<string, Set<string>>>({});
   const relayedSessionsRef = useRef<Set<string>>(new Set());
   const compactAttemptedRef = useRef<Set<string>>(new Set());
 
@@ -706,6 +712,14 @@ export const App: React.FC = () => {
   useEffect(() => {
     refreshAll();
   }, [refreshAll]);
+
+  useEffect(() => {
+    Promise.all(
+      projectFolders.map((f) =>
+        apiGetProjectAgents(f.path).then((list) => [f.path, list] as const).catch(() => [f.path, []] as const)
+      )
+    ).then((entries) => setAgentsByProject(Object.fromEntries(entries)));
+  }, [projectFolders]);
 
   // 선택된 프로젝트가 바뀔 때마다 프로젝트 기술스택 분석(추천 에이전트 생성) 및 배정된 에이전트 목록 로드
   useEffect(() => {
@@ -847,7 +861,7 @@ export const App: React.FC = () => {
     }
 
     try {
-      const session = await apiStartSession(cliId, targetCwd, initialCommand);
+      const session = await apiStartSession(cliId, targetCwd, initialCommand, undefined, getCliDefaultModel(cliId));
       addSession(session);
       setActiveNav("terminal");
       setProjectSubView("session");
@@ -897,7 +911,7 @@ export const App: React.FC = () => {
           const cleanPrompt = agent.rolePrompt.replace(/[\r\n]+/g, " ").trim();
           const briefing = `${cleanPrompt}\r\n`;
           apiWriteToSession(session.id, briefing).catch(() => {});
-        }, 3200);
+        }, 6000);
       }
     } catch (err) {
       showToast(`에이전트 실행 실패: ${String(err)}`, "error");
@@ -994,13 +1008,11 @@ export const App: React.FC = () => {
         "info"
       );
       try {
-        await apiWriteToSession(sessionId, "\r/compact\r");
+        await apiWriteToSession(sessionId, "/compact\r");
       } catch {}
       // 1차 컴팩트 실행 후 토큰 수치를 가상으로 50% 수준으로 조정하여 사용자가 계속 진행할 수 있게 함
-      setSessionTokens((prev) => ({
-        ...prev,
-        [sessionId]: Math.round(tokenOptConfig.contextThresholdTokens * 0.5),
-      }));
+      sessionTokensRef.current[sessionId] = Math.round(tokenOptConfig.contextThresholdTokens * 0.5);
+      setSessionTokens({ ...sessionTokensRef.current });
       return; // 새 세션을 열지 않고 1차 압축 효과를 유지함
     }
 
@@ -1082,10 +1094,12 @@ ${recentSnippet || "진행 내역 기록 없음"}
         newSession.agentRole = targetSession.agentRole;
       }
 
-      addSession(newSession);
-      setActiveSessionId(newSession.id);
-      setActiveNav("terminal");
-      setProjectSubView("session");
+      // 백그라운드 릴레이: 보고 있던 화면/세션을 바꾸지 않는다. (보던 세션이 교체 대상일 때만 새 세션으로 이어 보기)
+      useAppStore.setState((st) => ({
+        sessions: [...st.sessions, newSession],
+        activeSessionId:
+          st.activeSessionId === targetSession.id ? newSession.id : st.activeSessionId,
+      }));
 
       // 화면 분할 슬롯에 이전 세션이 등록되어 있었다면 새 세션 ID로 자동 교체
       setSplitSlotSessionIds((prev) =>
@@ -1098,7 +1112,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
           const handoffPrompt = `.ai-agents/SESSION_HANDOFF.md 파일을 확인하고 직전 세션에서 진행하던 작업을 이어서 완료해 주세요.\r`;
           await apiWriteToSession(newSession.id, handoffPrompt);
         } catch {}
-      }, 600);
+      }, 6000);
 
       // 6. 🔥 핵심: 기존 세션 즉시 완전 종료 및 PC 메모리/자원 회수!
       if (tokenOptConfig.closeOldSession ?? true) {
@@ -1107,12 +1121,10 @@ ${recentSnippet || "진행 내역 기록 없음"}
             await apiStopSession(targetSession.id);
           } catch {}
           removeSession(targetSession.id);
-          setSessionTokens((prev) => {
-            const next = { ...prev };
-            delete next[targetSession.id];
-            return next;
-          });
+          delete sessionTokensRef.current[targetSession.id];
+          setSessionTokens({ ...sessionTokensRef.current });
           delete sessionRecentOutputRef.current[targetSession.id];
+          delete seenLinesRef.current[targetSession.id];
           compactAttemptedRef.current.delete(targetSession.id);
           relayedSessionsRef.current.delete(targetSession.id);
         }, 1200);
@@ -1133,16 +1145,28 @@ ${recentSnippet || "진행 내역 기록 없음"}
   };
 
   // 실시간 PTY 청크 수신 시 토큰 추정 및 자동 임계치 감지
+  // TUI는 스피너·입력창을 초당 수십 번 다시 그리므로 원문 길이로 세면 추정 토큰이 폭증한다.
+  // ANSI 제어문자를 걷어내고, 숫자만 바뀐 줄(경과 시간·카운터)을 같은 줄로 보아 처음 보는 줄만 센다.
   const handleSessionOutputChunk = (sessionId: string, text: string) => {
-    const estAddTokens = Math.max(1, Math.round(text.length / 3.8));
-    let nextTotal = 0;
-    setSessionTokens((prev) => {
-      nextTotal = (prev[sessionId] || 0) + estAddTokens;
-      return { ...prev, [sessionId]: nextTotal };
-    });
+    const plain = text.replace(/\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-_]/g, "");
+    const seen = (seenLinesRef.current[sessionId] ??= new Set());
+    let newChars = 0;
+    for (const line of plain.split(/[\r\n]+/)) {
+      const key = line.replace(/\d+/g, "#").replace(/\s+/g, " ").trim();
+      if (key.length < 2 || seen.has(key)) continue;
+      seen.add(key);
+      newChars += key.length;
+    }
+    // ponytail: 줄 캐시 상한 5000개, 넘으면 비우고 다시 셈 (추정치가 조금 늘 수 있음)
+    if (seen.size > 5000) seen.clear();
 
     const prevLog = sessionRecentOutputRef.current[sessionId] || "";
-    sessionRecentOutputRef.current[sessionId] = (prevLog + text).slice(-3000);
+    sessionRecentOutputRef.current[sessionId] = (prevLog + plain).slice(-3000);
+    if (newChars === 0) return;
+
+    const nextTotal = (sessionTokensRef.current[sessionId] || 0) + Math.round(newChars / 3.8);
+    sessionTokensRef.current[sessionId] = nextTotal;
+    setSessionTokens({ ...sessionTokensRef.current });
 
     if (
       tokenOptConfig.autoRelayEnabled &&
@@ -1276,6 +1300,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
       )}' 프로젝트의 전담 에이전트입니다. 맡은 역할에 집중하여 코드를 분석·구현하고 핵심 결정사항을 .ai-agents/BLACKBOARD.md에 공유하세요.`
     );
     setAgentAutoBrief(true);
+    setAgentModel("");
     setShowAgentModal(true);
   };
 
@@ -1289,6 +1314,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
     setAgentColor(agent.accentColor);
     setAgentRolePrompt(agent.rolePrompt);
     setAgentAutoBrief(agent.autoBrief);
+    setAgentModel(agent.model ?? "");
     setShowAgentModal(true);
   };
 
@@ -1306,6 +1332,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
       accentColor: agentColor,
       rolePrompt: agentRolePrompt.trim(),
       autoBrief: agentAutoBrief,
+      model: agentModel.trim(),
     };
     try {
       const updated = await apiUpsertProjectAgent(payload);
@@ -2320,6 +2347,12 @@ ${recentSnippet || "진행 내역 기록 없음"}
                                     const projSessions = sessions.filter(
                                       (s) => s.cwd === proj.path
                                     );
+                                    // 실행 중이 아닌 등록 에이전트 (선택 프로젝트는 최신 projectAgents 사용)
+                                    const idleAgents = (
+                                      proj.path === selectedProjectPath
+                                        ? projectAgents
+                                        : agentsByProject[proj.path] ?? []
+                                    ).filter((a) => !projSessions.some((s) => s.agentId === a.id));
 
                                     return (
                                       <div key={proj.path} className="space-y-1">
@@ -2376,7 +2409,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
                                         </div>
 
                                         {/* 해당 프로젝트에서 실행 중인 에이전트/CLI 세션 트리 표시 */}
-                                        {projSessions.length > 0 && (
+                                        {(projSessions.length > 0 || idleAgents.length > 0) && (
                                           <div className="border-l-2 border-slate-800/80 ml-3 pl-2.5 my-1 space-y-1">
                                             {projSessions.map((s) => {
                                               const isSessionActive =
@@ -2412,6 +2445,20 @@ ${recentSnippet || "진행 내역 기록 없음"}
                                                 </div>
                                               );
                                             })}
+                                            {idleAgents.map((a) => (
+                                              <div
+                                                key={a.id}
+                                                onClick={() => {
+                                                  setSelectedProjectPath(proj.path);
+                                                  handleSpawnAgentSession(a);
+                                                }}
+                                                className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-[11px] cursor-pointer border border-dashed border-slate-800/50 text-slate-500 hover:text-slate-300 hover:bg-slate-800/40 transition-all"
+                                                title="클릭하여 에이전트 실행"
+                                              >
+                                                <span className="shrink-0">{a.avatarEmoji}</span>
+                                                <span className="truncate">{a.name}</span>
+                                              </div>
+                                            ))}
                                           </div>
                                         )}
                                       </div>
@@ -2466,7 +2513,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
             <div className="flex items-center justify-between px-1 text-[11px] select-none">
               <span className="font-mono text-slate-400 font-bold flex items-center gap-1.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                AgentriX v1.0.3
+                AgentriX v{__APP_VERSION__}
               </span>
               <button
                 type="button"
@@ -3183,7 +3230,10 @@ ${recentSnippet || "진행 내역 기록 없음"}
                   </label>
                   <select
                     value={agentCliId}
-                    onChange={(e) => setAgentCliId(e.target.value)}
+                    onChange={(e) => {
+                      setAgentCliId(e.target.value);
+                      setAgentModel("");
+                    }}
                     className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-slate-100"
                   >
                     {clis.map((c) => (
@@ -3192,6 +3242,13 @@ ${recentSnippet || "진행 내역 기록 없음"}
                       </option>
                     ))}
                   </select>
+                  <label className="block text-slate-400 mt-2 mb-1">실행 모델</label>
+                  <ModelPicker
+                    cliId={agentCliId}
+                    value={agentModel}
+                    onChange={setAgentModel}
+                    className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-slate-100 font-mono text-xs"
+                  />
                 </div>
                 <div>
                   <label className="block text-slate-400 mb-1">

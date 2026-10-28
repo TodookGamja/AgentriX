@@ -714,8 +714,9 @@ fn start_session(
     cwd: Option<String>,
     initial_command: Option<String>,
     agent_id: Option<String>,
+    model: Option<String>,
 ) -> Result<SessionInfo, String> {
-    let (cli_def, injected_env, agent_meta) = {
+    let (mut cli_def, injected_env, agent_meta) = {
         let conn = state.db.lock().map_err(|e| e.to_string())?;
         if let Some(ref dir) = cwd {
             if !dir.trim().is_empty() {
@@ -740,6 +741,14 @@ fn start_session(
         (def, env, found_agent)
     };
 
+    // 실행 모델: 명시값 > 에이전트 저장값 > CLI 기본 (모든 지원 CLI가 --model 플래그 사용)
+    let model = model
+        .filter(|m| !m.trim().is_empty())
+        .or_else(|| agent_meta.as_ref().map(|a| a.model.clone()).filter(|m| !m.trim().is_empty()));
+    if let Some(m) = model {
+        cli_def.args.extend(["--model".to_string(), m.trim().to_string()]);
+    }
+
     state.pty.start_session_with_def(
         cli_def,
         cwd,
@@ -748,6 +757,14 @@ fn start_session(
         agent_meta,
         Some(app),
     )
+}
+
+/// CLI별 선택 가능한 모델 목록 (모델 호출 없이 각 CLI가 제공하는 목록을 읽음)
+#[tauri::command]
+async fn list_cli_models(cli_id: String) -> Result<Vec<String>, String> {
+    tokio::task::spawn_blocking(move || usage::list_cli_models(&cli_id))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -829,6 +846,7 @@ async fn sync_usage_logs(
 ) -> Result<UsageDashboardData, String> {
     let db = state.db.clone();
     tokio::task::spawn_blocking(move || {
+        usage::prefetch_live_quotas();
         let conn = db.lock().map_err(|e| e.to_string())?;
         let _ = usage::sync_all_cli_logs(&conn);
         db::get_usage_dashboard(&conn, cli_filter.as_deref(), timeframe.as_deref()).map_err(|e| e.to_string())
@@ -845,6 +863,7 @@ async fn get_usage_dashboard(
 ) -> Result<UsageDashboardData, String> {
     let db = state.db.clone();
     tokio::task::spawn_blocking(move || {
+        usage::prefetch_live_quotas();
         let conn = db.lock().map_err(|e| e.to_string())?;
         db::get_usage_dashboard(&conn, cli_filter.as_deref(), timeframe.as_deref()).map_err(|e| e.to_string())
     })
@@ -1484,6 +1503,7 @@ fn main() {
             pick_project_folder,
             list_directory_entries,
             get_project_agents,
+            list_cli_models,
             upsert_project_agent,
             delete_project_agent,
             seed_project_agents_preset,

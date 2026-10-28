@@ -235,11 +235,17 @@ export async function apiRunCliDeepAnalysis(
   return "";
 }
 
+export async function apiListCliModels(cliId: string): Promise<string[]> {
+  if (isTauriRuntime()) return invoke<string[]>("list_cli_models", { cliId });
+  return [];
+}
+
 export async function apiStartSession(
   cliId: string,
   cwd?: string,
   initialCommand?: string,
-  agentId?: string
+  agentId?: string,
+  model?: string
 ): Promise<SessionInfo> {
   if (isTauriRuntime()) {
     return invoke<SessionInfo>("start_session", {
@@ -247,6 +253,7 @@ export async function apiStartSession(
       cwd: cwd ?? null,
       initialCommand: initialCommand ?? null,
       agentId: agentId ?? null,
+      model: model || null,
     });
   }
   const id = `sess-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -266,6 +273,17 @@ export async function apiStartSession(
 
 export async function apiWriteToSession(sessionId: string, data: string): Promise<void> {
   if (isTauriRuntime()) {
+    // TUI(Claude/Codex 등)는 "텍스트+\r" 한 덩어리를 붙여넣기로 인식해 Enter를 줄바꿈으로 삼킨다.
+    // 텍스트를 먼저 쓰고 붙여넣기 처리가 끝난 뒤 Enter를 별도 키 입력으로 보낸다. (단일 키 입력은 그대로 통과)
+    // 긴 글·여러 줄(Shift+Enter)일수록 TUI가 붙여넣기를 소화하는 시간이 길어 대기도 늘린다.
+    const body = data.replace(/\r\n?$/, "");
+    if (body !== data && body.length > 0) {
+      await invoke("write_to_session", { sessionId, data: body });
+      const lines = body.split("\n").length;
+      const wait = Math.min(1500, 200 + body.length + (lines > 1 ? 300 : 0));
+      await new Promise((r) => setTimeout(r, wait));
+      return invoke("write_to_session", { sessionId, data: "\r" });
+    }
     return invoke("write_to_session", { sessionId, data });
   }
   const prev = fallbackBuffers.get(sessionId) ?? "";

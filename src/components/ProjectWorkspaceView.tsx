@@ -28,6 +28,23 @@ import type {
   SessionInfo,
 } from "../types/types";
 import { SynapseGraphView } from "./SynapseGraphView";
+import { ModelPicker, getCliDefaultModel, setCliDefaultModel } from "./ModelPicker";
+
+// 일반 CLI 실행 시 사용할 기본 모델 (localStorage 저장)
+const CliModelField: React.FC<{ cliId: string }> = ({ cliId }) => {
+  const [model, setModel] = useState(() => getCliDefaultModel(cliId));
+  return (
+    <ModelPicker
+      cliId={cliId}
+      value={model}
+      onChange={(m) => {
+        setModel(m);
+        setCliDefaultModel(cliId, m);
+      }}
+      className="w-full font-mono text-[11px] p-2 rounded-lg border bg-slate-950 text-emerald-300 border-slate-700 focus:outline-none focus:border-emerald-500/60"
+    />
+  );
+};
 
 interface ProjectWorkspaceViewProps {
   projectPath: string;
@@ -93,7 +110,7 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
   const [permMode, setPermMode] = useState<"full_auto" | "manual" | "custom">("full_auto");
   const [cliFlags, setCliFlags] = useState<Record<string, string>>({
     claude: "--dangerously-skip-permissions",
-    codex: "--full-auto",
+    codex: "--sandbox workspace-write --ask-for-approval never",
     grok: "--yolo",
     antigravity: "--dangerously-skip-permissions --mode auto",
     cursor: "--trust",
@@ -105,7 +122,7 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
 
   const DEFAULT_CLI_FLAGS: Record<string, { flag: string; desc: string }> = {
     claude: { flag: "--dangerously-skip-permissions", desc: "Claude 공식 무인 권한 스킵" },
-    codex: { flag: "--full-auto", desc: "Codex 공식 전자율 실행" },
+    codex: { flag: "--sandbox workspace-write -a never", desc: "Codex 공식 전자율 실행" },
     grok: { flag: "--yolo", desc: "Grok 공식 Yolo 승인 스킵" },
     antigravity: { flag: "--dangerously-skip-permissions --mode auto", desc: "에이전틱 계획 & 승인 자동화" },
     cursor: { flag: "--trust", desc: "Cursor 워크스페이스 신뢰 모드" },
@@ -524,6 +541,7 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
                         />
                       </div>
                       <div className="text-[10px] text-slate-500 truncate">{defaultInfo.desc}</div>
+                      <CliModelField cliId={cli.id} />
                     </div>
                   );
                 })}

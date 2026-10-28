@@ -18,7 +18,6 @@ import {
   Zap,
 } from "lucide-react";
 import type { CliDefinition, SessionInfo } from "../types/types";
-import { listen } from "@tauri-apps/api/event";
 import {
   apiReadSessionOutput,
   apiResizeSession,
@@ -73,6 +72,9 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
   onTriggerRelay,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  // 폴링 루프는 마운트 시 한 번만 만들어지므로 최신 콜백을 ref로 참조 (stale closure 방지)
+  const onOutputChunkRef = useRef(onOutputChunk);
+  onOutputChunkRef.current = onOutputChunk;
   const termRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const cursorRef = useRef<number>(0);
@@ -291,6 +293,12 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
 
     termRef.current = term;
     fitAddonRef.current = fitAddon;
+    // 재마운트 시 버퍼 재생이 기본 80열로 그려져 줄이 겹치지 않도록, 보이는 상태면 재생 전에 크기부터 맞춘다.
+    if (container.clientWidth > 0) {
+      try {
+        fitAddon.fit();
+      } catch {}
+    }
 
     const dataDisposable = term.onData((data) => {
       apiWriteToSession(session.id, data).catch(console.error);
@@ -300,17 +308,18 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     });
 
     let active = true;
+    // 마운트 직후 첫 청크는 기존 버퍼 재생일 수 있으므로 토큰 추정에서 제외 (화면 이동 시 재집계 → 불필요한 /compact 방지)
+    let replayed = false;
     const pollInterval = window.setInterval(async () => {
       if (!active) return;
       try {
         const chunk = await apiReadSessionOutput(session.id, cursorRef.current);
         if (chunk.data && chunk.data.length > 0) {
           cursorRef.current = chunk.nextCursor;
+          // 스크롤을 강제로 내리지 않는다: 맨 아래에 있으면 xterm이 알아서 따라가고, 위로 올려 둔 경우엔 그대로 둔다.
           term.write(chunk.data);
-          term.scrollToBottom();
-          if (onOutputChunk) {
-            onOutputChunk(session.id, chunk.data);
-          }
+          if (replayed) onOutputChunkRef.current?.(session.id, chunk.data);
+          replayed = true;
         }
       } catch {
         // 세션 종료 시 무시
@@ -433,6 +442,8 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     container.addEventListener("drop", handleDrop);
 
     setTimeout(() => {
+      // 숨김(hidden) 상태로 마운트된 경우 PTY를 기본 80x24로 줄이지 않는다 (CLI가 좁은 폭으로 다시 그려 줄이 늘어남)
+      if (!containerRef.current || containerRef.current.clientWidth === 0) return;
       try {
         fitAddon.fit();
         if (term.cols > 0 && term.rows > 0) {
@@ -472,23 +483,6 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       return () => clearTimeout(timer);
     }
   }, [isVisible, session.id]);
-
-  // 실시간 PTY 데이터 스트리밍 이벤트 수신 (폴링 지연 없는 0ms 즉시 화면 반영)
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    listen<{ sessionId: string; data: string }>("pty-data", (event) => {
-      if (event.payload.sessionId === session.id && termRef.current) {
-        termRef.current.write(event.payload.data);
-        termRef.current.scrollToBottom();
-      }
-    }).then((fn) => {
-      unlisten = fn;
-    });
-
-    return () => {
-      if (unlisten) unlisten();
-    };
-  }, [session.id]);
 
   const sendRawCommand = (cmd: string) => {
     apiWriteToSession(session.id, `${cmd}\r`).catch(console.error);

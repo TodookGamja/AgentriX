@@ -397,7 +397,7 @@ fn build_platform_command(
         match cli_def.id.as_str() {
             "antigravity" => " --dangerously-skip-permissions --mode auto",
             "claude" => " --dangerously-skip-permissions",
-            "codex" => " --full-auto",
+            "codex" => " --sandbox workspace-write --ask-for-approval never",
             "grok" => " --yolo",
             "opencode" => " --auto",
             _ => "",

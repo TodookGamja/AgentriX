@@ -131,6 +131,8 @@ pub fn setup_schema(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_project_agents_path ON project_agents(project_path);
         ",
     )?;
+    // v1.0.5: 에이전트별 실행 모델 (이미 있으면 오류 무시)
+    let _ = conn.execute("ALTER TABLE project_agents ADD COLUMN model TEXT NOT NULL DEFAULT ''", []);
     Ok(())
 }
 
@@ -301,6 +303,9 @@ pub struct ProjectAgentRecord {
     pub role_prompt: String,
     pub auto_brief: bool,
     pub created_at: String,
+    /// 실행 모델 (빈 문자열 = CLI 기본 모델)
+    #[serde(default)]
+    pub model: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -316,6 +321,8 @@ pub struct ProjectAgentInput {
     pub accent_color: String,
     pub role_prompt: String,
     pub auto_brief: bool,
+    #[serde(default)]
+    pub model: String,
 }
 
 pub fn normalize_project_path(raw: &str) -> String {
@@ -374,7 +381,7 @@ pub fn get_project_agents(conn: &Connection, project_path: &str) -> Result<Vec<P
     let norm = normalize_project_path(project_path);
     let norm_lower = norm.to_lowercase();
     let mut stmt = conn.prepare(
-        "SELECT id, project_path, name, role_title, cli_id, use_wrapper, avatar_emoji, accent_color, role_prompt, auto_brief, created_at
+        "SELECT id, project_path, name, role_title, cli_id, use_wrapper, avatar_emoji, accent_color, role_prompt, auto_brief, created_at, model
          FROM project_agents
          WHERE LOWER(REPLACE(project_path, '/', '\\')) = ?1
          ORDER BY created_at ASC",
@@ -392,6 +399,7 @@ pub fn get_project_agents(conn: &Connection, project_path: &str) -> Result<Vec<P
             role_prompt: row.get(8)?,
             auto_brief: row.get::<_, i64>(9)? != 0,
             created_at: row.get(10)?,
+            model: row.get(11)?,
         })
     })?;
     Ok(rows.flatten().collect())
@@ -418,8 +426,8 @@ pub fn upsert_project_agent(
 
     conn.execute(
         "INSERT INTO project_agents
-         (id, project_path, name, role_title, cli_id, use_wrapper, avatar_emoji, accent_color, role_prompt, auto_brief, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+         (id, project_path, name, role_title, cli_id, use_wrapper, avatar_emoji, accent_color, role_prompt, auto_brief, created_at, model)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
          ON CONFLICT(id) DO UPDATE SET
             project_path = excluded.project_path,
             name = excluded.name,
@@ -429,7 +437,8 @@ pub fn upsert_project_agent(
             avatar_emoji = excluded.avatar_emoji,
             accent_color = excluded.accent_color,
             role_prompt = excluded.role_prompt,
-            auto_brief = excluded.auto_brief",
+            auto_brief = excluded.auto_brief,
+            model = excluded.model",
         params![
             id,
             norm_path,
@@ -441,7 +450,8 @@ pub fn upsert_project_agent(
             if input.accent_color.trim().is_empty() { "#6366f1" } else { input.accent_color.trim() },
             input.role_prompt.trim(),
             if input.auto_brief { 1 } else { 0 },
-            now
+            now,
+            input.model.trim()
         ],
     )?;
 
@@ -494,6 +504,7 @@ pub fn seed_project_agents_preset(
                 proj_name
             ),
             auto_brief: true,
+            model: String::new(),
         },
         ProjectAgentInput {
             id: Some(format!("role-backend-{}", proj_name.to_lowercase().replace(' ', "-"))),
@@ -509,6 +520,7 @@ pub fn seed_project_agents_preset(
                 proj_name
             ),
             auto_brief: true,
+            model: String::new(),
         },
         ProjectAgentInput {
             id: Some(format!("role-frontend-{}", proj_name.to_lowercase().replace(' ', "-"))),
@@ -524,6 +536,7 @@ pub fn seed_project_agents_preset(
                 proj_name
             ),
             auto_brief: true,
+            model: String::new(),
         },
         ProjectAgentInput {
             id: Some(format!("role-qa-{}", proj_name.to_lowercase().replace(' ', "-"))),
@@ -539,6 +552,7 @@ pub fn seed_project_agents_preset(
                 proj_name
             ),
             auto_brief: true,
+            model: String::new(),
         },
     ];
 
@@ -737,6 +751,7 @@ pub fn analyze_project_workspace(project_path: &str) -> Result<ProjectAnalysisRe
             stacks.join(", ")
         ),
         auto_brief: true,
+        model: String::new(),
     });
 
     // 2. 스택 맞춤형 백엔드/코어 에이전트 추천
@@ -755,6 +770,7 @@ pub fn analyze_project_workspace(project_path: &str) -> Result<ProjectAnalysisRe
                 project_name
             ),
             auto_brief: true,
+            model: String::new(),
         });
     } else if has_rust {
         recommended.push(ProjectAgentInput {
@@ -771,6 +787,7 @@ pub fn analyze_project_workspace(project_path: &str) -> Result<ProjectAnalysisRe
                 project_name
             ),
             auto_brief: true,
+            model: String::new(),
         });
     } else {
         recommended.push(ProjectAgentInput {
@@ -788,6 +805,7 @@ pub fn analyze_project_workspace(project_path: &str) -> Result<ProjectAnalysisRe
                 stacks.join(", ")
             ),
             auto_brief: true,
+            model: String::new(),
         });
     }
 
@@ -807,6 +825,7 @@ pub fn analyze_project_workspace(project_path: &str) -> Result<ProjectAnalysisRe
                 project_name
             ),
             auto_brief: true,
+            model: String::new(),
         });
     } else {
         recommended.push(ProjectAgentInput {
@@ -823,6 +842,7 @@ pub fn analyze_project_workspace(project_path: &str) -> Result<ProjectAnalysisRe
                 project_name
             ),
             auto_brief: true,
+            model: String::new(),
         });
     }
 
@@ -841,6 +861,7 @@ pub fn analyze_project_workspace(project_path: &str) -> Result<ProjectAnalysisRe
             project_name
         ),
         auto_brief: true,
+        model: String::new(),
     });
 
     // 5. DB / 성능 / 보안 스페셜리스트 (추가 선택용)
@@ -859,6 +880,7 @@ pub fn analyze_project_workspace(project_path: &str) -> Result<ProjectAnalysisRe
                 project_name
             ),
             auto_brief: true,
+            model: String::new(),
         });
     } else {
         recommended.push(ProjectAgentInput {
@@ -875,6 +897,7 @@ pub fn analyze_project_workspace(project_path: &str) -> Result<ProjectAnalysisRe
                 project_name
             ),
             auto_brief: true,
+            model: String::new(),
         });
     }
 

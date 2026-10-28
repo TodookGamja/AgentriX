@@ -58,6 +58,7 @@ export interface ProjectAgentRecord {
   rolePrompt: string;
   autoBrief: boolean;
   createdAt: string;
+  model?: string;
 }
 
 export interface ProjectAgentInput {
@@ -71,6 +72,7 @@ export interface ProjectAgentInput {
   accentColor: string;
   rolePrompt: string;
   autoBrief: boolean;
+  model?: string;
 }
 
 export interface ProjectDeepContext {

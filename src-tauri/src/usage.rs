@@ -725,7 +725,81 @@ pub mod cursor_parser {
 
 /// Codex CLI의 최신 세션 로그(`~/.codex/sessions/**/*.jsonl`)에서
 /// OpenAI 서버가 내려준 공식 `rate_limits` (`primary` 5시간 / `secondary` 주간) 및 `usage_limit_exceeded` 상태를 추출
+static CODEX_QUOTA_CACHE: OnceLock<Mutex<Option<(Instant, CliQuotaStatus)>>> = OnceLock::new();
+
+/// `~/.codex/auth.json` 토큰으로 ChatGPT 공식 사용량 API(`/backend-api/wham/usage`)를 실시간 조회
+/// (세션 로그는 Codex를 실행해야만 갱신되므로 로그만 보면 수치가 멈춰 있음)
+fn fetch_codex_quota_live() -> Option<CliQuotaStatus> {
+    let raw = std::fs::read_to_string(crate::cli::home_dir().join(".codex").join("auth.json")).ok()?;
+    let auth: Value = serde_json::from_str(&raw).ok()?;
+    let tokens = auth.get("tokens")?;
+    let token = tokens.get("access_token")?.as_str()?;
+    let account = tokens.get("account_id").and_then(|a| a.as_str()).unwrap_or("");
+    let v: Value = ureq::get("https://chatgpt.com/backend-api/wham/usage")
+        .set("Authorization", &format!("Bearer {}", token))
+        .set("ChatGPT-Account-Id", account)
+        .set("User-Agent", "codex-cli")
+        .timeout(std::time::Duration::from_secs(4))
+        .call()
+        .ok()?
+        .into_json()
+        .ok()?;
+    let rl = v.get("rate_limit")?;
+    let win = |k: &str| -> (f64, Option<String>) {
+        let w = rl.get(k);
+        let used = w.and_then(|w| w.get("used_percent")).and_then(|u| u.as_f64()).unwrap_or(0.0).clamp(0.0, 100.0);
+        let reset = w
+            .and_then(|w| w.get("reset_at"))
+            .and_then(|r| r.as_i64())
+            .map(format_epoch_kst)
+            .filter(|s| !s.is_empty());
+        (used.round(), reset)
+    };
+    let (used_5h, reset_5h) = win("primary_window");
+    let (used_wk, reset_wk) = win("secondary_window");
+    let plan = match v.get("plan_type").and_then(|p| p.as_str()).unwrap_or("plus") {
+        "pro" => "ChatGPT Pro".to_string(),
+        "plus" => "ChatGPT Plus".to_string(),
+        "team" => "ChatGPT Team".to_string(),
+        other => format!("ChatGPT {}", other.to_uppercase()),
+    };
+    let limit_reached = rl.get("limit_reached").and_then(|b| b.as_bool()).unwrap_or(false);
+    Some(CliQuotaStatus {
+        cli_id: "codex".into(),
+        cli_name: "Codex CLI".into(),
+        plan_label: plan,
+        source_label: "OpenAI 쿼터 연동".into(),
+        has_official_quota: true,
+        used_percent_5h: used_5h,
+        remaining_percent_5h: 100.0 - used_5h,
+        resets_at_5h: reset_5h,
+        used_percent_weekly: used_wk,
+        remaining_percent_weekly: 100.0 - used_wk,
+        resets_at_weekly: reset_wk,
+        status_message: if limit_reached { Some("사용 한도 도달".into()) } else { None },
+        sub_groups: None,
+    })
+}
+
 pub fn extract_codex_quota() -> CliQuotaStatus {
+    let cache = CODEX_QUOTA_CACHE.get_or_init(|| Mutex::new(None));
+    if let Ok(guard) = cache.lock() {
+        if let Some((at, cached)) = guard.as_ref() {
+            if at.elapsed().as_secs() < 60 {
+                return cached.clone();
+            }
+        }
+    }
+    if let Some(live) = fetch_codex_quota_live() {
+        if let Ok(mut guard) = cache.lock() {
+            *guard = Some((Instant::now(), live.clone()));
+        }
+        return live;
+    }
+    extract_codex_quota_from_logs()
+}
+
+fn extract_codex_quota_from_logs() -> CliQuotaStatus {
     let home = crate::cli::home_dir();
     let sessions_dir = home.join(".codex").join("sessions");
     let newest_files = collect_newest_jsonl_files(&sessions_dir, 8, 8, None);
@@ -1049,29 +1123,104 @@ pub fn extract_claude_quota(force_refresh: bool) -> CliQuotaStatus {
         return disk_cached;
     }
 
-    // 완전 최초 기동 시에도 100% 빈 껍데기 대신 직전 정상 스냅샷 즉시 출력
-    let fallback = CliQuotaStatus {
-        cli_id: "claude".into(),
-        cli_name: "Claude Code".into(),
-        plan_label: "Claude Pro".into(),
-        source_label: "Anthropic 연동".into(),
-        has_official_quota: true,
-        used_percent_5h: 54.0,
-        remaining_percent_5h: 46.0,
-        resets_at_5h: Some(get_dynamic_kst_reset(5)),
-        used_percent_weekly: 26.0,
-        remaining_percent_weekly: 74.0,
-        resets_at_weekly: Some(get_dynamic_kst_weekly_reset(5)),
-        status_message: None,
+    // 조회 전/실패 시 가짜 수치를 만들지 않고 "조회 중" 상태만 반환 (디스크 캐시에도 저장하지 않음)
+    unavailable_quota("claude", "Claude Code", "Claude Pro", "Anthropic 연동", "공식 쿼터 조회 중…")
+}
+
+fn unavailable_quota(id: &str, name: &str, plan: &str, source: &str, msg: &str) -> CliQuotaStatus {
+    CliQuotaStatus {
+        cli_id: id.into(),
+        cli_name: name.into(),
+        plan_label: plan.into(),
+        source_label: source.into(),
+        has_official_quota: false,
+        used_percent_5h: 0.0,
+        remaining_percent_5h: 100.0,
+        resets_at_5h: None,
+        used_percent_weekly: 0.0,
+        remaining_percent_weekly: 100.0,
+        resets_at_weekly: None,
+        status_message: Some(msg.into()),
         sub_groups: None,
-    };
-    save_claude_cache_to_disk(&fallback);
-    fallback
+    }
 }
 
 /// Grok CLI의 `~/.grok/logs/unified.jsonl`에서
 /// xAI 공식 `billing: fetched credits config` (`creditUsagePercent`, `subscriptionTier`, `currentPeriod.end`)를 추출
+static GROK_QUOTA_CACHE: OnceLock<Mutex<Option<(Instant, CliQuotaStatus)>>> = OnceLock::new();
+
+fn read_grok_auth() -> Option<(String, String, String)> {
+    let raw = std::fs::read_to_string(crate::cli::home_dir().join(".grok").join("auth.json")).ok()?;
+    let v: Value = serde_json::from_str(&raw).ok()?;
+    let e = v.as_object()?.values().next()?;
+    Some((
+        e.get("key")?.as_str()?.to_string(),
+        e.get("user_id")?.as_str()?.to_string(),
+        e.get("expires_at")?.as_str()?.to_string(),
+    ))
+}
+
+/// Grok CLI가 시작 시 호출하는 xAI 공식 크레딧 API(`/v1/billing?format=credits`) 실시간 조회
+fn fetch_grok_quota_live() -> Option<CliQuotaStatus> {
+    let (mut key, mut user_id, expires_at) = read_grok_auth()?;
+    if rfc3339_expired(&expires_at) {
+        // 만료 시 grok 자체 갱신 로직을 태운다 (`grok models`: 모델 호출 없이 토큰만 갱신·저장)
+        run_cli_silently(&crate::cli::home_dir().join(".grok").join("bin").join("grok.exe"), &["models"]);
+        (key, user_id, _) = read_grok_auth()?;
+    }
+    let v: Value = ureq::get("https://cli-chat-proxy.grok.com/v1/billing?format=credits")
+        .set("Authorization", &format!("Bearer {}", key))
+        .set("x-userid", &user_id)
+        .set("User-Agent", "grok-cli")
+        .timeout(std::time::Duration::from_secs(5))
+        .call()
+        .ok()?
+        .into_json()
+        .ok()?;
+    let cfg = v.get("config")?;
+    let used = cfg.get("creditUsagePercent").and_then(|p| p.as_f64()).unwrap_or(0.0).clamp(0.0, 100.0).round();
+    let end = cfg
+        .get("currentPeriod")
+        .and_then(|cp| cp.get("end"))
+        .or_else(|| cfg.get("billingPeriodEnd"))
+        .and_then(|e| e.as_str())
+        .and_then(format_iso_kst);
+    Some(CliQuotaStatus {
+        cli_id: "grok".into(),
+        cli_name: "Grok CLI".into(),
+        plan_label: "SuperGrok".into(),
+        source_label: "xAI 크레딧 연동".into(),
+        has_official_quota: true,
+        used_percent_5h: used,
+        remaining_percent_5h: 100.0 - used,
+        resets_at_5h: end.clone().map(|s| format!("통합 주간 크레딧 ({})", s)),
+        used_percent_weekly: used,
+        remaining_percent_weekly: 100.0 - used,
+        resets_at_weekly: end,
+        status_message: None,
+        sub_groups: None,
+    })
+}
+
 pub fn extract_grok_quota() -> CliQuotaStatus {
+    let cache = GROK_QUOTA_CACHE.get_or_init(|| Mutex::new(None));
+    if let Ok(guard) = cache.lock() {
+        if let Some((at, cached)) = guard.as_ref() {
+            if at.elapsed().as_secs() < 60 {
+                return cached.clone();
+            }
+        }
+    }
+    if let Some(live) = fetch_grok_quota_live() {
+        if let Ok(mut guard) = cache.lock() {
+            *guard = Some((Instant::now(), live.clone()));
+        }
+        return live;
+    }
+    extract_grok_quota_from_logs()
+}
+
+fn extract_grok_quota_from_logs() -> CliQuotaStatus {
     let home = crate::cli::home_dir();
     let unified_log = home.join(".grok").join("logs").join("unified.jsonl");
     if let Ok(content) = std::fs::read_to_string(&unified_log) {
@@ -1093,13 +1242,16 @@ pub fn extract_grok_quota() -> CliQuotaStatus {
                             .unwrap_or(0.0)
                             .clamp(0.0, 100.0)
                             .round();
-                        let remain_pct = (100.0 - used_pct).clamp(0.0, 100.0);
-                        let end_iso = cfg
+                        let end_raw = cfg
                             .get("currentPeriod")
                             .and_then(|cp| cp.get("end"))
                             .or_else(|| cfg.get("billingPeriodEnd"))
-                            .and_then(|e| e.as_str())
-                            .and_then(format_iso_kst);
+                            .and_then(|e| e.as_str());
+                        let end_iso = end_raw.and_then(format_iso_kst);
+                        // 로그는 grok 실행 시에만 기록됨: 마지막 기록의 기간이 이미 끝났다면 리셋된 것으로 표시
+                        let period_over = end_raw.is_some() && end_iso.is_none();
+                        let used_pct = if period_over { 0.0 } else { used_pct };
+                        let remain_pct = (100.0 - used_pct).clamp(0.0, 100.0);
 
                         return CliQuotaStatus {
                             cli_id: "grok".into(),
@@ -1113,7 +1265,11 @@ pub fn extract_grok_quota() -> CliQuotaStatus {
                             used_percent_weekly: used_pct,
                             remaining_percent_weekly: remain_pct,
                             resets_at_weekly: end_iso,
-                            status_message: None,
+                            status_message: if period_over {
+                                Some("크레딧 기간 리셋됨 (Grok 실행 시 새 기간 수치로 갱신)".into())
+                            } else {
+                                None
+                            },
                             sub_groups: None,
                         };
                     }
@@ -1141,172 +1297,137 @@ pub fn extract_grok_quota() -> CliQuotaStatus {
 
 static AGY_QUOTA_CACHE: OnceLock<Mutex<Option<(Instant, CliQuotaStatus)>>> = OnceLock::new();
 
-fn fetch_antigravity_quota_worker() -> Option<CliQuotaStatus> {
-    let mut agy_bin = None;
-    for cand in [
-        crate::cli::home_dir().join("AppData").join("Local").join("agy").join("bin").join("agy.exe"),
-        PathBuf::from("agy.exe"),
-        PathBuf::from("agy"),
-    ] {
-        if cand.exists() {
-            agy_bin = Some(cand);
-            break;
-        }
-    }
-    let bin_path = agy_bin.unwrap_or_else(|| PathBuf::from("agy.exe"));
-
-    let mut cmd = std::process::Command::new(bin_path);
-    cmd.args(["--output-format", "json", "--print", "/quota"]);
-    cmd.stdin(std::process::Stdio::null());
-    cmd.stdout(std::process::Stdio::piped());
-    cmd.stderr(std::process::Stdio::null());
+/// CLI 바이너리를 콘솔 창 없이 실행 (토큰 갱신 트리거용, 모델 호출 없음)
+fn run_cli_silently(bin: &Path, args: &[&str]) {
+    let mut cmd = std::process::Command::new(bin);
+    cmd.args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
     #[cfg(target_os = "windows")]
-    cmd.creation_flags(0x08000000); // 0x08000000 = CREATE_NO_WINDOW (단독 적용으로 콘솔창 출력 완전 차단)
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    let _ = cmd.status();
+}
 
-    let output = cmd.output().ok()?;
-    if !output.status.success() {
-        return None;
+fn rfc3339_expired(s: &str) -> bool {
+    DateTime::parse_from_rfc3339(s)
+        .map(|t| t.with_timezone(&Utc) <= Utc::now() + chrono::Duration::seconds(60))
+        .unwrap_or(true)
+}
+
+/// Windows 자격 증명 관리자에서 agy가 저장한 OAuth 토큰(`gemini:antigravity`)을 읽는다.
+#[cfg(target_os = "windows")]
+fn read_agy_keyring_token() -> Option<(String, String)> {
+    #[repr(C)]
+    struct Credential {
+        flags: u32,
+        kind: u32,
+        target_name: *mut u16,
+        comment: *mut u16,
+        last_written: [u32; 2],
+        blob_size: u32,
+        blob: *mut u8,
+        persist: u32,
+        attribute_count: u32,
+        attributes: *mut std::ffi::c_void,
+        target_alias: *mut u16,
+        user_name: *mut u16,
     }
+    #[link(name = "advapi32")]
+    extern "system" {
+        fn CredReadW(target: *const u16, kind: u32, flags: u32, cred: *mut *mut Credential) -> i32;
+        fn CredFree(buf: *mut std::ffi::c_void);
+    }
+    let target: Vec<u16> = "gemini:antigravity".encode_utf16().chain(std::iter::once(0)).collect();
+    let mut p: *mut Credential = std::ptr::null_mut();
+    // SAFETY: 표준 Win32 호출, 성공 시 반환 버퍼를 복사한 뒤 CredFree로 해제
+    let raw = unsafe {
+        if CredReadW(target.as_ptr(), 1 /* CRED_TYPE_GENERIC */, 0, &mut p) == 0 || p.is_null() {
+            return None;
+        }
+        let c = &*p;
+        let bytes = std::slice::from_raw_parts(c.blob, c.blob_size as usize).to_vec();
+        CredFree(p as *mut _);
+        bytes
+    };
+    let v: Value = serde_json::from_slice(&raw).ok()?;
+    let tok = v.get("token")?;
+    Some((
+        tok.get("access_token")?.as_str()?.to_string(),
+        tok.get("expiry")?.as_str()?.to_string(),
+    ))
+}
 
-    let raw_stdout = String::from_utf8_lossy(&output.stdout);
-    let parsed_json = serde_json::from_str::<Value>(&raw_stdout).ok();
+#[cfg(not(target_os = "windows"))]
+fn read_agy_keyring_token() -> Option<(String, String)> {
+    None
+}
 
-    let mut gemini_rem_5h = 100.0f64;
-    let mut gemini_reset_5h = None;
-    let mut gemini_rem_wk = 100.0f64;
-    let mut gemini_reset_wk = None;
+/// Antigravity 공식 쿼터 API(cloudcode-pa `retrieveUserQuotaSummary` + `retrieveUserQuota`) 실시간 조회.
+/// (agy 업데이트 후 `--print /quota`는 모델 프롬프트로 처리되어 토큰만 소모하고 빈 응답을 줌)
+fn fetch_antigravity_quota_worker() -> Option<CliQuotaStatus> {
+    let agy_bin = crate::cli::home_dir().join("AppData").join("Local").join("agy").join("bin").join("agy.exe");
+    let (mut token, expiry) = read_agy_keyring_token()?;
+    if rfc3339_expired(&expiry) {
+        // 만료 시 agy 자체 갱신 로직을 태운다 (`agy models`: 모델 호출 없이 인증만 갱신, 약 3초)
+        run_cli_silently(&agy_bin, &["models"]);
+        token = read_agy_keyring_token()?.0;
+    }
+    let post = |method: &str, body: Value| -> Option<Value> {
+        ureq::post(&format!("https://cloudcode-pa.googleapis.com/v1internal:{}", method))
+            .set("Authorization", &format!("Bearer {}", token))
+            .set("User-Agent", "antigravity")
+            .timeout(std::time::Duration::from_secs(6))
+            .send_json(body)
+            .ok()?
+            .into_json()
+            .ok()
+    };
+    let project = post("loadCodeAssist", serde_json::json!({ "metadata": { "ideType": "ANTIGRAVITY" } }))
+        .and_then(|v| v.get("cloudaicompanionProject").and_then(|p| p.as_str()).map(|s| s.to_string()))
+        .unwrap_or_default();
+    let body = serde_json::json!({ "project": project });
 
     let mut sub_groups: Vec<crate::db::SubQuotaGroup> = Vec::new();
-    let mut found_any = false;
-
-    // 1) 구조화된 JSON 데이터가 있는 경우 우선 처리 (command.data.groups)
-    if let Some(groups) = parsed_json
-        .as_ref()
-        .and_then(|v| v.get("command"))
-        .and_then(|c| c.get("data"))
-        .and_then(|d| d.get("groups"))
-        .and_then(|g| g.as_array())
-    {
-        for g in groups {
-            let name = g.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
-            let desc = g.get("description").and_then(|d| d.as_str()).map(|s| s.to_string());
-            let mut rem_5h = None;
-            let mut rst_5h = None;
-            let mut rem_wk = None;
-            let mut rst_wk = None;
-
-            if let Some(buckets) = g.get("buckets").and_then(|b| b.as_array()) {
-                for b in buckets {
-                    let win = b.get("window").and_then(|w| w.as_str()).unwrap_or("");
-                    let frac = b.get("remaining_fraction").and_then(|f| f.as_f64()).unwrap_or(1.0);
-                    let pct = (frac * 100.0).clamp(0.0, 100.0);
-                    let reset = b.get("reset_time").and_then(|r| r.as_str()).and_then(format_iso_kst);
-
-                    if win == "5h" {
-                        rem_5h = Some(pct);
-                        rst_5h = reset;
-                    } else if win == "weekly" {
-                        rem_wk = Some(pct);
-                        rst_wk = reset;
-                    }
-                }
-            }
-
-            let is_gemini_main = name.to_lowercase().contains("gemini") && !name.to_lowercase().contains("argon");
-            if is_gemini_main {
-                found_any = true;
-                if let Some(p) = rem_5h {
-                    gemini_rem_5h = p;
-                    gemini_reset_5h = rst_5h.clone();
-                }
-                if let Some(p) = rem_wk {
-                    gemini_rem_wk = p;
-                    gemini_reset_wk = rst_wk.clone();
-                }
-            } else if !name.is_empty() {
-                found_any = true;
-            }
-
-            sub_groups.push(crate::db::SubQuotaGroup {
-                name,
-                description: desc,
-                remaining_5h: rem_5h,
-                resets_at_5h: rst_5h,
-                remaining_weekly: rem_wk,
-                resets_at_weekly: rst_wk,
-            });
-        }
-    }
-
-    // 2) JSON에 groups가 없거나 비어있는 경우 response 텍스트 탭 분리 라인 파싱
-    if sub_groups.is_empty() {
-        let quota_text = parsed_json
-            .as_ref()
-            .and_then(|v| v.get("response"))
-            .and_then(|r| r.as_str())
-            .unwrap_or(&raw_stdout);
-
-        let mut group_map: std::collections::BTreeMap<String, (Option<String>, Option<f64>, Option<String>, Option<f64>, Option<String>)> = std::collections::BTreeMap::new();
-
-        for line in quota_text.lines() {
-            let parts: Vec<&str> = line.split('\t').map(|s| s.trim()).collect();
-            if parts.len() < 3 {
-                continue;
-            }
-            let group = parts[0].to_string();
-            let metric = parts[1];
-            let pct_str = parts[2].trim_end_matches('%');
-            let pct = pct_str.parse::<f64>().unwrap_or(100.0);
-            let reset = if parts.len() >= 4 && !parts[3].is_empty() {
-                format_iso_kst(parts[3])
-            } else {
-                None
+    // 1) 그룹 요약 (Claude/GPT 등 5시간·주간 버킷)
+    if let Some(summary) = post("retrieveUserQuotaSummary", body.clone()) {
+        for g in summary.get("groups").and_then(|g| g.as_array()).into_iter().flatten() {
+            let mut grp = crate::db::SubQuotaGroup {
+                name: g.get("displayName").and_then(|n| n.as_str()).unwrap_or("").to_string(),
+                description: g.get("description").and_then(|d| d.as_str()).map(|s| s.to_string()),
+                remaining_5h: None,
+                resets_at_5h: None,
+                remaining_weekly: None,
+                resets_at_weekly: None,
             };
-
-            let entry = group_map.entry(group.clone()).or_insert((None, None, None, None, None));
-            if metric.contains("Five Hour") || metric.contains("5h") {
-                entry.1 = Some(pct);
-                entry.2 = reset.clone();
-            } else if metric.contains("Weekly") || metric.contains("7 Day") {
-                entry.3 = Some(pct);
-                entry.4 = reset.clone();
-            }
-
-            let g_lower = group.to_lowercase();
-            if g_lower.contains("gemini") && !g_lower.contains("argon") {
-                found_any = true;
-                if metric.contains("Five Hour") || metric.contains("5h") {
-                    gemini_rem_5h = pct;
-                    gemini_reset_5h = reset;
-                } else if metric.contains("Weekly") || metric.contains("7 Day") {
-                    gemini_rem_wk = pct;
-                    gemini_reset_wk = reset;
+            for b in g.get("buckets").and_then(|b| b.as_array()).into_iter().flatten() {
+                let pct = (b.get("remainingFraction").and_then(|f| f.as_f64()).unwrap_or(1.0) * 100.0).clamp(0.0, 100.0).round();
+                let reset = b.get("resetTime").and_then(|r| r.as_str()).and_then(format_iso_kst);
+                match b.get("window").and_then(|w| w.as_str()) {
+                    Some("5h") => (grp.remaining_5h, grp.resets_at_5h) = (Some(pct), reset),
+                    Some("weekly") => (grp.remaining_weekly, grp.resets_at_weekly) = (Some(pct), reset),
+                    _ => {}
                 }
-            } else if !group.is_empty() {
-                found_any = true;
             }
-        }
-
-        for (g_name, (desc, r_5h, s_5h, r_wk, s_wk)) in group_map {
-            sub_groups.push(crate::db::SubQuotaGroup {
-                name: g_name,
-                description: desc,
-                remaining_5h: r_5h,
-                resets_at_5h: s_5h,
-                remaining_weekly: r_wk,
-                resets_at_weekly: s_wk,
-            });
+            sub_groups.push(grp);
         }
     }
 
-    if !found_any {
-        return None;
+    // 2) 모델별 버킷: 메인 Gemini 쿼터 = gemini-* 모델 중 가장 적게 남은 값
+    let quota = post("retrieveUserQuota", body)?;
+    let mut gemini: Option<(f64, Option<String>)> = None;
+    for b in quota.get("buckets").and_then(|b| b.as_array()).into_iter().flatten() {
+        let model = b.get("modelId").and_then(|m| m.as_str()).unwrap_or("");
+        if !model.starts_with("gemini") {
+            continue;
+        }
+        let pct = (b.get("remainingFraction").and_then(|f| f.as_f64()).unwrap_or(1.0) * 100.0).clamp(0.0, 100.0).round();
+        if gemini.as_ref().map_or(true, |(p, _)| pct < *p) {
+            gemini = Some((pct, b.get("resetTime").and_then(|r| r.as_str()).and_then(format_iso_kst)));
+        }
     }
-
-    let used_5h = (100.0 - gemini_rem_5h).clamp(0.0, 100.0).round();
-    let remain_5h = gemini_rem_5h.clamp(0.0, 100.0).round();
-    let used_wk = (100.0 - gemini_rem_wk).clamp(0.0, 100.0).round();
-    let remain_wk = gemini_rem_wk.clamp(0.0, 100.0).round();
+    let (gem_pct, gem_reset) = gemini.unwrap_or((100.0, None));
+    let weekly = sub_groups.iter().filter_map(|g| g.remaining_weekly.map(|w| (w, g.resets_at_weekly.clone()))).next();
 
     let res = CliQuotaStatus {
         cli_id: "antigravity".into(),
@@ -1314,16 +1435,15 @@ fn fetch_antigravity_quota_worker() -> Option<CliQuotaStatus> {
         plan_label: "Google DeepMind".into(),
         source_label: "Antigravity 쿼터 연동".into(),
         has_official_quota: true,
-        used_percent_5h: used_5h,
-        remaining_percent_5h: remain_5h,
-        resets_at_5h: gemini_reset_5h,
-        used_percent_weekly: used_wk,
-        remaining_percent_weekly: remain_wk,
-        resets_at_weekly: gemini_reset_wk,
+        used_percent_5h: 100.0 - gem_pct,
+        remaining_percent_5h: gem_pct,
+        resets_at_5h: gem_reset,
+        used_percent_weekly: weekly.as_ref().map_or(0.0, |w| 100.0 - w.0),
+        remaining_percent_weekly: weekly.as_ref().map_or(100.0, |w| w.0),
+        resets_at_weekly: weekly.and_then(|w| w.1),
         status_message: None,
         sub_groups: if sub_groups.is_empty() { None } else { Some(sub_groups) },
     };
-
     let cache_mutex = AGY_QUOTA_CACHE.get_or_init(|| Mutex::new(None));
     if let Ok(mut guard) = cache_mutex.lock() {
         *guard = Some((Instant::now(), res.clone()));
@@ -1374,17 +1494,16 @@ pub fn extract_antigravity_quota(force_refresh: bool) -> CliQuotaStatus {
     let cache_mutex = AGY_QUOTA_CACHE.get_or_init(|| Mutex::new(None));
     if let Ok(guard) = cache_mutex.lock() {
         if let Some((fetched_at, cached)) = guard.as_ref() {
-            if !force_refresh && fetched_at.elapsed().as_secs() < 300 {
+            if !force_refresh && fetched_at.elapsed().as_secs() < 60 {
                 return cached.clone();
             }
         }
     }
 
-    if force_refresh {
-        if let Some(res) = fetch_antigravity_quota_worker() {
-            save_agy_cache_to_disk(&res);
-            return res;
-        }
+    // 공식 API 조회는 모델 토큰을 쓰지 않으므로 캐시가 지나면 항상 다시 조회 (예전엔 트레이 새로고침에서만 조회해 수치가 멈춤)
+    if let Some(res) = fetch_antigravity_quota_worker() {
+        save_agy_cache_to_disk(&res);
+        return res;
     }
 
     if let Ok(guard) = cache_mutex.lock() {
@@ -1401,42 +1520,25 @@ pub fn extract_antigravity_quota(force_refresh: bool) -> CliQuotaStatus {
         return disk_cached;
     }
 
-    // 기본값 초기 쿼터 스냅샷 (첫 실행 시에도 빈칸/지연 없이 즉각 렌더링)
-    let fallback = CliQuotaStatus {
-        cli_id: "antigravity".into(),
-        cli_name: "Antigravity (agy)".into(),
-        plan_label: "Google DeepMind".into(),
-        source_label: "Antigravity 쿼터 연동".into(),
-        has_official_quota: true,
-        used_percent_5h: 10.0,
-        remaining_percent_5h: 90.0,
-        resets_at_5h: Some(get_dynamic_kst_reset(4)),
-        used_percent_weekly: 30.0,
-        remaining_percent_weekly: 70.0,
-        resets_at_weekly: Some(get_dynamic_kst_weekly_reset(6)),
-        status_message: None,
-        sub_groups: Some(vec![
-            crate::db::SubQuotaGroup {
-                name: "Claude and GPT models".into(),
-                description: Some("Claude Opus, Claude Sonnet, GPT-OSS".into()),
-                remaining_5h: Some(0.0),
-                resets_at_5h: Some(get_dynamic_kst_reset(2)),
-                remaining_weekly: Some(49.0),
-                resets_at_weekly: Some(get_dynamic_kst_weekly_reset(6)),
-            },
-            crate::db::SubQuotaGroup {
-                name: "Gemini 4 Argon".into(),
-                description: Some("Argon 전용 별도 쿼터".into()),
-                remaining_5h: None,
-                resets_at_5h: None,
-                remaining_weekly: Some(0.0),
-                resets_at_weekly: Some("11/02 14:04 리셋".into()),
-            },
-        ]),
-    };
+    // 조회 실패(agy 미로그인·네트워크 오류) 시 가짜 수치 대신 조회 불가 상태 표시
+    unavailable_quota("antigravity", "Antigravity (agy)", "Google DeepMind", "Antigravity 쿼터 연동", "쿼터 조회 실패 (agy 로그인 상태 확인)")
+}
 
-    save_agy_cache_to_disk(&fallback);
-    fallback
+/// DB 잠금을 잡기 전에 호출: 각 공식 쿼터 API를 병렬로 조회해 60초 캐시를 채운다.
+/// (잠금 안에서 네트워크를 기다리면 다른 명령이 멈추므로, 이후 collect_all_cli_quotas는 캐시만 읽게 됨)
+pub fn prefetch_live_quotas() {
+    let claude_stale = CLAUDE_QUOTA_CACHE
+        .get()
+        .and_then(|m| m.lock().ok().and_then(|g| g.as_ref().map(|(at, _)| at.elapsed().as_secs() >= 60)))
+        .unwrap_or(true);
+    std::thread::scope(|s| {
+        if claude_stale {
+            s.spawn(|| fetch_claude_quota_worker());
+        }
+        s.spawn(|| extract_codex_quota());
+        s.spawn(|| extract_grok_quota());
+        s.spawn(|| extract_antigravity_quota(false));
+    });
 }
 
 pub fn collect_all_cli_quotas(force_refresh: bool) -> Vec<CliQuotaStatus> {
@@ -1562,5 +1664,66 @@ mod tests {
         assert_eq!(rec.input_tokens, 1200);
         assert_eq!(rec.output_tokens, 300);
         assert_eq!(rec.cache_tokens, 400);
+    }
+}
+
+fn cli_stdout(bin: &Path, args: &[&str]) -> String {
+    let mut cmd = std::process::Command::new(bin);
+    cmd.args(args).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    cmd.output().map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default()
+}
+
+/// CLI별 모델 목록. claude는 목록 명령이 없어 공식 별칭/ID를 고정 제공.
+pub fn list_cli_models(cli_id: &str) -> Vec<String> {
+    let home = crate::cli::home_dir();
+    match cli_id {
+        "claude" => ["opus", "sonnet", "haiku", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+        "codex" => std::fs::read_to_string(home.join(".codex").join("models_cache.json"))
+            .ok()
+            .and_then(|r| serde_json::from_str::<Value>(&r).ok())
+            .and_then(|v| v.get("models").and_then(|m| m.as_array()).cloned())
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|m| m.get("slug").and_then(|s| s.as_str()).map(|s| s.to_string()))
+            .collect(),
+        // `grok models`: "  * grok-4.7 (default)" / "  - grok-4.6"
+        "grok" => cli_stdout(&home.join(".grok").join("bin").join("grok.exe"), &["models"])
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix("* ").or_else(|| l.trim().strip_prefix("- ")))
+            .map(|l| l.split_whitespace().next().unwrap_or("").to_string())
+            .filter(|m| !m.is_empty())
+            .collect(),
+        // `agy models`: "gemini-4-argon-medium	Gemini 4 Argon (Medium)"
+        "antigravity" => cli_stdout(&home.join("AppData").join("Local").join("agy").join("bin").join("agy.exe"), &["models"])
+            .lines()
+            .filter(|l| l.contains('\t'))
+            .map(|l| l.split('\t').next().unwrap_or("").trim().to_string())
+            .filter(|m| !m.is_empty())
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod live_quota_tests {
+    /// 실제 로그인 정보로 공식 쿼터 API 조회 확인: `cargo test live_quotas -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn live_quotas() {
+        super::prefetch_live_quotas();
+        for q in super::collect_all_cli_quotas(false) {
+            println!("{} | {} | 5h {}% ({:?}) | wk {}% ({:?}) | {:?}", q.cli_id, q.source_label, q.remaining_percent_5h, q.resets_at_5h, q.remaining_percent_weekly, q.resets_at_weekly, q.status_message);
+            assert!(q.has_official_quota, "{} 공식 쿼터 조회 실패", q.cli_id);
+        }
+        for cli in ["claude", "codex", "grok", "antigravity"] {
+            let models = super::list_cli_models(cli);
+            println!("{} models: {:?}", cli, models);
+            assert!(!models.is_empty(), "{} 모델 목록 비어 있음", cli);
+        }
     }
 }
