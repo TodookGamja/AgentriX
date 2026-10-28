@@ -455,7 +455,7 @@ fn save_clipboard_image(
     let bytes = B64.decode(clean_b64.trim()).map_err(|e| format!("Base64 디코딩 실패: {}", e))?;
 
     let file_ext = ext.unwrap_or_else(|| "png".to_string());
-    let filename = format!("pasted_image_{}.{}", chrono::Utc::now().format("%Y%m%d_%H%M%S"), file_ext);
+    let filename = format!("pasted_image_{}.{}", chrono::Utc::now().format("%Y%m%d_%H%M%S_%3f"), file_ext);
 
     let target_dir = if let Some(ref p) = project_path {
         let p_obj = std::path::Path::new(p);

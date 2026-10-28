@@ -1903,6 +1903,15 @@ ${recentSnippet || "진행 내역 기록 없음"}
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
+  // 사용량/쿼터 자동 새로고침 (CLI 응답 후 반영되도록 주기적으로 갱신)
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      if (document.hidden) return;
+      apiGetUsageDashboard(usageCliFilter, usageTimeframe).then(setUsageDashboard).catch(() => {});
+    }, 60000);
+    return () => window.clearInterval(id);
+  }, [usageCliFilter, usageTimeframe, setUsageDashboard]);
+
   // 시스템 트레이에서 쿼터 갱신 이벤트 수신 시 실시간 동기화
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -3056,8 +3065,6 @@ ${recentSnippet || "진행 내역 기록 없음"}
                         activeNav === "terminal" && projectSubView === "session"
                       }
                       isFocused={activeSessionId === session.id}
-                      headroomEnabled={headroomEnabled}
-                      cavemanEnabled={cavemanEnabled}
                       splitActive={splitLayout !== "single"}
                       projectAgentCount={sameProjCount}
                       estimatedTokens={sessionTokens[session.id] || 0}
@@ -3094,8 +3101,6 @@ ${recentSnippet || "진행 내역 기록 없음"}
                     session={hiddenSession}
                     cliDef={clis.find((c) => c.id === hiddenSession.cliId)}
                     isVisible={false}
-                    headroomEnabled={headroomEnabled}
-                    cavemanEnabled={cavemanEnabled}
                     splitActive={false}
                     projectAgentCount={1}
                     estimatedTokens={sessionTokens[hiddenSession.id] || 0}
@@ -3846,22 +3851,13 @@ ${recentSnippet || "진행 내역 기록 없음"}
               )}
             </div>
 
-            <div className="px-5 py-3.5 bg-slate-950 border-t border-slate-800 flex items-center justify-between">
-              <button
-                type="button"
-                onClick={() => apiOpenExternalUrl(updateInfo.release_url)}
-                className="inline-flex items-center gap-1 text-[11px] text-slate-400 hover:text-indigo-400 transition cursor-pointer"
-              >
-                <span>GitHub 릴리즈 페이지</span>
-                <ExternalLink className="w-3 h-3" />
-              </button>
-
+            <div className="px-5 py-3.5 bg-slate-950 border-t border-slate-800 space-y-2.5">
               <div className="flex items-center gap-2">
                 {!isDownloadingUpdate && (
                   <button
                     type="button"
                     onClick={() => setIsUpdateModalOpen(false)}
-                    className="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition cursor-pointer"
+                    className="flex-1 h-9 inline-flex items-center justify-center rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold whitespace-nowrap transition cursor-pointer"
                   >
                     다음에 하기
                   </button>
@@ -3870,7 +3866,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
                   type="button"
                   disabled={isDownloadingUpdate}
                   onClick={handleInAppSelfUpdate}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-fuchsia-600 hover:from-indigo-500 hover:to-fuchsia-500 disabled:opacity-60 text-white text-xs font-extrabold shadow-lg shadow-indigo-600/30 transition cursor-pointer active:scale-95"
+                  className="flex-[2] h-9 inline-flex items-center justify-center gap-1.5 px-4 rounded-xl bg-gradient-to-r from-indigo-600 to-fuchsia-600 hover:from-indigo-500 hover:to-fuchsia-500 disabled:opacity-60 text-white text-xs font-extrabold whitespace-nowrap shadow-lg shadow-indigo-600/30 transition cursor-pointer active:scale-95"
                 >
                   <ArrowUpCircle className={`w-3.5 h-3.5 ${isDownloadingUpdate ? "animate-spin" : ""}`} />
                   <span>
@@ -3882,6 +3878,14 @@ ${recentSnippet || "진행 내역 기록 없음"}
                   </span>
                 </button>
               </div>
+              <button
+                type="button"
+                onClick={() => apiOpenExternalUrl(updateInfo.release_url)}
+                className="w-full inline-flex items-center justify-center gap-1 text-[11px] text-slate-400 hover:text-indigo-400 transition cursor-pointer"
+              >
+                <span>GitHub 릴리즈 페이지</span>
+                <ExternalLink className="w-3 h-3" />
+              </button>
             </div>
           </div>
         </div>

@@ -239,8 +239,9 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
               return (
                 <div
                   key={cli.id}
-                  className="flex items-center justify-between p-1.5 rounded-xl bg-slate-950/60 border border-slate-800/80 hover:border-slate-700/80 transition gap-1.5 shadow-sm"
+                  className="p-1.5 rounded-xl bg-slate-950/60 border border-slate-800/80 hover:border-slate-700/80 transition space-y-1.5 shadow-sm"
                 >
+                <div className="flex items-center justify-between gap-1.5">
                   <button
                     onClick={() => onStartRawCli(cli.id)}
                     className="inline-flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-800/60 text-slate-100 text-xs font-semibold transition min-w-0 truncate flex-1"
@@ -271,6 +272,8 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
                       추가
                     </button>
                   ) : null}
+                </div>
+                <CliModelField cliId={cli.id} />
                 </div>
               );
             })}
@@ -541,7 +544,6 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
                         />
                       </div>
                       <div className="text-[10px] text-slate-500 truncate">{defaultInfo.desc}</div>
-                      <CliModelField cliId={cli.id} />
                     </div>
                   );
                 })}

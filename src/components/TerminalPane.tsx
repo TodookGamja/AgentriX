@@ -1,20 +1,21 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Terminal } from "xterm";
-import { FitAddon } from "xterm-addon-fit";
+import { Terminal } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
+import "@xterm/xterm/css/xterm.css";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
   CornerDownLeft,
   FolderOpen,
   Image as ImageIcon,
-  KeyRound,
   LogIn,
   Paperclip,
   RefreshCw,
   RotateCcw,
   Send,
-  ShieldCheck,
   Sparkles,
   Square,
   TerminalSquare,
+  X,
   Zap,
 } from "lucide-react";
 import type { CliDefinition, SessionInfo } from "../types/types";
@@ -31,8 +32,6 @@ interface TerminalPaneProps {
   cliDef?: CliDefinition;
   isVisible: boolean;
   isFocused?: boolean;
-  headroomEnabled: boolean;
-  cavemanEnabled: boolean;
   splitActive?: boolean;
   projectAgentCount?: number;
   estimatedTokens?: number;
@@ -58,8 +57,6 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
   cliDef,
   isVisible,
   isFocused = false,
-  headroomEnabled,
-  cavemanEnabled,
   splitActive = false,
   projectAgentCount = 1,
   estimatedTokens = 0,
@@ -81,6 +78,29 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [isFilePickerOpen, setIsFilePickerOpen] = useState(false);
+  const [attachments, setAttachments] = useState<string[]>([]);
+
+  // 채팅창 높이 (상단 핸들 드래그로 조절, localStorage 저장)
+  const [chatHeight, setChatHeight] = useState<number>(
+    () => Number(localStorage.getItem("agentrix_chat_height")) || 150
+  );
+  useEffect(() => {
+    localStorage.setItem("agentrix_chat_height", String(chatHeight));
+  }, [chatHeight]);
+
+  const startChatResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = chatHeight;
+    const onMove = (ev: MouseEvent) =>
+      setChatHeight(Math.round(Math.max(110, Math.min(window.innerHeight * 0.7, startH + startY - ev.clientY))));
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
 
   // 하단 전용 채팅창 상태
   const [promptText, setPromptText] = useState("");
@@ -123,52 +143,65 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     }
   };
 
-  // 첨부 파일 선택 창에서 파일/이미지가 선택되었을 때
-  const handleFileInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
+  // 첨부 파일은 채팅창 위 칩으로 보관했다가 전송 시 경로로 함께 보낸다
+  const addAttachments = (paths: string[]) =>
+    setAttachments((prev) => [...prev, ...paths.filter((p) => p && !prev.includes(p))]);
 
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      if (file.type.startsWith("image/")) {
-        const reader = new FileReader();
-        reader.onload = async () => {
-          const b64 = reader.result as string;
-          try {
-            const savedPath = await apiSaveClipboardImage(b64, session.cwd, "png");
-            const payload = `"${savedPath}" `;
-            await apiWriteToSession(session.id, payload);
-            if (termRef.current) {
-              termRef.current.write(payload);
-            }
-          } catch (err) {
-            console.error("이미지 첨부 저장 오류:", err);
-          }
-        };
-        reader.readAsDataURL(file);
-      } else {
-        const anyF = file as any;
-        const filePath = anyF.path || file.name;
-        const payload = `"${filePath}" `;
-        await apiWriteToSession(session.id, payload);
-        if (termRef.current) {
-          termRef.current.write(payload);
-        }
-      }
+  // 실제 경로가 없는 파일(클립보드/네이티브 선택)은 프로젝트 .attachments에 저장 후 첨부
+  const attachFiles = async (files: FileList | File[]) => {
+    try {
+      const paths = await Promise.all(
+        Array.from(files).map(async (f) => {
+          const p = (f as any).path as string | undefined;
+          if (p) return p;
+          const b64 = await new Promise<string>((res, rej) => {
+            const r = new FileReader();
+            r.onload = () => res(r.result as string);
+            r.onerror = rej;
+            r.readAsDataURL(f);
+          });
+          const ext = f.name.includes(".") ? f.name.split(".").pop()! : f.type.split("/")[1] || "png";
+          return apiSaveClipboardImage(b64, session.cwd, ext);
+        })
+      );
+      addAttachments(paths);
+    } catch (err) {
+      console.error("파일 첨부 실패:", err);
     }
+  };
+
+  const handleFileInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files?.length) await attachFiles(e.target.files);
     e.target.value = "";
   };
 
-  // AgentriX 테마 커스텀 파일 피커에서 파일들이 선택되었을 때
-  const handleCustomFilePickerSelect = async (paths: string[]) => {
-    if (!paths || paths.length === 0) return;
-    const payload = paths.map((p) => `"${p}"`).join(" ") + " ";
-    await apiWriteToSession(session.id, payload);
-    if (termRef.current) {
-      termRef.current.write(payload);
-      termRef.current.focus();
-    }
-  };
+  // 탐색기에서 끌어다 놓은 파일: Tauri 네이티브 드롭 이벤트로 실제 경로를 받아 이 패널 위에 놓였을 때만 첨부
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!isVisible) return;
+    const inside = (pos: { x: number; y: number }) => {
+      const r = rootRef.current?.getBoundingClientRect();
+      if (!r || r.width === 0) return false;
+      const x = pos.x / window.devicePixelRatio;
+      const y = pos.y / window.devicePixelRatio;
+      return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+    };
+    let unlisten: (() => void) | undefined;
+    getCurrentWebview()
+      .onDragDropEvent(({ payload }) => {
+        if (payload.type === "leave") return setIsDraggingOver(false);
+        const over = inside(payload.position);
+        if (payload.type === "drop") {
+          setIsDraggingOver(false);
+          if (over) addAttachments(payload.paths);
+        } else {
+          setIsDraggingOver(over);
+        }
+      })
+      .then((u) => (unlisten = u))
+      .catch(() => {});
+    return () => unlisten?.();
+  }, [isVisible]);
 
   // 포커스 진입 시 xterm 자동 포커스
   useEffect(() => {
@@ -249,6 +282,8 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       fontFamily: '"JetBrains Mono", Consolas, "Malgun Gothic", monospace',
       scrollback: 5000,
       allowProposedApi: true,
+      // ConPTY가 직접 줄바꿈·재배치하므로 xterm 리플로우와 충돌하지 않게 알려준다 (스크롤 후 화면 깨짐 방지)
+      windowsPty: navigator.userAgent.includes("Windows") ? { backend: "conpty", buildNumber: 22000 } : undefined,
       theme: {
         background: "#090d16",
         foreground: "#e2e8f0",
@@ -342,104 +377,16 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     resizeObserver.observe(container);
 
     // 클립보드 이미지 / 파일 붙여넣기 (Ctrl + V) 핸들러
-    const handlePaste = async (e: ClipboardEvent) => {
-      const items = e.clipboardData?.items;
-      if (items) {
-        for (let i = 0; i < items.length; i++) {
-          const item = items[i];
-          if (item.type.startsWith("image/")) {
-            e.preventDefault();
-            e.stopPropagation();
-            const file = item.getAsFile();
-            if (file) {
-              const reader = new FileReader();
-              reader.onload = async () => {
-                const b64 = reader.result as string;
-                try {
-                  const savedPath = await apiSaveClipboardImage(b64, session.cwd, "png");
-                  const payload = `"${savedPath}" `;
-                  await apiWriteToSession(session.id, payload);
-                  if (termRef.current) {
-                    termRef.current.write(payload);
-                  }
-                } catch (err) {
-                  console.error("클립보드 이미지 저장 오류:", err);
-                }
-              };
-              reader.readAsDataURL(file);
-              return;
-            }
-          }
-        }
-      }
-
-      const files = e.clipboardData?.files;
-      if (files && files.length > 0) {
-        const filePaths: string[] = [];
-        for (let i = 0; i < files.length; i++) {
-          const f = files[i] as any;
-          if (f.path) {
-            filePaths.push(`"${f.path}"`);
-          }
-        }
-        if (filePaths.length > 0) {
-          e.preventDefault();
-          e.stopPropagation();
-          const payload = filePaths.join(" ") + " ";
-          await apiWriteToSession(session.id, payload);
-          if (termRef.current) {
-            termRef.current.write(payload);
-          }
-          return;
-        }
-      }
-    };
-
-    // 파일 드래그 앤 드롭 핸들러
-    const handleDragOver = (e: DragEvent) => {
+    // 터미널에 붙여넣은 파일/이미지도 바로 입력하지 않고 채팅창 첨부로 보낸다
+    const handlePaste = (e: ClipboardEvent) => {
+      const files = Array.from(e.clipboardData?.files ?? []);
+      if (files.length === 0) return;
       e.preventDefault();
       e.stopPropagation();
-      if (e.dataTransfer) {
-        e.dataTransfer.dropEffect = "copy";
-      }
-      setIsDraggingOver(true);
-    };
-
-    const handleDragLeave = (e: DragEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      setIsDraggingOver(false);
-    };
-
-    const handleDrop = async (e: DragEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      setIsDraggingOver(false);
-
-      const files = e.dataTransfer?.files;
-      if (!files || files.length === 0) return;
-
-      const paths: string[] = [];
-      for (let i = 0; i < files.length; i++) {
-        const f = files[i] as any;
-        if (f.path) {
-          paths.push(`"${f.path}"`);
-        }
-      }
-
-      if (paths.length > 0) {
-        const payload = paths.join(" ") + " ";
-        await apiWriteToSession(session.id, payload);
-        if (termRef.current) {
-          termRef.current.write(payload);
-        }
-      }
+      attachFiles(files);
     };
 
     container.addEventListener("paste", handlePaste);
-    container.addEventListener("dragover", handleDragOver);
-    container.addEventListener("dragleave", handleDragLeave);
-    container.addEventListener("drop", handleDrop);
 
     setTimeout(() => {
       // 숨김(hidden) 상태로 마운트된 경우 PTY를 기본 80x24로 줄이지 않는다 (CLI가 좁은 폭으로 다시 그려 줄이 늘어남)
@@ -459,9 +406,6 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       window.clearInterval(pollInterval);
       resizeObserver.disconnect();
       container.removeEventListener("paste", handlePaste);
-      container.removeEventListener("dragover", handleDragOver);
-      container.removeEventListener("dragleave", handleDragLeave);
-      container.removeEventListener("drop", handleDrop);
       dataDisposable.dispose();
       term.dispose();
     };
@@ -504,7 +448,8 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
 
   const handleSendChatPrompt = async () => {
     const trimmed = promptText.trim();
-    if (!trimmed) {
+    const message = [...attachments.map((p) => `"${p}"`), trimmed].filter(Boolean).join(" ");
+    if (!message) {
       await apiWriteToSession(session.id, "\r");
       termRef.current?.scrollToBottom();
       termRef.current?.focus();
@@ -512,14 +457,15 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     }
 
     if (broadcastToProject && onBroadcastToProject) {
-      await onBroadcastToProject(session.cwd, `${trimmed}\r`);
+      await onBroadcastToProject(session.cwd, `${message}\r`);
     } else if (broadcastToSplit && splitActive && onBroadcastPrompt) {
-      await onBroadcastPrompt(`${trimmed}\r`);
+      await onBroadcastPrompt(`${message}\r`);
     } else {
-      await apiWriteToSession(session.id, `${trimmed}\r`);
+      await apiWriteToSession(session.id, `${message}\r`);
     }
 
-    setPromptHistory((prev) => [trimmed, ...prev.slice(0, 29)]);
+    if (trimmed) setPromptHistory((prev) => [trimmed, ...prev.slice(0, 29)]);
+    setAttachments([]);
     setHistoryIdx(-1);
     setPromptText("");
     termRef.current?.scrollToBottom();
@@ -554,31 +500,17 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
 
   const folderName =
     session.cwd?.split(/[/\\]/).filter(Boolean).pop() || session.cwd;
-  const isWrapper = session.binaryPath.includes("Headroom Wrapper");
 
   return (
-    <div className="flex flex-col w-full h-full bg-[#090d16] border border-slate-800/80 rounded-xl overflow-hidden">
+    <div ref={rootRef} className="flex flex-col w-full h-full bg-[#090d16] border border-slate-800/80 rounded-xl overflow-hidden">
       {/* 1. 상단 세션 헤더 바 (절대 줄바꿈/찌그러짐 없도록 whitespace-nowrap & shrink-0 적용) */}
       <div className="flex items-center justify-between gap-2 px-3 py-1.5 bg-slate-900/95 border-b border-slate-800/80 text-xs overflow-x-auto no-scrollbar shrink-0">
-        <div className="flex items-center gap-2 shrink-0">
+        {/* 프로젝트 + 역할만 표시 (세부 정보는 마우스 오버) */}
+        <div className="flex items-center gap-2 min-w-0">
           <TerminalSquare
             className="w-3.5 h-3.5 shrink-0"
             style={{ color: cliDef?.accentColor ?? "#818cf8" }}
           />
-          <span className="font-bold text-slate-100 whitespace-nowrap">
-            {session.name}
-          </span>
-
-          {session.agentRole && (
-            <span
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-fuchsia-500/15 text-fuchsia-300 border border-fuchsia-500/30 text-[11px] font-semibold whitespace-nowrap shrink-0"
-              title={session.rolePrompt ?? session.agentRole}
-            >
-              역할: {session.agentRole}
-            </span>
-          )}
-
-          {/* 프로젝트 폴더 배지 (짧은 프로젝트명 표시 + 마우스 오버 시 전체 경로) */}
           <span
             className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 font-mono text-[11px] font-semibold whitespace-nowrap shrink-0"
             title={`작업 프로젝트 폴더: ${session.cwd}`}
@@ -586,58 +518,23 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
             <FolderOpen className="w-3 h-3 shrink-0" />
             {folderName}
           </span>
-
-          {isWrapper && (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px] font-semibold whitespace-nowrap shrink-0">
-              <Sparkles className="w-2.5 h-2.5 shrink-0" />
-              Headroom
-            </span>
-          )}
-
-          {session.envInjected.length > 0 ? (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 text-[10px] whitespace-nowrap shrink-0">
-              <KeyRound className="w-2.5 h-2.5 shrink-0" />
-              API 키 주입됨
-            </span>
-          ) : (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 text-[10px] whitespace-nowrap shrink-0">
-              <ShieldCheck className="w-2.5 h-2.5 shrink-0" />
-              구독 인증
-            </span>
-          )}
-
-          {(headroomEnabled || cavemanEnabled) && (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-300 border border-amber-500/20 text-[10px] whitespace-nowrap shrink-0">
-              <Sparkles className="w-2.5 h-2.5 shrink-0" />
-              {[
-                headroomEnabled ? "Headroom" : null,
-                cavemanEnabled ? "Caveman" : null,
-              ]
-                .filter(Boolean)
-                .join(" + ")}
-            </span>
-          )}
+          <span
+            className="font-semibold text-slate-100 truncate"
+            title={session.rolePrompt ?? session.agentRole ?? session.name}
+          >
+            {session.agentRole || session.name}
+          </span>
         </div>
 
         <div className="flex items-center gap-1.5 shrink-0">
           {session.rolePrompt && (
             <button
               onClick={handleInjectRoleBriefing}
-              className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-fuchsia-600/80 hover:bg-fuchsia-500 text-white font-semibold transition text-[11px] whitespace-nowrap shrink-0 shadow"
+              className="inline-flex items-center gap-1 px-2 py-1 rounded bg-fuchsia-600/80 hover:bg-fuchsia-500 text-white font-semibold transition text-[11px] whitespace-nowrap shrink-0 shadow"
               title="이 프로젝트에 설정된 에이전트 전담 역할 지침(Role Briefing)을 터미널에 즉시 주입합니다"
             >
               <Sparkles className="w-3 h-3 shrink-0" />
-              역할 지침 주입
-            </button>
-          )}
-          {cliDef?.loginCommand && (
-            <button
-              onClick={() => sendRawCommand(cliDef.loginCommand)}
-              className="inline-flex items-center gap-1 px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition text-[11px] whitespace-nowrap shrink-0"
-              title={`터미널에 '${cliDef.loginCommand}' 전송`}
-            >
-              <LogIn className="w-3 h-3 text-indigo-400 shrink-0" />
-              로그인
+              역할 주입
             </button>
           )}
           {/* 토큰 사용량 & 스마트 인수인계 릴레이 버튼 */}
@@ -666,30 +563,13 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
             </button>
           )}
 
-          {/* 파일 / 이미지 첨부 (테마 맞춤형 모달 UI 및 클립보드 Ctrl+V 및 드래그 앤 드롭 지원) */}
-          <input
-            type="file"
-            ref={fileInputRef}
-            onChange={handleFileInputChange}
-            className="hidden"
-            multiple
-          />
-          <button
-            onClick={() => setIsFilePickerOpen(true)}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition text-[11px] font-semibold whitespace-nowrap shrink-0 shadow-sm"
-            title="이미지 또는 파일 선택 (테마 맞춤 파일 탐색기 열기 / Ctrl+V 붙여넣기 및 드래그 앤 드롭 지원)"
-          >
-            <Paperclip className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-            <span className="hidden sm:inline">파일/이미지 첨부</span>
-          </button>
-
           <button
             onClick={() => apiWriteToSession(session.id, "\x03")}
             className="inline-flex items-center gap-1 px-2 py-1 rounded bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 transition text-[11px] whitespace-nowrap shrink-0"
             title="Ctrl+C (실행 중단 신호 전송)"
           >
             <Square className="w-2.5 h-2.5 fill-current shrink-0" />
-            중단(Ctrl+C)
+            중단
           </button>
           {/* 폰트 크기 조절 컨트롤 (Ctrl + 휠 / Ctrl + +/- 지원) */}
           <div className="flex items-center bg-slate-800/80 rounded border border-slate-700/80 text-[10px] shrink-0">
@@ -746,19 +626,41 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
           <div className="absolute inset-0 z-30 bg-indigo-950/85 backdrop-blur-sm border-2 border-dashed border-indigo-400 flex flex-col items-center justify-center pointer-events-none animate-in fade-in duration-100">
             <ImageIcon className="w-10 h-10 text-indigo-400 mb-2 animate-bounce" />
             <div className="text-sm font-bold text-white">파일 또는 이미지를 놓으세요</div>
-            <div className="text-xs text-indigo-200 mt-1">경로가 터미널 프롬프트에 자동으로 입력됩니다</div>
+            <div className="text-xs text-indigo-200 mt-1">채팅창에 첨부됩니다</div>
           </div>
         )}
       </div>
 
       {/* 3. 하단 전용 채팅 / 프롬프트 입력창 (한글 입력 · 멀티라인 · 슬래시 명령어 · 동시 전송 지원) */}
-      <div className="shrink-0 bg-slate-900/95 border-t border-slate-800 p-2.5 space-y-2">
-        {/* 빠른 슬래시 명령어 & 프로젝트 경로 바 */}
-        <div className="flex items-center justify-between gap-2 overflow-x-auto no-scrollbar">
+      {/* 터미널 ↔ 채팅창 높이 조절 핸들 */}
+      <div
+        onMouseDown={startChatResize}
+        className="h-1.5 shrink-0 cursor-row-resize bg-slate-800 hover:bg-indigo-500/70 transition"
+        title="드래그하여 채팅창 높이 조절"
+      />
+      <div
+        className="shrink-0 flex flex-col gap-2 bg-slate-900/95 p-2.5"
+        style={{ height: chatHeight }}
+      >
+        {/* 첨부 버튼 · 빠른 슬래시 명령어 바 */}
+        <div className="flex items-center justify-between gap-2 overflow-x-auto no-scrollbar shrink-0">
           <div className="flex items-center gap-1 shrink-0">
-            <span className="text-[10px] text-slate-400 mr-1 whitespace-nowrap">
-              빠른 명령:
-            </span>
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={handleFileInputChange}
+              className="hidden"
+              multiple
+            />
+            <button
+              type="button"
+              onClick={() => setIsFilePickerOpen(true)}
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-indigo-600/80 hover:bg-indigo-500 text-white text-[10px] font-semibold transition whitespace-nowrap mr-1"
+              title="파일/이미지 첨부 (Ctrl+V 붙여넣기 · 드래그 앤 드롭 지원)"
+            >
+              <Paperclip className="w-3 h-3" />
+              첨부
+            </button>
             {QUICK_COMMANDS.map((q) => (
               <button
                 key={q.cmd}
@@ -778,6 +680,17 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
             >
               ESC
             </button>
+            {cliDef?.loginCommand && (
+              <button
+                type="button"
+                onClick={() => sendRawCommand(cliDef.loginCommand)}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700/80 text-[10px] transition whitespace-nowrap"
+                title={`터미널에 '${cliDef.loginCommand}' 전송`}
+              >
+                <LogIn className="w-3 h-3 text-indigo-400" />
+                로그인
+              </button>
+            )}
           </div>
 
           <div className="flex items-center gap-3 shrink-0 text-[11px]">
@@ -809,64 +722,50 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
           </div>
         </div>
 
-        {/* 채팅 입력 박스와 전송 버튼 */}
-        <div className="flex items-end gap-2">
-          <div className="flex-1 relative">
-            <textarea
-              rows={2}
-              value={promptText}
-              onChange={(e) => setPromptText(e.target.value)}
-              onKeyDown={handleKeyDown}
-              onPaste={async (e) => {
-                const items = e.clipboardData?.items;
-                if (items) {
-                  for (let i = 0; i < items.length; i++) {
-                    const item = items[i];
-                    if (item.type.startsWith("image/")) {
-                      e.preventDefault();
-                      const file = item.getAsFile();
-                      if (file) {
-                        const reader = new FileReader();
-                        reader.onload = async () => {
-                          const b64 = reader.result as string;
-                          try {
-                            const savedPath = await apiSaveClipboardImage(b64, session.cwd, "png");
-                            setPromptText((prev) => (prev ? `${prev} "${savedPath}" ` : `"${savedPath}" `));
-                          } catch (err) {
-                            console.error("채팅창 이미지 붙여넣기 실패:", err);
-                          }
-                        };
-                        reader.readAsDataURL(file);
-                        return;
-                      }
-                    }
-                  }
-                }
-                const files = e.clipboardData?.files;
-                if (files && files.length > 0) {
-                  const paths: string[] = [];
-                  for (let i = 0; i < files.length; i++) {
-                    const f = files[i] as any;
-                    if (f.path) paths.push(`"${f.path}"`);
-                  }
-                  if (paths.length > 0) {
-                    e.preventDefault();
-                    setPromptText((prev) => (prev ? `${prev} ${paths.join(" ")} ` : `${paths.join(" ")} `));
-                  }
-                }
-              }}
-              placeholder={`[${folderName}] ${session.name}에게 보낼 메시지나 파일/이미지 붙여넣기(Ctrl+V)...`}
-              className="w-full pl-3 pr-8 py-2 rounded-lg bg-slate-950 border border-slate-700/90 focus:border-indigo-500 focus:outline-none text-xs text-slate-100 placeholder-slate-500 resize-none leading-relaxed"
-            />
-            <button
-              type="button"
-              onClick={() => setIsFilePickerOpen(true)}
-              className="absolute right-2.5 top-2.5 p-1 rounded-md text-slate-400 hover:text-indigo-400 hover:bg-slate-800 transition"
-              title="파일 또는 이미지 탐색 모달 열기"
-            >
-              <Paperclip className="w-3.5 h-3.5" />
-            </button>
+        {/* 첨부된 파일 칩 (전송 시 경로가 메시지 앞에 붙음) */}
+        {attachments.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 shrink-0 max-h-14 overflow-y-auto">
+            {attachments.map((p) => (
+              <span
+                key={p}
+                title={p}
+                className="inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-md bg-indigo-500/15 text-indigo-200 border border-indigo-500/30 text-[11px] max-w-[220px]"
+              >
+                {/\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(p) ? (
+                  <ImageIcon className="w-3 h-3 shrink-0" />
+                ) : (
+                  <Paperclip className="w-3 h-3 shrink-0" />
+                )}
+                <span className="truncate">{p.split(/[/\\]/).pop()}</span>
+                <button
+                  type="button"
+                  onClick={() => setAttachments((prev) => prev.filter((x) => x !== p))}
+                  className="p-0.5 rounded hover:bg-indigo-500/30"
+                  title="첨부 제거"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </span>
+            ))}
           </div>
+        )}
+
+        {/* 채팅 입력 박스와 전송 버튼 */}
+        <div className="flex items-stretch gap-2 flex-1 min-h-0">
+          <textarea
+            value={promptText}
+            onChange={(e) => setPromptText(e.target.value)}
+            onKeyDown={handleKeyDown}
+            onPaste={(e) => {
+              const files = Array.from(e.clipboardData?.files ?? []);
+              if (files.length > 0) {
+                e.preventDefault();
+                attachFiles(files);
+              }
+            }}
+            placeholder={`[${folderName}] ${session.name}에게 보낼 메시지 (파일/이미지는 Ctrl+V로 첨부)...`}
+            className="flex-1 h-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700/90 focus:border-indigo-500 focus:outline-none text-xs text-slate-100 placeholder-slate-500 resize-none leading-relaxed"
+          />
 
           <div className="flex flex-col gap-1 shrink-0">
             <button
@@ -895,7 +794,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       <FilePickerModal
         isOpen={isFilePickerOpen}
         onClose={() => setIsFilePickerOpen(false)}
-        onSelectFiles={handleCustomFilePickerSelect}
+        onSelectFiles={addAttachments}
         initialPath={session.cwd}
         onFallbackNative={() => fileInputRef.current?.click()}
       />
