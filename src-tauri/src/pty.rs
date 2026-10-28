@@ -285,13 +285,15 @@ impl PtyManager {
             .ok_or_else(|| "세션을 찾을 수 없습니다.".to_string())?;
 
         let mut bytes = data.to_vec();
-        // Windows ConPTY에서 엔터 키 입력을 즉시 전송하기 위해 \r 및 \n 정규화
-        if bytes.ends_with(b"\r") && !bytes.ends_with(b"\r\n") {
-            bytes.push(b'\n');
+        // ConPTY 표준 키 입력 처리:
+        // 터미널 입력에서 엔터(Enter)는 항상 단일 CR(0x0D, '\r')이어야 합니다.
+        // \r\n이 전달되면 ConPTY/PSReadLine에서 엔터 후 줄바꿈(Shift+Enter)으로 오인하여
+        // 멀티라인 입력 대기 상태(쉘 멈춤/먹통 현상)가 발생하므로 \r\n을 \r로 정규화합니다.
+        if bytes.ends_with(b"\r\n") {
+            bytes.pop(); // \n 제거하여 단일 \r만 전송
         } else if bytes.ends_with(b"\n") && (bytes.len() < 2 || bytes[bytes.len() - 2] != b'\r') {
-            let last = bytes.pop().unwrap();
-            bytes.push(b'\r');
-            bytes.push(last);
+            let last_idx = bytes.len() - 1;
+            bytes[last_idx] = b'\r';
         }
 
         session
@@ -393,6 +395,18 @@ fn build_platform_command(
     } else {
         ""
     };
+
+    if cli_def.id == "powershell" {
+        let mut cmd = CommandBuilder::new("powershell.exe");
+        cmd.args(["-NoLogo", "-NoExit", "-ExecutionPolicy", "Bypass"]);
+        return (cmd, "PowerShell".to_string());
+    }
+
+    if cli_def.id == "cmd" {
+        let mut cmd = CommandBuilder::new("cmd.exe");
+        cmd.args(["/k"]);
+        return (cmd, "명령 프롬프트 (CMD)".to_string());
+    }
 
     if let Some(init_cmd) = initial_command.filter(|s| !s.trim().is_empty()) {
         if init_cmd == "__WRAPPER__" {

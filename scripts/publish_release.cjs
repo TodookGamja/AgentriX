@@ -75,20 +75,21 @@ async function main() {
             body: `## 🚀 AgentriX ${tag} 업데이트 안내
 
 ### ✨ 이번 버전(${tag}) 주요 수정 및 개선 사항
-- **UI 정렬 셀렉터 이중 박스 완전 제거**:
-  - 부모 테두리와 내부 select의 중복 테두리를 제거하고 매끄러운 단일 필 UI로 개편
-- **동적 CLI 대상 필터 & 쿼터 카드 확장**:
-  - 고정된 4~5개 제한을 풀고 **Cursor Agent CLI, OpenCode CLI 및 모든 커스텀 추가 CLI**까지 실시간 감지하여 탭 및 그리드 카드에 자동 추가
-- **라이트 모드 토스트 가독성 최적화**:
-  - 라이트 모드에서 검은 배경에 검은 글씨로 나오던 문제를 순수 화이트 고대비 컬러로 수정
-- **리셋 잔여 시간 과거 시간 표시 버그 수정**:
-  - 만료된 캐시 자동 파기 및 현재 시각 기준 이미 지난 시간("18:59" 등)은 "리셋 완료"로 정상 검증 처리
-- **좌하단 사용자 프로필 및 업데이트 버튼 UI 재배치**:
-  - 상단 헤더 겹침을 완전 해결하고 사이드바 좌하단에 깔끔하게 배치
+- **⚡ 인앱 원클릭 직접 자동 업데이트(In-Place Self Update & Auto Restart) 완벽 탑재**:
+  - 브라우저나 다운로드 폴더로 이동할 필요 없이, 앱 내에서 **[✨ 지금 바로 자동 업데이트]**를 누르면 실시간 다운로드 후 실행 파일을 자체 교체하고 자동으로 재실행합니다!
+- **🎨 라이트 모드 토스트 & 시스템 팔레트 고대비 완벽 보정**:
+  - 라이트 모드에서 흰 배경에 흰 글씨로 나오던 문제를 전용 고대비 디자인 시스템으로 전면 개선
+- **📐 UI 정렬 셀렉터 이중 박스 완전 제거 & 단일 라운드 필 개편**:
+  - 테두리 중복 없는 미려한 UI
+- **🌐 동적 CLI 대상 필터 & 쿼터 카드 확장**:
+  - 고정된 CLI 목록 제한을 풀고 Cursor Agent CLI, OpenCode CLI 및 커스텀 추가 CLI까지 실시간 반영
+- **⏰ 리셋 잔여 시간 과거 시간 표시("18:59" 등) 만료 검증 필터 적용**:
+  - 만료된 캐시 자동 파기 및 현재 시각 기준 이미 지난 시간은 "리셋 완료"로 정상 검증 처리
 
 ### 📦 다운로드 안내
 - **단일 무설치 실행 파일**: \`AgentriX.exe\` (다운로드 후 바로 실행)
 - **포터블 압축 패키지**: \`AgentriX-Portable-${tag}-win-x64.zip\`
+- **윈도우 정식 설치 인스톨러**: \`AgentriX-Setup-${tag}.exe\`
 `,
             draft: false,
             prerelease: false
@@ -132,9 +133,10 @@ async function main() {
         { localPath: path.resolve('release/AgentriX.exe'), name: 'AgentriX.exe', mime: 'application/octet-stream' },
         { localPath: path.resolve(`release/${zipName}`), name: zipName, mime: 'application/zip' }
     ];
-    if (fs.existsSync(path.resolve('release/AgentriX-Setup-v1.0.2.exe'))) {
+    const setupPath = path.resolve(`release/AgentriX-Setup-${tag}.exe`);
+    if (fs.existsSync(setupPath)) {
         filesToUpload.push({
-            localPath: path.resolve('release/AgentriX-Setup-v1.0.2.exe'),
+            localPath: setupPath,
             name: setupName,
             mime: 'application/octet-stream'
         });

@@ -79,10 +79,11 @@ import {
   apiWindowExit,
   apiWindowIsMaximized,
   apiCheckAppUpdate,
-  apiDownloadAndSaveUpdate,
+  apiPerformInAppUpdate,
   apiOpenExternalUrl,
   apiResetAppData,
   type AppUpdateInfo,
+  type UpdateProgressPayload,
 } from "./lib/tauriBridge";
 import { listen } from "@tauri-apps/api/event";
 import { TerminalPane } from "./components/TerminalPane";
@@ -286,11 +287,53 @@ export const App: React.FC = () => {
     showToast(`'${groupName}' 그룹이 삭제되었습니다.`, "info");
   };
 
-  // 자동 업데이트 상태 (실행 시 GitHub Releases 자동 감지)
+  // 자동 업데이트 상태 (실행 시 GitHub Releases 자동 감지 & 인앱 직접 교체)
   const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null);
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
   const [isDownloadingUpdate, setIsDownloadingUpdate] = useState(false);
+  const [updateProgress, setUpdateProgress] = useState<{
+    status: "idle" | "downloading" | "installing" | "done" | "error";
+    percent: number;
+    message: string;
+  }>({
+    status: "idle",
+    percent: 0,
+    message: "",
+  });
+
+  // 업데이트 완료 후 앱 재시작 시 성공 토스트 표시
+  useEffect(() => {
+    try {
+      if (localStorage.getItem("agentrix_just_updated") === "true") {
+        localStorage.removeItem("agentrix_just_updated");
+        showToast("AgentriX가 최신 버전으로 성공적으로 업데이트되었습니다! 🎉", "success");
+      }
+    } catch {}
+  }, []);
+
+  // 인앱 다운로드 실시간 프로그레스 이벤트 리스너
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<UpdateProgressPayload>("update-progress", (event) => {
+      const p = event.payload;
+      setUpdateProgress({
+        status: p.status as any,
+        percent: Math.round(p.percent),
+        message: p.message,
+      });
+      if (p.status === "error") {
+        setIsDownloadingUpdate(false);
+        showToast(p.message || "업데이트 적용 중 오류가 발생했습니다.", "error");
+      }
+    }).then((fn) => {
+      unlisten = fn;
+    });
+
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
 
   const handleCheckUpdate = useCallback(async (manual = false) => {
     setIsCheckingUpdate(true);
@@ -311,29 +354,35 @@ export const App: React.FC = () => {
     }
   }, []);
 
-  const handleDownloadUpdate = async () => {
+  // 인앱 원클릭 직접 업데이트 (다운로드 -> 바이너리 자체 교체 -> 앱 자동 재실행)
+  const handleInAppSelfUpdate = async () => {
     if (!updateInfo) return;
-    const url = updateInfo.download_url || updateInfo.release_url;
-    setIsDownloadingUpdate(true);
-    showToast("최신 버전 다운로드를 시작합니다...", "info");
-
-    try {
-      // 1. 브라우저로 다운로드/릴리즈 링크 즉시 오픈
-      await apiOpenExternalUrl(url);
-
-      // 2. 인앱에서도 사용자의 다운로드 폴더에 안전하게 다운로드 후 탐색기 열기
-      if (updateInfo.download_url) {
-        const savedPath = await apiDownloadAndSaveUpdate(updateInfo.download_url);
-        if (savedPath) {
-          showToast("다운로드 폴더에 저장되었습니다!", "success");
-        }
-      }
-    } catch (e) {
+    const downloadUrl = updateInfo.download_url;
+    if (!downloadUrl) {
       await apiOpenExternalUrl(updateInfo.release_url);
       showToast("브라우저에서 릴리즈 페이지를 열었습니다.", "info");
-    } finally {
+      return;
+    }
+
+    setIsDownloadingUpdate(true);
+    setUpdateProgress({
+      status: "downloading",
+      percent: 0,
+      message: "최신 버전 다운로드 연결 중...",
+    });
+
+    try {
+      localStorage.setItem("agentrix_just_updated", "true");
+    } catch {}
+
+    try {
+      await apiPerformInAppUpdate(downloadUrl);
+    } catch (err) {
+      try {
+        localStorage.removeItem("agentrix_just_updated");
+      } catch {}
       setIsDownloadingUpdate(false);
-      setIsUpdateModalOpen(false);
+      showToast(`자동 업데이트 실패: ${String(err)}`, "error");
     }
   };
 
@@ -2420,7 +2469,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
             <div className="flex items-center justify-between px-1 text-[11px] select-none">
               <span className="font-mono text-slate-400 font-bold flex items-center gap-1.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                AgentriX v1.0.2
+                AgentriX v1.0.3
               </span>
               <button
                 type="button"
@@ -3700,7 +3749,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
               {updateInfo.release_notes ? (
                 <div>
                   <span className="block text-[11px] font-semibold text-slate-300 mb-1">업데이트 변경 내역:</span>
-                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-slate-200 text-[11px] font-mono max-h-48 overflow-y-auto whitespace-pre-wrap leading-relaxed">
+                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-slate-200 text-[11px] font-mono max-h-40 overflow-y-auto whitespace-pre-wrap leading-relaxed">
                     {updateInfo.release_notes}
                   </div>
                 </div>
@@ -3710,15 +3759,37 @@ ${recentSnippet || "진행 내역 기록 없음"}
                 </div>
               )}
 
-              <div className="p-3 rounded-xl bg-indigo-500/10 border border-indigo-500/20 space-y-1">
-                <div className="font-semibold text-indigo-300 flex items-center gap-1.5">
-                  <Sparkles className="w-3.5 h-3.5" />
-                  간편 업데이트 안내
+              {isDownloadingUpdate ? (
+                <div className="space-y-2.5 p-4 rounded-xl bg-slate-950 border border-indigo-500/40 animate-in fade-in duration-200">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-bold text-indigo-400 flex items-center gap-1.5">
+                      <ArrowUpCircle className="w-4 h-4 animate-spin text-indigo-400" />
+                      {updateProgress.status === "installing" ? "새 버전 적용 및 앱 자동 재실행 중..." : "최신 버전 다운로드 중..."}
+                    </span>
+                    <span className="font-mono font-bold text-indigo-300">{updateProgress.percent}%</span>
+                  </div>
+                  <div className="w-full h-2.5 bg-slate-800 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-gradient-to-r from-indigo-500 via-purple-500 to-fuchsia-500 transition-all duration-150 rounded-full"
+                      style={{ width: `${Math.max(4, updateProgress.percent)}%` }}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono">
+                    <span className="truncate">{updateProgress.message || "다운로드 준비 중..."}</span>
+                    <span className="text-[10px] text-slate-500 shrink-0 ml-2">완료 즉시 앱이 재실행됩니다</span>
+                  </div>
                 </div>
-                <p className="text-[11px] text-slate-400 leading-relaxed">
-                  아래 [최신 버전 다운로드]를 클릭하여 최신 포터블 실행 파일을 내려받아 바로 실행하시면 기존 설정과 세션이 그대로 유지됩니다.
-                </p>
-              </div>
+              ) : (
+                <div className="p-3.5 rounded-xl bg-gradient-to-r from-indigo-950/40 via-slate-900 to-slate-950 border border-indigo-500/30 space-y-1">
+                  <div className="font-bold text-indigo-300 flex items-center gap-1.5 text-xs">
+                    <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+                    인앱 원클릭 자동 업데이트
+                  </div>
+                  <p className="text-[11px] text-slate-300 leading-relaxed">
+                    [지금 바로 자동 업데이트]를 누르면 앱이 백그라운드에서 최신 버전을 내려받아 즉시 교체하고 재실행합니다. (웹페이지 이동이나 수동 파일 교체 필요 없음)
+                  </p>
+                </div>
+              )}
             </div>
 
             <div className="px-5 py-3.5 bg-slate-950 border-t border-slate-800 flex items-center justify-between">
@@ -3732,21 +3803,29 @@ ${recentSnippet || "진행 내역 기록 없음"}
               </button>
 
               <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setIsUpdateModalOpen(false)}
-                  className="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition cursor-pointer"
-                >
-                  다음에 하기
-                </button>
+                {!isDownloadingUpdate && (
+                  <button
+                    type="button"
+                    onClick={() => setIsUpdateModalOpen(false)}
+                    className="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition cursor-pointer"
+                  >
+                    다음에 하기
+                  </button>
+                )}
                 <button
                   type="button"
                   disabled={isDownloadingUpdate}
-                  onClick={handleDownloadUpdate}
-                  className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-bold shadow-md shadow-indigo-600/30 transition cursor-pointer"
+                  onClick={handleInAppSelfUpdate}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-fuchsia-600 hover:from-indigo-500 hover:to-fuchsia-500 disabled:opacity-60 text-white text-xs font-extrabold shadow-lg shadow-indigo-600/30 transition cursor-pointer active:scale-95"
                 >
                   <ArrowUpCircle className={`w-3.5 h-3.5 ${isDownloadingUpdate ? "animate-spin" : ""}`} />
-                  <span>{isDownloadingUpdate ? "다운로드 중..." : "최신 버전 다운로드"}</span>
+                  <span>
+                    {isDownloadingUpdate
+                      ? updateProgress.status === "installing"
+                        ? "앱 재실행 중..."
+                        : `업데이트 중... (${updateProgress.percent}%)`
+                      : "✨ 지금 바로 자동 업데이트"}
+                  </span>
                 </button>
               </div>
             </div>

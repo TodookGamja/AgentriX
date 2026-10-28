@@ -18,6 +18,7 @@ import {
   Zap,
 } from "lucide-react";
 import type { CliDefinition, SessionInfo } from "../types/types";
+import { listen } from "@tauri-apps/api/event";
 import {
   apiReadSessionOutput,
   apiResizeSession,
@@ -293,6 +294,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
         if (chunk.data && chunk.data.length > 0) {
           cursorRef.current = chunk.nextCursor;
           term.write(chunk.data);
+          term.scrollToBottom();
           if (onOutputChunk) {
             onOutputChunk(session.id, chunk.data);
           }
@@ -458,8 +460,27 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     }
   }, [isVisible, session.id]);
 
+  // 실시간 PTY 데이터 스트리밍 이벤트 수신 (폴링 지연 없는 0ms 즉시 화면 반영)
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<{ sessionId: string; data: string }>("pty-data", (event) => {
+      if (event.payload.sessionId === session.id && termRef.current) {
+        termRef.current.write(event.payload.data);
+        termRef.current.scrollToBottom();
+      }
+    }).then((fn) => {
+      unlisten = fn;
+    });
+
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, [session.id]);
+
   const sendRawCommand = (cmd: string) => {
     apiWriteToSession(session.id, `${cmd}\r`).catch(console.error);
+    termRef.current?.scrollToBottom();
+    termRef.current?.focus();
     if (onActivity) onActivity();
   };
 
@@ -469,6 +490,8 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       session.cwd?.split(/[/\\]/).filter(Boolean).pop() || session.cwd;
     const briefing = `[프로젝트 '${fName}' 에이전트 역할 부여] 당신은 '${session.agentName ?? session.name}' (${session.agentRole ?? "전담 에이전트"})입니다. 지침: ${session.rolePrompt} (.ai-agents/agents/${session.agentId}/ROLE.md 및 .ai-agents/BLACKBOARD.md 파일을 함께 참고하여 이 프로젝트 범위 내에서만 임무를 수행하세요.)\r`;
     await apiWriteToSession(session.id, briefing);
+    termRef.current?.scrollToBottom();
+    termRef.current?.focus();
     if (onActivity) onActivity();
   };
 
@@ -476,6 +499,8 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     const trimmed = promptText.trim();
     if (!trimmed) {
       await apiWriteToSession(session.id, "\r");
+      termRef.current?.scrollToBottom();
+      termRef.current?.focus();
       return;
     }
 
@@ -490,6 +515,8 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     setPromptHistory((prev) => [trimmed, ...prev.slice(0, 29)]);
     setHistoryIdx(-1);
     setPromptText("");
+    termRef.current?.scrollToBottom();
+    termRef.current?.focus();
     if (onActivity) onActivity();
   };
 

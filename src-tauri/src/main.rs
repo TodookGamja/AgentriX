@@ -942,10 +942,10 @@ fn is_newer_version(latest: &str, current: &str) -> bool {
 
 #[tauri::command]
 fn check_app_update() -> Result<AppUpdateInfo, String> {
-    let current_version = "1.0.2".to_string();
+    let current_version = "1.0.3".to_string();
     let url = "https://api.github.com/repos/TodookGamja/AgentriX/releases/latest";
     let resp = match ureq::get(url)
-        .set("User-Agent", "AgentriX-Updater/1.0.2")
+        .set("User-Agent", "AgentriX-Updater/1.0.3")
         .timeout(std::time::Duration::from_secs(5))
         .call()
     {
@@ -971,12 +971,24 @@ fn check_app_update() -> Result<AppUpdateInfo, String> {
 
     let mut download_url = None;
     if let Some(assets) = json.get("assets").and_then(|v| v.as_array()) {
+        // 1순위: 즉시 인플레이스 교체 가능한 단일 실행 바이너리 AgentriX.exe
         for asset in assets {
             if let Some(name) = asset.get("name").and_then(|v| v.as_str()) {
-                if name.ends_with(".zip") || name.ends_with(".exe") {
+                if name.eq_ignore_ascii_case("AgentriX.exe") {
                     if let Some(durl) = asset.get("browser_download_url").and_then(|v| v.as_str()) {
                         download_url = Some(durl.to_string());
-                        if name.ends_with(".zip") {
+                        break;
+                    }
+                }
+            }
+        }
+        // 2순위: 기타 실행 파일
+        if download_url.is_none() {
+            for asset in assets {
+                if let Some(name) = asset.get("name").and_then(|v| v.as_str()) {
+                    if name.ends_with(".exe") {
+                        if let Some(durl) = asset.get("browser_download_url").and_then(|v| v.as_str()) {
+                            download_url = Some(durl.to_string());
                             break;
                         }
                     }
@@ -1055,6 +1067,215 @@ fn download_and_save_update(url: String, filename: Option<String>) -> Result<Str
     Ok(target_path.to_string_lossy().to_string())
 }
 
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct UpdateProgressPayload {
+    pub status: String, // "downloading" | "installing" | "done" | "error"
+    pub percent: f64,
+    pub downloaded_bytes: u64,
+    pub total_bytes: u64,
+    pub message: String,
+}
+
+#[tauri::command]
+async fn perform_in_app_update(app: tauri::AppHandle, download_url: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        do_perform_in_app_update(app, download_url)
+    })
+    .await
+    .map_err(|e| format!("업데이트 태스크 실행 오류: {}", e))?
+}
+
+fn do_perform_in_app_update(app: tauri::AppHandle, download_url: String) -> Result<(), String> {
+    use std::io::{Read, Write};
+
+    let _ = app.emit("update-progress", UpdateProgressPayload {
+        status: "downloading".to_string(),
+        percent: 0.0,
+        downloaded_bytes: 0,
+        total_bytes: 0,
+        message: "업데이트 서버에 연결하는 중...".to_string(),
+    });
+
+    let resp = ureq::get(&download_url)
+        .set("User-Agent", "AgentriX-SelfUpdater")
+        .call()
+        .map_err(|e| {
+            let msg = format!("업데이트 다운로드 요청 실패: {}", e);
+            let _ = app.emit("update-progress", UpdateProgressPayload {
+                status: "error".to_string(),
+                percent: 0.0,
+                downloaded_bytes: 0,
+                total_bytes: 0,
+                message: msg.clone(),
+            });
+            msg
+        })?;
+
+    let total_bytes: u64 = resp.header("Content-Length").and_then(|s| s.parse().ok()).unwrap_or(0);
+    let temp_dir = std::env::temp_dir();
+    let temp_exe = temp_dir.join(format!("agentrix_update_{}.exe", std::process::id()));
+
+    if temp_exe.exists() {
+        let _ = std::fs::remove_file(&temp_exe);
+    }
+
+    let mut file = std::fs::File::create(&temp_exe)
+        .map_err(|e| format!("임시 파일 생성 실패: {}", e))?;
+
+    let mut reader = resp.into_reader();
+    let mut buffer = [0u8; 65536];
+    let mut downloaded_bytes: u64 = 0;
+    let mut last_emit = std::time::Instant::now();
+
+    loop {
+        let n = reader.read(&mut buffer).map_err(|e| format!("데이터 수신 오류: {}", e))?;
+        if n == 0 {
+            break;
+        }
+        file.write_all(&buffer[..n]).map_err(|e| format!("파일 기록 오류: {}", e))?;
+        downloaded_bytes += n as u64;
+
+        if last_emit.elapsed().as_millis() >= 80 || (total_bytes > 0 && downloaded_bytes == total_bytes) {
+            let percent = if total_bytes > 0 {
+                ((downloaded_bytes as f64 / total_bytes as f64) * 100.0).min(100.0)
+            } else {
+                0.0
+            };
+            let _ = app.emit("update-progress", UpdateProgressPayload {
+                status: "downloading".to_string(),
+                percent,
+                downloaded_bytes,
+                total_bytes,
+                message: format!(
+                    "{:.1} MB / {:.1} MB ({:.0}%)",
+                    downloaded_bytes as f64 / 1_048_576.0,
+                    total_bytes as f64 / 1_048_576.0,
+                    percent
+                ),
+            });
+            last_emit = std::time::Instant::now();
+        }
+    }
+    drop(file);
+
+    // 유효성 검증: 크기 및 PE 헤더 확인
+    let meta = std::fs::metadata(&temp_exe).map_err(|e| e.to_string())?;
+    if meta.len() < 3 * 1024 * 1024 {
+        let _ = std::fs::remove_file(&temp_exe);
+        let err_msg = "다운로드된 파일 크기가 비정상적입니다 (3MB 미만).".to_string();
+        let _ = app.emit("update-progress", UpdateProgressPayload {
+            status: "error".to_string(),
+            percent: 0.0,
+            downloaded_bytes,
+            total_bytes,
+            message: err_msg.clone(),
+        });
+        return Err(err_msg);
+    }
+
+    let mut verify_file = std::fs::File::open(&temp_exe).map_err(|e| e.to_string())?;
+    let mut magic = [0u8; 2];
+    if verify_file.read_exact(&mut magic).is_err() || &magic != b"MZ" {
+        drop(verify_file);
+        let _ = std::fs::remove_file(&temp_exe);
+        let err_msg = "다운로드된 파일이 유효한 Windows 실행 파일이 아닙니다.".to_string();
+        let _ = app.emit("update-progress", UpdateProgressPayload {
+            status: "error".to_string(),
+            percent: 0.0,
+            downloaded_bytes,
+            total_bytes,
+            message: err_msg.clone(),
+        });
+        return Err(err_msg);
+    }
+    drop(verify_file);
+
+    let _ = app.emit("update-progress", UpdateProgressPayload {
+        status: "installing".to_string(),
+        percent: 100.0,
+        downloaded_bytes,
+        total_bytes,
+        message: "새 버전 적용 및 앱 자동 재실행 중...".to_string(),
+    });
+
+    std::thread::sleep(std::time::Duration::from_millis(300));
+
+    let current_exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let backup_exe = current_exe.with_extension("exe.old");
+
+    // 이전 잔류 .old 백업 파일 정리
+    if backup_exe.exists() {
+        let _ = std::fs::remove_file(&backup_exe);
+    }
+
+    // 1차 시도: Atomic rename & copy
+    let rename_ok = std::fs::rename(&current_exe, &backup_exe).is_ok();
+    if rename_ok {
+        if let Err(e) = std::fs::copy(&temp_exe, &current_exe) {
+            let _ = std::fs::rename(&backup_exe, &current_exe);
+            let _ = std::fs::remove_file(&temp_exe);
+            let err_msg = format!("실행 파일 교체 실패: {}", e);
+            let _ = app.emit("update-progress", UpdateProgressPayload {
+                status: "error".to_string(),
+                percent: 0.0,
+                downloaded_bytes,
+                total_bytes,
+                message: err_msg.clone(),
+            });
+            return Err(err_msg);
+        }
+        let _ = std::fs::remove_file(&temp_exe);
+
+        // 새 버전 프로세스 독립 실행
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            let mut cmd = std::process::Command::new(&current_exe);
+            cmd.creation_flags(0x00000200 | 0x00000008);
+            let _ = cmd.spawn();
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = std::process::Command::new(&current_exe).spawn();
+        }
+
+        std::process::exit(0);
+    } else {
+        // 2차 시도: Fallback 배치 스크립트 (현재 PID 종료 대기 후 복사 및 재실행)
+        let script_path = temp_dir.join(format!("agentrix_swap_{}.bat", std::process::id()));
+        let script_content = format!(
+            "@echo off\r\n\
+             chcp 65001 >nul\r\n\
+             :wait_loop\r\n\
+             tasklist /fi \"pid eq {pid}\" 2>nul | find \"{pid}\" >nul\r\n\
+             if not errorlevel 1 (\r\n\
+                 timeout /t 1 /nobreak >nul\r\n\
+                 goto wait_loop\r\n\
+             )\r\n\
+             timeout /t 1 /nobreak >nul\r\n\
+             copy /y \"{new_exe}\" \"{target_exe}\" >nul\r\n\
+             del /f /q \"{new_exe}\" 2>nul\r\n\
+             start \"\" \"{target_exe}\"\r\n\
+             del /f /q \"%~f0\" 2>nul\r\n",
+            pid = std::process::id(),
+            new_exe = temp_exe.to_string_lossy(),
+            target_exe = current_exe.to_string_lossy()
+        );
+        let _ = std::fs::write(&script_path, script_content);
+
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            let mut cmd = std::process::Command::new("cmd.exe");
+            cmd.args(["/c", &script_path.to_string_lossy()]);
+            cmd.creation_flags(0x08000000 | 0x00000008);
+            let _ = cmd.spawn();
+        }
+
+        std::process::exit(0);
+    }
+}
+
 fn main() {
     std::panic::set_hook(Box::new(|info| {
         let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
@@ -1067,6 +1288,14 @@ fn main() {
         let msg = format!("PANIC: {}\nLocation: {:?}\n", payload, info.location());
         let _ = std::fs::write("panic.log", msg);
     }));
+    // 이전 자동 업데이트 후 잔여 백업 파일(.exe.old) 자동 청소
+    if let Ok(exe) = std::env::current_exe() {
+        let old_exe = exe.with_extension("exe.old");
+        if old_exe.exists() {
+            let _ = std::fs::remove_file(old_exe);
+        }
+    }
+
     let conn = init_db().expect("SQLite 데이터베이스 초기화 실패");
     let db_arc = Arc::new(Mutex::new(conn));
     let db_clone = Arc::clone(&db_arc);
@@ -1236,6 +1465,7 @@ fn main() {
             check_app_update,
             open_external_url,
             download_and_save_update,
+            perform_in_app_update,
             reset_app_data,
             save_clipboard_image,
         ])

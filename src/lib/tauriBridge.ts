@@ -562,10 +562,16 @@ export async function apiOpenExternalUrl(url: string): Promise<void> {
   window.open(url, "_blank");
 }
 
-export async function apiDownloadAndSaveUpdate(url: string, filename?: string): Promise<string> {
+export interface UpdateProgressPayload {
+  status: "downloading" | "installing" | "done" | "error";
+  percent: number;
+  downloaded_bytes: number;
+  total_bytes: number;
+  message: string;
+}
+
+export async function apiPerformInAppUpdate(downloadUrl: string): Promise<void> {
   if (isTauriRuntime()) {
-    return invoke<string>("download_and_save_update", { url, filename });
+    return invoke<void>("perform_in_app_update", { downloadUrl });
   }
-  window.open(url, "_blank");
-  return "";
 }
