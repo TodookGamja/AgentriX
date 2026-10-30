@@ -57,6 +57,7 @@ interface ProjectWorkspaceViewProps {
   agents: ProjectAgentRecord[];
   clis: CliDefinition[];
   headroomEnabled: boolean;
+  headroomAppliedClis: string[];
   runningSessions: SessionInfo[];
   onAddRecommendedAgent: (rec: ProjectAgentInput) => Promise<void>;
   onAddAllRecommended: (recs: ProjectAgentInput[]) => Promise<void>;
@@ -84,6 +85,7 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
   agents,
   clis,
   headroomEnabled,
+  headroomAppliedClis,
   runningSessions,
   onAddRecommendedAgent,
   onAddAllRecommended,
@@ -379,7 +381,10 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
 
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 2xl:grid-cols-6 gap-2.5">
             {clis.map((cli) => {
-                const isApplied = headroomEnabled && Boolean(cli.wrapperBinary);
+                const isApplied =
+                  headroomEnabled &&
+                  Boolean(cli.wrapperBinary) &&
+                  headroomAppliedClis.includes(cli.id);
 
               return (
                 <div

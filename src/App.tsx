@@ -953,7 +953,7 @@ export const App: React.FC = () => {
     }
 
     const initialCmd =
-      headroomEnabled && agent.useWrapper && cliDef?.wrapperBinary ? "__WRAPPER__" : undefined;
+      headroomEnabled && agent.useWrapper && cliDef?.wrapperBinary && headroomAppliedClis.includes(agent.cliId) ? "__WRAPPER__" : undefined;
     const perm = permissionLaunch(agent.cliId);
 
     try {
@@ -1177,7 +1177,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
         : undefined;
       const useWrapper = relayAgent?.useWrapper ?? targetSession.binaryPath.includes("Headroom Wrapper");
       const initialCmd =
-        headroomEnabled && useWrapper && cliDef?.wrapperBinary
+        headroomEnabled && useWrapper && cliDef?.wrapperBinary && headroomAppliedClis.includes(targetSession.cliId)
           ? "__WRAPPER__"
           : undefined;
 
@@ -1805,6 +1805,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
 
   const headroomItem = registryItems.find((i) => i.id === "headroom-mcp");
   const headroomEnabled = headroomItem?.enabled ?? false;
+  const headroomAppliedClis = headroomItem?.appliedClis ?? [];
   const cavemanEnabled =
     registryItems.find((i) => i.id === "caveman-skill")?.enabled ?? true;
 
@@ -3327,6 +3328,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
                 agents={projectAgents}
                 clis={clis}
               headroomEnabled={headroomEnabled}
+              headroomAppliedClis={headroomAppliedClis}
                 runningSessions={currentProjectSessions}
                 onAddRecommendedAgent={handleAddRecommendedAgent}
                 onAddAllRecommended={handleAddAllRecommended}
