@@ -107,6 +107,7 @@ import { FolderPickerModal } from "./components/FolderPickerModal";
 import { AgentrixLogo } from "./components/AgentrixLogo";
 import { boardProtocol, mailProtocol, parseBoardTasks } from "./lib/blackboardDispatch";
 import { getTeamMailDeliveries, removeTeamMailDelivery, saveTeamMailDelivery } from "./lib/teamMailDelivery";
+import { findApproval, getApprovalMode, upsertApproval } from "./lib/taskApproval";
 import { countNewChars } from "./lib/tokenEstimate";
 import { forgetSessionInput, getLastSubmission, getSubmissionVersion, getSessionInputHistory, hasPendingSessionInput, setInstructionKeyResolver } from "./lib/inputHistory";
 import { permissionLaunch } from "./lib/permissionSettings";
@@ -952,7 +953,7 @@ export const App: React.FC = () => {
     }
 
     const initialCmd =
-      agent.useWrapper && cliDef?.wrapperBinary ? "__WRAPPER__" : undefined;
+      headroomEnabled && agent.useWrapper && cliDef?.wrapperBinary ? "__WRAPPER__" : undefined;
     const perm = permissionLaunch(agent.cliId);
 
     try {
@@ -1062,6 +1063,7 @@ export const App: React.FC = () => {
       accentColor: agent.accentColor,
       rolePrompt: agent.rolePrompt,
       autoBrief: agent.autoBrief,
+      model: agent.model,
     };
     try {
       const updated = await apiUpsertProjectAgent(payload);
@@ -1175,7 +1177,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
         : undefined;
       const useWrapper = relayAgent?.useWrapper ?? targetSession.binaryPath.includes("Headroom Wrapper");
       const initialCmd =
-        useWrapper && cliDef?.wrapperBinary
+        headroomEnabled && useWrapper && cliDef?.wrapperBinary
           ? "__WRAPPER__"
           : undefined;
 
@@ -1344,6 +1346,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
             accentColor: agent.accentColor,
             rolePrompt: agent.rolePrompt,
             autoBrief: agent.autoBrief,
+            model: agent.model,
           });
         }
       }
@@ -2234,6 +2237,25 @@ ${recentSnippet || "진행 내역 기록 없음"}
       for (const t of tasks) {
         const key = `${t.taskId}:${t.status}:${t.agentId}`;
         if (sent.has(key)) continue;
+        // 수동 승인 모드: 사용자가 승인한 작업만 전달, 반려는 사유를 PM에게 알리고 종료
+        if (t.status === "start" && getApprovalMode(project) === "manual") {
+          const ap = findApproval(project, t.taskId, t.agentId);
+          if (!ap) {
+            upsertApproval(project, { taskId: t.taskId, agentId: t.agentId, status: "pending" });
+            showToast(`승인 대기 작업: ${t.taskId} → ${agents.find((a) => a.id === t.agentId)?.name ?? t.agentId}. '작업 보드' 탭에서 확인하세요.`, "info");
+            continue;
+          }
+          if (ap.status === "pending") continue;
+          if (ap.status === "rejected") {
+            // ponytail: 반려 알림은 전달 기록 없이 1회 직접 전송, PM 세션이 바쁘면 다음 폴링에 재시도
+            if (!ap.notified) {
+              if (!pmSession || !(await sendToIdleTeamSession(pmSession, `[반려] ${t.taskId} 작업이 사용자에 의해 반려되었습니다. 사유: ${(ap.reason || "없음").replace(/[\r\n]+/g, " ")} .ai-agents/BLACKBOARD.md에서 해당 작업을 수정하거나 재계획하세요.\r`))) continue;
+              upsertApproval(project, { ...ap, notified: true });
+            }
+            sent.add(key);
+            continue;
+          }
+        }
         if (t.status === "done") {
           if (!pmSession) continue;
           if (getTeamMailDeliveries().some((d) => d.project === project && d.agentId === t.agentId && d.id === t.taskId && d.kind === "task")) continue;

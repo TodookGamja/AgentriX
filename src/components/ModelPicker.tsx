@@ -23,12 +23,27 @@ export const setCliDefaultModel = (cliId: string, model: string) => {
 
 const modelCache: Record<string, Promise<string[]>> = {};
 
+// 모델 목록은 24시간 디스크 캐시: 매 실행마다 `cursor-agent models` 등을 띄우면 CLI 내부 cscript 때문에 콘솔창이 깜빡임
+const MODELS_TTL = 24 * 60 * 60 * 1000;
+const readModels = (cliId: string): string[] | null => {
+  try {
+    const c = JSON.parse(localStorage.getItem(`agentrix_models_${cliId}`) || "null");
+    return c && Date.now() - c.at < MODELS_TTL && c.models.length > 0 ? c.models : null;
+  } catch {
+    return null;
+  }
+};
+
 /** 모델 목록 조회 (빈 결과·실패는 캐시하지 않아 다음에 다시 시도) */
-export const loadCliModels = (cliId: string): Promise<string[]> =>
-  (modelCache[cliId] ??= apiListCliModels(cliId).catch(() => [])).then((m) => {
+export const loadCliModels = (cliId: string): Promise<string[]> => {
+  const cached = readModels(cliId);
+  if (cached) return Promise.resolve(cached);
+  return (modelCache[cliId] ??= apiListCliModels(cliId).catch(() => [])).then((m) => {
     if (m.length === 0) delete modelCache[cliId];
+    else localStorage.setItem(`agentrix_models_${cliId}`, JSON.stringify({ at: Date.now(), models: m }));
     return m;
   });
+};
 
 interface ModelPickerProps {
   cliId: string;

@@ -41,6 +41,29 @@ fn resolve_recipient(to: &str, agents: &[(String, String)]) -> Option<String> {
     match (hit.next(), hit.next()) { (Some((id, _)), None) => Some(id.clone()), _ => None }
 }
 
+/// 영문/숫자 단어 경계에서만 매칭 (짧은 ID가 다른 단어에 섞여 잡히지 않게). 한글 조사가 붙은 이름은 허용
+fn find_word(hay: &str, needle: &str) -> Option<usize> {
+    hay.match_indices(needle).map(|(i, _)| i).find(|&i| {
+        !hay[..i].chars().next_back().is_some_and(|c| c.is_ascii_alphanumeric())
+            && !hay[i + needle.len()..].chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
+    })
+}
+
+/// 모델이 JSON 대신 마크다운 보고서로 쓴 경우: `수신/받는/to` 줄에서 가장 먼저 나오는 팀원(ID 또는 이름)을 수신자로, 첫 제목을 제목으로, 전체를 본문으로 사용
+/// ponytail: 수신자 1명만 인식(첫 번째), 전체 공지는 미지원 — 필요하면 여러 명에게 복제 전달
+fn parse_text_mail(text: &str, roster: &[(String, String)], from: &str) -> Option<Mail> {
+    let line = text.lines().find(|l| {
+        let l = l.trim_start_matches(|c: char| "-*# >".contains(c)).to_lowercase();
+        l.starts_with("수신") || l.starts_with("받는") || l.starts_with("to:")
+    })?;
+    let low = line.to_lowercase();
+    let to = roster.iter().filter(|(id, _)| id != from)
+        .filter_map(|(id, name)| [id.to_lowercase(), name.trim().to_lowercase()].iter().filter(|k| !k.is_empty()).filter_map(|k| find_word(&low, k)).min().map(|p| (p, id)))
+        .min()?.1.clone();
+    let subject = text.lines().find(|l| l.starts_with('#')).map(|l| l.trim_start_matches('#').trim().to_string()).unwrap_or_default();
+    Some(Mail { to, subject, body: text.trim().to_string() })
+}
+
 /// agents: (ID, 이름). 메시지의 `to`에는 ID 또는 이름을 쓸 수 있음
 pub fn route(project: &Path, roster: &[(String, String)]) -> Result<Vec<InboxMessage>, String> {
     let agents: Vec<String> = roster.iter().map(|(id, _)| id.clone()).collect();
@@ -55,9 +78,12 @@ pub fn route(project: &Path, roster: &[(String, String)]) -> Result<Vec<InboxMes
             let path = entry.path();
             if !entry.file_type().map_err(|e| e.to_string())?.is_file() { continue; }
             let Some(name) = path.file_stem().and_then(|v| v.to_str()) else { continue };
-            if path.extension().and_then(|v| v.to_str()) != Some("json") || !safe_id(name) { continue; }
+            let ext = path.extension().and_then(|v| v.to_str()).unwrap_or("");
+            if !matches!(ext, "json" | "md" | "txt") || !safe_id(name) { continue; }
             if entry.metadata().map_err(|e| e.to_string())?.len() > 65536 { continue; }
-            let Ok(mut mail) = serde_json::from_slice::<Mail>(&fs::read(&path).map_err(|e| e.to_string())?) else { continue };
+            let raw = fs::read(&path).map_err(|e| e.to_string())?;
+            let parsed = if ext == "json" { serde_json::from_slice::<Mail>(&raw).ok() } else { parse_text_mail(&String::from_utf8_lossy(&raw), roster, from) };
+            let Some(mut mail) = parsed else { continue };
             let Some(to_id) = resolve_recipient(&mail.to, roster) else { continue };
             if to_id == *from || mail.body.trim().is_empty() { continue; }
             mail.to = to_id;
@@ -114,6 +140,15 @@ mod tests {
         fs::write(outbox.join("one.json"), r#"{"to":"b","subject":"hello","body":"work"}"#).unwrap();
         assert!(route(&project, &agents).unwrap().is_empty());
         assert!(acknowledge(&project, "b", "../bad").is_err());
+        // 마크다운 보고서: 수신 줄의 ID/이름 → 수신자, 자기 자신·미등록 수신자는 무시
+        let md = "# 완료 보고
+- **발신**: Mira
+- **수신**: Jun (`b`) 및 팀원 전체
+본문";
+        assert_eq!(parse_text_mail(md, &agents, "a").unwrap().to, "b");
+        assert!(parse_text_mail("todo: x
+수신: nobody", &agents, "a").is_none());
+        assert!(parse_text_mail("수신: Mira", &agents, "a").is_none());
         fs::remove_dir_all(project).unwrap();
     }
 }

@@ -22,6 +22,15 @@ export function parseBoardTasks(board: string, agentIds: string[], names?: Recor
   let roleColIdx = -1;
 
   for (const line of lines) {
+    // PM이 표 대신 체크리스트(- [ ] S1 담당 `작업`)로 써도 인식: [ ] → 착수, [x] → 완료. ID로 시작하지 않는 일반 체크 항목은 무시
+    const box = line.match(/^\s*[-*]\s*\[([ xX])\]\s*(.+)$/);
+    if (box) {
+      const head = box[2].split("`")[0].replace(/\*/g, "");
+      const id = head.match(/^\s*([A-Za-z]+\d+\w*)/)?.[1];
+      const agentId = id && (agentIds.find((a) => head.includes(a)) ?? (names ? findAgentByName(head, names) : undefined));
+      if (id && agentId) tasks.push({ taskId: id, agentId, status: box[1] === " " ? "start" : "done" });
+      continue;
+    }
     if (!line.trimStart().startsWith("|")) continue;
     const cells = line.split("|").map((c) => c.trim());
     if (cells.length < 3) continue;
@@ -65,6 +74,20 @@ export function parseBoardTasks(board: string, agentIds: string[], names?: Recor
     }
   }
   return tasks;
+}
+
+// 작업 ID의 제목(표의 작업 칸 또는 체크리스트 항목 나머지) — 승인 보드 표시용
+export function boardTaskTitle(board: string, taskId: string): string {
+  for (const line of board.split(/\r?\n/)) {
+    if (line.trimStart().startsWith("|")) {
+      const c = line.split("|").map((x) => x.trim());
+      if (c[1] === taskId) return c[2] ?? "";
+    } else {
+      const head = line.match(/^\s*[-*]\s*\[[ xX]\]\s*(.+)$/)?.[1].replace(/\*/g, "");
+      if (head?.startsWith(taskId)) return head.slice(taskId.length).trim().slice(0, 80);
+    }
+  }
+  return "";
 }
 
 // PM이 디스패처가 읽을 수 있는 형식으로 작업표를 쓰도록 표 형식과 팀원 ID를 알려주는 한 줄 지침 (PTY 주입용, 개행 없음)

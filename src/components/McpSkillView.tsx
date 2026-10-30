@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   ArchiveRestore,
   Blocks,
@@ -11,10 +11,10 @@ import {
   Send,
   ShieldAlert,
   Sparkles,
-  Wrench,
 } from "lucide-react";
 import type { BackupRecord, CliDefinition, RegistryItem } from "../types/types";
 import { TokenToolsCard } from "./TokenToolsCard";
+import { apiCheckPluginUpdates, apiUpdatePlugin } from "../lib/tauriBridge";
 
 interface McpSkillViewProps {
   items: RegistryItem[];
@@ -119,9 +119,24 @@ export const McpSkillView: React.FC<McpSkillViewProps> = ({
   );
 
   const tokenSavers = items.filter((i) => i.isTokenSaver);
-  const filteredItems = items.filter((i) =>
-    filterKind === "all" ? true : i.kind === filterKind
+  const [updates, setUpdates] = useState<Record<string, { current: string; latest: string }>>({});
+  const [updating, setUpdating] = useState<string | null>(null);
+  const checkUpdates = () => apiCheckPluginUpdates().then(setUpdates).catch(() => {});
+  useEffect(() => { checkUpdates(); }, []);
+  const updatePlugin = async (key: string) => {
+    setUpdating(key);
+    try { await apiUpdatePlugin(key); await checkUpdates(); await onScanLocalExtensions(); } catch { /* 실패 시 배지 유지 */ } finally { setUpdating(null); }
+  };
+  const [query, setQuery] = useState("");
+  const [view, setView] = useState<"grid" | "list">("grid");
+  const [detailId, setDetailId] = useState<string | null>(null);
+  const q = query.trim().toLowerCase();
+  const filteredItems = items.filter(
+    (i) =>
+      (filterKind === "all" || i.kind === filterKind) &&
+      (!q || `${i.name} ${i.description} ${i.id}`.toLowerCase().includes(q))
   );
+  const detailItem = items.find((i) => i.id === detailId);
 
   const mcpCount = items.filter((i) => i.kind === "mcp").length;
   const skillCount = items.filter((i) => i.kind === "skill").length;
@@ -131,6 +146,7 @@ export const McpSkillView: React.FC<McpSkillViewProps> = ({
     setScanning(true);
     try {
       await onScanLocalExtensions();
+      await checkUpdates();
     } finally {
       setScanning(false);
     }
@@ -337,77 +353,70 @@ export const McpSkillView: React.FC<McpSkillViewProps> = ({
               </button>
             ))}
           </div>
-          <span className="text-xs text-slate-400">
-            현재 필터 표시: {filteredItems.length}개 항목
-          </span>
+          <div className="flex items-center gap-2">
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="이름 · 설명 검색"
+              className="w-48 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-slate-100"
+            />
+            <div className="flex gap-1 bg-slate-900 p-1 rounded-lg border border-slate-800">
+              {(["grid", "list"] as const).map((v) => (
+                <button
+                  key={v}
+                  onClick={() => setView(v)}
+                  className={`px-2.5 py-1 rounded text-xs ${view === v ? "bg-indigo-600 text-white" : "text-slate-400"}`}
+                >
+                  {v === "grid" ? "카드" : "리스트"}
+                </button>
+              ))}
+            </div>
+            <span className="text-xs text-slate-400">{filteredItems.length}개</span>
+          </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className={view === "grid" ? "grid grid-cols-1 md:grid-cols-2 gap-3" : "flex flex-col gap-2"}>
           {filteredItems.map((item) => (
             <div
               key={item.id}
-              className="p-4 rounded-xl bg-slate-900/90 border border-slate-800 flex flex-col justify-between gap-4"
+              onClick={() => setDetailId(item.id)}
+              className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 hover:border-slate-600 cursor-pointer flex flex-col gap-2"
             >
-              <div>
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="px-2 py-0.5 rounded bg-slate-800 text-indigo-300 uppercase text-[10px] font-bold border border-slate-700 shrink-0">
-                      {item.kind}
-                    </span>
-                    <h4 className="font-semibold text-sm text-slate-100 truncate">
-                      {item.name}
-                    </h4>
-                  </div>
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="px-2 py-0.5 rounded bg-slate-800 text-indigo-300 uppercase text-[10px] font-bold border border-slate-700 shrink-0">
+                  {item.kind}
+                </span>
+                <h4 className="font-semibold text-sm text-slate-100 truncate">{item.name}</h4>
+                {!item.enabled && <span className="text-[10px] text-slate-500 shrink-0">비활성</span>}
+                {updates[item.name] && (
                   <button
-                    onClick={() => onToggleItem(item.id, !item.enabled)}
-                    className={`px-2.5 py-1 rounded text-[11px] font-semibold transition shrink-0 ${
-                      item.enabled
-                        ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/30"
-                        : "bg-slate-800 text-slate-400 border border-slate-700"
-                    }`}
+                    onClick={(e) => { e.stopPropagation(); updatePlugin(item.name); }}
+                    disabled={updating === item.name}
+                    className="ml-auto px-2 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 text-[10px] font-semibold shrink-0 disabled:opacity-50"
                   >
-                    {item.enabled ? "활성화됨" : "비활성화됨"}
+                    {updating === item.name ? "업데이트 중…" : `새 버전 ${updates[item.name].latest} · 업데이트`}
                   </button>
-                </div>
-
-                <div className="text-xs text-slate-400 mt-2 space-y-1">
-                  {item.description
-                    .split(/(?<=[.!?])\s+/)
-                    .filter(Boolean)
-                    .map((sentence, sIdx) => (
-                      <p key={sIdx} className="leading-relaxed">
-                        {sentence}
-                      </p>
-                    ))}
-                </div>
-
-                <ConfigCodeBlock code={item.configJson} />
+                )}
               </div>
-
-              <div className="pt-3 border-t border-slate-800 flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-1 text-[11px] text-slate-400">
-                  <Wrench className="w-3.5 h-3.5 text-slate-500" />
-                  <span>CLI별 적용/해제:</span>
-                </div>
-                <div className="flex flex-wrap gap-1.5">
-                  {clis.map((cli) => {
-                    const isApplied = item.appliedClis.includes(cli.id);
-                    return (
-                      <button
-                        key={cli.id}
-                        onClick={() => onApplyToCli(item.id, cli.id)}
-                        className={`inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium border transition ${
-                          isApplied
-                            ? "bg-indigo-600/20 text-indigo-300 border-indigo-500/40 hover:bg-indigo-600 hover:text-white"
-                            : "bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700"
-                        }`}
-                      >
-                        {isApplied && <CheckCircle2 className="w-3 h-3 text-emerald-400" />}
-                        {cli.name} {isApplied ? "해제" : "적용"}
-                      </button>
-                    );
-                  })}
-                </div>
+              <p className="text-xs text-slate-400 line-clamp-2">{item.description}</p>
+              <div className="flex flex-wrap gap-1.5" onClick={(e) => e.stopPropagation()}>
+                {clis.map((cli) => {
+                  const isApplied = item.appliedClis.includes(cli.id);
+                  return (
+                    <button
+                      key={cli.id}
+                      onClick={() => onApplyToCli(item.id, cli.id)}
+                      className={`inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium border transition ${
+                        isApplied
+                          ? "bg-indigo-600/20 text-indigo-300 border-indigo-500/40 hover:bg-indigo-600 hover:text-white"
+                          : "bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700"
+                      }`}
+                    >
+                      {isApplied && <CheckCircle2 className="w-3 h-3 text-emerald-400" />}
+                      {cli.name}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           ))}
@@ -468,6 +477,29 @@ export const McpSkillView: React.FC<McpSkillViewProps> = ({
           </div>
         )}
       </div>
+
+      {detailItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4" onClick={() => setDetailId(null)}>
+          <div className="w-full max-w-lg rounded-xl bg-slate-900 border border-slate-700 p-6 space-y-3" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-base font-bold text-slate-100 truncate">{detailItem.name}</h3>
+              <button onClick={() => setDetailId(null)} className="text-slate-400 hover:text-slate-100 text-sm">닫기</button>
+            </div>
+            <p className="text-xs text-slate-400 whitespace-pre-wrap">{detailItem.description}</p>
+            <button
+              onClick={() => onToggleItem(detailItem.id, !detailItem.enabled)}
+              className={`px-2.5 py-1 rounded text-[11px] font-semibold border ${
+                detailItem.enabled
+                  ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/30"
+                  : "bg-slate-800 text-slate-400 border-slate-700"
+              }`}
+            >
+              {detailItem.enabled ? "활성화됨" : "비활성화됨"}
+            </button>
+            <ConfigCodeBlock code={detailItem.configJson} />
+          </div>
+        </div>
+      )}
 
       {/* 새 항목 추가 모달 */}
       {showAddModal && (

@@ -70,3 +70,19 @@ console.log("All blackboard dispatch parser tests passed successfully!");
   assert.deepEqual(parseBoardTasks(byId, deepIds, names), [{ taskId: "T1", agentId: "deep-ai-app-2-m1x", status: "start" }]);
   console.log("Deep team protocol check passed!");
 }
+
+// 5. 체크리스트 형식: [ ] → 착수, [x] → 완료, ID 없는 일반 항목은 무시
+{
+  const ids = ["deep-ai-app-2-m1x", "deep-ai-app-3-m1x"];
+  const names = { [ids[0]]: "저장소 수호자", [ids[1]]: "테스트 조각가" };
+  const list = [
+    "- [x] 초기 아키텍처 점검",
+    "- [ ] **S1 🛡️ 저장소 수호자 `list`** — 테스트 조각가가 검증",
+    "- [x] S2 🔍 테스트 조각가 `done`",
+  ].join("\n");
+  assert.deepEqual(parseBoardTasks(list, ids, names), [
+    { taskId: "S1", agentId: ids[0], status: "start" },
+    { taskId: "S2", agentId: ids[1], status: "done" },
+  ]);
+  console.log("Checklist board check passed!");
+}

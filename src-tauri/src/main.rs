@@ -546,6 +546,63 @@ fn get_project_deep_context(project_path: String) -> Result<db::ProjectDeepConte
     db::get_project_deep_context(&project_path).map_err(|e| e.to_string())
 }
 
+fn run_quiet(prog: &str, args: &[&str], dir: Option<&std::path::Path>) -> Option<String> {
+    #[cfg(windows)]
+    let mut cmd = {
+        use std::os::windows::process::CommandExt;
+        let mut c = std::process::Command::new("cmd.exe");
+        c.args(["/D", "/C", prog]);
+        c.creation_flags(0x08000000);
+        c
+    };
+    #[cfg(not(windows))]
+    let mut cmd = std::process::Command::new(prog);
+    cmd.args(args);
+    if let Some(d) = dir { cmd.current_dir(d); }
+    let out = cmd.output().ok()?;
+    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+/// 설치된 Claude 플러그인의 마켓플레이스 저장소를 fetch해 설치 버전보다 새 버전이 있는지 확인
+#[tauri::command]
+async fn check_plugin_updates() -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let dir = dirs::home_dir().ok_or("홈 디렉터리를 찾을 수 없습니다.")?.join(".claude").join("plugins");
+        let read = |f: &str| -> serde_json::Value {
+            std::fs::read_to_string(dir.join(f)).ok().and_then(|r| serde_json::from_str(&r).ok()).unwrap_or_default()
+        };
+        let (installed, markets) = (read("installed_plugins.json"), read("known_marketplaces.json"));
+        let mut result = serde_json::Map::new();
+        let mut fetched = std::collections::HashSet::new();
+        for (key, entries) in installed.get("plugins").and_then(|p| p.as_object()).into_iter().flatten() {
+            let Some((name, market)) = key.split_once('@') else { continue };
+            let Some(cur) = entries.get(0).and_then(|e| e.get("version")).and_then(|v| v.as_str()) else { continue };
+            let Some(loc) = markets.get(market).and_then(|m| m.get("installLocation")).and_then(|v| v.as_str()) else { continue };
+            let loc = std::path::PathBuf::from(loc);
+            if fetched.insert(market.to_string()) { run_quiet("git", &["fetch", "--quiet"], Some(&loc)); }
+            let show = |path: &str| run_quiet("git", &["show", &format!("@{{u}}:{path}")], Some(&loc)).and_then(|r| serde_json::from_str::<serde_json::Value>(&r).ok());
+            let Some(cat) = show(".claude-plugin/marketplace.json") else { continue };
+            let Some(entry) = cat.get("plugins").and_then(|p| p.as_array()).and_then(|a| a.iter().find(|p| p.get("name").and_then(|n| n.as_str()) == Some(name))) else { continue };
+            // 카탈로그에 버전이 없으면 플러그인 자체의 plugin.json 버전을 사용
+            let latest = entry.get("version").and_then(|v| v.as_str()).map(String::from).or_else(|| {
+                let src = entry.get("source").and_then(|s| s.as_str())?.trim_start_matches("./").trim_end_matches('/');
+                let path = if src.is_empty() { ".claude-plugin/plugin.json".to_string() } else { format!("{src}/.claude-plugin/plugin.json") };
+                show(&path)?.get("version")?.as_str().map(String::from)
+            });
+            // ponytail: 문자열 비교 대신 is_newer_version 재사용
+            if let Some(latest) = latest { if is_newer_version(&latest, cur) { result.insert(key.clone(), serde_json::json!({"current": cur, "latest": latest})); } }
+        }
+        Ok(serde_json::Value::Object(result))
+    }).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn update_plugin(plugin: String) -> Result<(), String> {
+    if !plugin.bytes().all(|b| b.is_ascii_alphanumeric() || b"@._-".contains(&b)) { return Err("잘못된 플러그인 이름입니다.".into()); }
+    tauri::async_runtime::spawn_blocking(move || run_quiet("claude", &["plugin", "update", &plugin], None).map(|_| ()).ok_or_else(|| "플러그인 업데이트 실패".to_string()))
+        .await.map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 async fn check_npm_cli_updates() -> Result<serde_json::Value, String> {
     tauri::async_runtime::spawn_blocking(|| {
@@ -1674,6 +1731,8 @@ fn main() {
             analyze_project_workspace,
             get_project_deep_context,
             check_npm_cli_updates,
+            check_plugin_updates,
+            update_plugin,
             check_token_tools,
             install_token_tool,
             install_npm_cli_update,

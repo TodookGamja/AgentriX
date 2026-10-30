@@ -30,6 +30,7 @@ import type {
   SessionInfo,
 } from "../types/types";
 import { SynapseGraphView } from "./SynapseGraphView";
+import { TaskApprovalBoard } from "./TaskApprovalBoard";
 import { TeamMailStatus } from "./TeamMailStatus";
 import { fitAgentsToInstalled } from "../lib/agentCli";
 import { ModelPicker, getCliDefaultModel, setCliDefaultModel } from "./ModelPicker";
@@ -103,7 +104,7 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
   onSendPromptToAgent,
   onTrustProjectFolder,
 }) => {
-  const [workspaceDisplayMode, setWorkspaceDisplayMode] = useState<"cards" | "synapse">("cards");
+  const [workspaceDisplayMode, setWorkspaceDisplayMode] = useState<"cards" | "synapse" | "board">("cards");
   const [recCliOverrides, setRecCliOverrides] = useState<Record<string, string>>({});
   const [recWrapperOverrides, setRecWrapperOverrides] = useState<Record<string, boolean>>({});
   const [recModelOverrides, setRecModelOverrides] = useState<Record<string, string>>({});
@@ -457,6 +458,17 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
                 <BrainCircuit className="w-3.5 h-3.5 text-cyan-300" />
                 🧠 시냅스 협업 지도
               </button>
+              <button
+                onClick={() => setWorkspaceDisplayMode("board")}
+                className={`px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 ${
+                  workspaceDisplayMode === "board"
+                    ? "bg-amber-600 text-white font-bold shadow"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                <ClipboardList className="w-3.5 h-3.5" />
+                작업 보드
+              </button>
             </div>
           </div>
 
@@ -529,7 +541,9 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
         </div>
 
         {/* 메인 뷰: 시냅스 지도 또는 카드 목록 */}
-        {workspaceDisplayMode === "synapse" ? (
+        {workspaceDisplayMode === "board" ? (
+          <TaskApprovalBoard projectPath={projectPath} agents={agents} />
+        ) : workspaceDisplayMode === "synapse" ? (
           <SynapseGraphView
             projectPath={projectPath}
             projectName={projectName}

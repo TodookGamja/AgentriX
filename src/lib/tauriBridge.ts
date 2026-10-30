@@ -679,3 +679,11 @@ export async function apiCheckTokenTools(): Promise<TokenToolStatus[]> {
 export async function apiInstallTokenTool(toolId: string): Promise<{ ok: boolean; output: string }> {
   return invoke("install_token_tool", { toolId });
 }
+
+export async function apiCheckPluginUpdates(): Promise<Record<string, { current: string; latest: string }>> {
+  return invoke("check_plugin_updates");
+}
+
+export async function apiUpdatePlugin(plugin: string): Promise<void> {
+  return invoke("update_plugin", { plugin });
+}
