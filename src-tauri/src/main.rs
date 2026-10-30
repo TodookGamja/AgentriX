@@ -1562,7 +1562,7 @@ fn do_perform_in_app_update(app: tauri::AppHandle, download_url: String) -> Resu
             use std::os::windows::process::CommandExt;
             let mut cmd = std::process::Command::new("cmd.exe");
             cmd.args(["/c", &script_path.to_string_lossy()]);
-            cmd.creation_flags(0x08000000 | 0x00000008);
+            cmd.creation_flags(0x08000000); // DETACHED_PROCESS와 조합하면 NO_WINDOW가 무시되어 콘솔이 뜸
             let _ = cmd.spawn();
         }
 

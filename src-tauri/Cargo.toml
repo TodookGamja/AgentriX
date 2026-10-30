@@ -1,6 +1,6 @@
 [package]
 name = "ai-cli-manager"
-version = "1.0.1"
+version = "1.0.2"
 description = "Windows Multi-AI Coding CLI Manager (Claude Code, Codex, Cursor, Antigravity)"
 authors = ["AI CLI Manager Team"]
 edition = "2021"
