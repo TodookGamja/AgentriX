@@ -31,7 +31,7 @@ dependencies = [
 
 [[package]]
 name = "ai-cli-manager"
-version = "1.1.6"
+version = "1.1.7"
 dependencies = [
  "anyhow",
  "base64 0.22.1",

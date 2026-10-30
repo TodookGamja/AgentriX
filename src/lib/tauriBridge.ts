@@ -9,6 +9,7 @@ export async function apiInstallNpmCliUpdate(packageName: string): Promise<void>
 }
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { recordSessionInput } from "./inputHistory";
+import { queueSessionWrite } from "./sessionWriteQueue";
 import type {
   ApiKeyStatus,
   ApplyResult,
@@ -288,6 +289,7 @@ export async function apiStartSession(
 
 export async function apiWriteToSession(sessionId: string, data: string): Promise<void> {
   recordSessionInput(sessionId, data);
+  return queueSessionWrite(sessionId, async () => {
   if (isTauriRuntime()) {
     // TUI(Claude/Codex 등)는 "텍스트+\r" 한 덩어리를 붙여넣기로 인식해 Enter를 줄바꿈으로 삼킨다.
     // 텍스트를 먼저 쓰고 붙여넣기 처리가 끝난 뒤 Enter를 별도 키 입력으로 보낸다. (단일 키 입력은 그대로 통과)
@@ -305,6 +307,23 @@ export async function apiWriteToSession(sessionId: string, data: string): Promis
   const prev = fallbackBuffers.get(sessionId) ?? "";
   fallbackBuffers.set(sessionId, prev + data);
   fallbackListeners.forEach((cb) => cb({ sessionId, data }));
+  });
+}
+
+export interface TeamMail {
+  id: string;
+  from: string;
+  to: string;
+  subject: string;
+  body: string;
+}
+
+export async function apiRouteTeamMail(projectPath: string): Promise<TeamMail[]> {
+  return isTauriRuntime() ? invoke<TeamMail[]>("route_team_mail", { projectPath }) : [];
+}
+
+export async function apiAcknowledgeTeamMail(projectPath: string, agentId: string, messageId: string): Promise<void> {
+  if (isTauriRuntime()) await invoke("acknowledge_team_mail", { projectPath, agentId, messageId });
 }
 
 // CLI 로그에서 읽은 실제 컨텍스트 토큰. 로그가 없는 CLI(grok·cursor·새 CLI)나 브라우저 실행이면 null
@@ -641,4 +660,22 @@ export async function apiPerformInAppUpdate(downloadUrl: string): Promise<void> 
   if (isTauriRuntime()) {
     return invoke<void>("perform_in_app_update", { downloadUrl });
   }
+}
+
+export interface TokenToolStatus {
+  id: string;
+  name: string;
+  installed: boolean;
+  version: string | null;
+  requires: string | null;
+  requiresMet: boolean;
+  installCommand: string;
+}
+
+export async function apiCheckTokenTools(): Promise<TokenToolStatus[]> {
+  return invoke("check_token_tools");
+}
+
+export async function apiInstallTokenTool(toolId: string): Promise<{ ok: boolean; output: string }> {
+  return invoke("install_token_tool", { toolId });
 }

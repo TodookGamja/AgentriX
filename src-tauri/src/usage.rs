@@ -1566,15 +1566,8 @@ pub fn ensure_logs_synced_once(conn: &Connection) {
     }
 }
 
-pub fn sync_all_cli_logs(conn: &Connection) -> Result<usize> {
-    let _ = conn.execute(
-        "DELETE FROM usage_logs WHERE event_hash LIKE 'baseline_%' OR event_hash LIKE 'claude_statscache_%' OR timestamp < '2026-09-01'",
-        [],
-    );
-    // 이전 버전에서 중복/임의 추정으로 잘못 들어간 레코드 정리를 위해 codex 및 antigravity 로그 재구축
-    let _ = conn.execute("DELETE FROM usage_logs WHERE cli_id = 'codex'", []);
-    let _ = conn.execute("DELETE FROM usage_logs WHERE cli_id = 'antigravity'", []);
-
+/// 로그 파싱(느림)은 DB 락 없이 수행 — 락을 잡은 채 파싱하면 프로젝트 목록 등 모든 DB 명령이 대기함
+pub fn scan_all_cli_logs() -> Vec<ParsedUsageRecord> {
     let mut all_records = Vec::new();
     for cli in crate::cli::builtin_clis() {
         let parsed = match cli.id.as_str() {
@@ -1587,11 +1580,32 @@ pub fn sync_all_cli_logs(conn: &Connection) -> Result<usize> {
         };
         all_records.extend(parsed);
     }
-
     // Claude OAuth 쿼터 비동기 백그라운드 갱신 (블로킹 방지)
     let _ = extract_claude_quota(false);
+    all_records
+}
 
-    insert_usage_records(conn, &all_records)
+/// 스캔은 락 밖에서, 쓰기만 락 안에서
+pub fn sync_all_cli_logs_shared(db: &Mutex<Connection>) -> Result<usize> {
+    let records = scan_all_cli_logs();
+    let conn = db.lock().map_err(|_| rusqlite::Error::InvalidQuery)?;
+    apply_usage_records(&conn, &records)
+}
+
+pub fn sync_all_cli_logs(conn: &Connection) -> Result<usize> {
+    apply_usage_records(conn, &scan_all_cli_logs())
+}
+
+fn apply_usage_records(conn: &Connection, all_records: &[ParsedUsageRecord]) -> Result<usize> {
+    let _ = conn.execute(
+        "DELETE FROM usage_logs WHERE event_hash LIKE 'baseline_%' OR event_hash LIKE 'claude_statscache_%' OR timestamp < '2026-09-01'",
+        [],
+    );
+    // 이전 버전에서 중복/임의 추정으로 잘못 들어간 레코드 정리를 위해 codex 및 antigravity 로그 재구축
+    let _ = conn.execute("DELETE FROM usage_logs WHERE cli_id = 'codex'", []);
+    let _ = conn.execute("DELETE FROM usage_logs WHERE cli_id = 'antigravity'", []);
+
+    insert_usage_records(conn, all_records)
 }
 
 pub fn record_live_session_interaction(conn: &Connection, cli_id: &str, input_bytes: usize) {
@@ -1675,6 +1689,15 @@ fn cli_stdout(bin: &Path, args: &[&str]) -> String {
     cmd.output().map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default()
 }
 
+/// PATH 상의 .cmd 셸 스크립트(npm 전역 CLI 등)도 실행되도록 cmd.exe 경유
+fn cli_stdout_shell(program: &str, args: &[&str]) -> String {
+    let mut cmd = std::process::Command::new("cmd.exe");
+    cmd.args(["/D", "/C", program]).args(args).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    cmd.output().map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default()
+}
+
 /// CLI별 모델 목록. claude는 목록 명령이 없어 공식 별칭/ID를 고정 제공.
 pub fn list_cli_models(cli_id: &str) -> Vec<String> {
     let home = crate::cli::home_dir();
@@ -1697,6 +1720,20 @@ pub fn list_cli_models(cli_id: &str) -> Vec<String> {
             .filter_map(|l| l.trim().strip_prefix("* ").or_else(|| l.trim().strip_prefix("- ")))
             .map(|l| l.split_whitespace().next().unwrap_or("").to_string())
             .filter(|m| !m.is_empty())
+            .collect(),
+        // `opencode models`: "provider/model" 한 줄에 하나
+        "opencode" => cli_stdout_shell("opencode", &["models"])
+            .lines()
+            .map(|l| l.trim())
+            .filter(|l| l.contains('/') && !l.contains(' '))
+            .map(|l| l.to_string())
+            .collect(),
+        // `cursor-agent models`: "gpt-5.3-codex - Codex 5.3" (첫 줄은 헤더)
+        "cursor" => cli_stdout_shell("cursor-agent", &["models"])
+            .lines()
+            .filter_map(|l| l.split_once(" - "))
+            .map(|(id, _)| id.trim().to_string())
+            .filter(|id| !id.is_empty() && !id.contains(' '))
             .collect(),
         // `agy models`: "gemini-4-argon-medium	Gemini 4 Argon (Medium)"
         "antigravity" => cli_stdout(&home.join("AppData").join("Local").join("agy").join("bin").join("agy.exe"), &["models"])

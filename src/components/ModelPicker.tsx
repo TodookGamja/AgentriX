@@ -23,6 +23,13 @@ export const setCliDefaultModel = (cliId: string, model: string) => {
 
 const modelCache: Record<string, Promise<string[]>> = {};
 
+/** 모델 목록 조회 (빈 결과·실패는 캐시하지 않아 다음에 다시 시도) */
+export const loadCliModels = (cliId: string): Promise<string[]> =>
+  (modelCache[cliId] ??= apiListCliModels(cliId).catch(() => [])).then((m) => {
+    if (m.length === 0) delete modelCache[cliId];
+    return m;
+  });
+
 interface ModelPickerProps {
   cliId: string;
   value: string;
@@ -36,8 +43,7 @@ export const ModelPicker: React.FC<ModelPickerProps> = ({ cliId, value, onChange
 
   useEffect(() => {
     let alive = true;
-    (modelCache[cliId] ??= apiListCliModels(cliId).catch(() => []))
-      .then((m) => alive && setModels(m));
+    loadCliModels(cliId).then((m) => alive && setModels(m));
     return () => {
       alive = false;
     };

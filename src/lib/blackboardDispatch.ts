@@ -5,7 +5,17 @@ export interface BoardTask {
   status: "start" | "done";
 }
 
-export function parseBoardTasks(board: string, agentIds: string[]): BoardTask[] {
+// 담당 칸의 팀원 이름으로 ID 찾기 (이름이 서로 포함 관계면 가장 긴 이름 우선, 동점이면 모호하므로 매칭 안 함)
+function findAgentByName(cell: string, names: Record<string, string>): string | undefined {
+  const text = cell.toLowerCase();
+  const hits = Object.entries(names)
+    .map(([id, name]) => [id, name.trim().toLowerCase()] as const)
+    .filter(([, name]) => name && text.includes(name))
+    .sort((a, b) => b[1].length - a[1].length);
+  return hits.length === 1 || (hits.length > 1 && hits[0][1].length > hits[1][1].length) ? hits[0][0] : undefined;
+}
+
+export function parseBoardTasks(board: string, agentIds: string[], names?: Record<string, string>): BoardTask[] {
   const tasks: BoardTask[] = [];
   const lines = board.split(/\r?\n/);
   let statusColIdx = -1;
@@ -47,9 +57,9 @@ export function parseBoardTasks(board: string, agentIds: string[]): BoardTask[] 
     const wordTokens = targetCell.split(/[\s,()|]+/).filter(Boolean);
     const candidateTokens = backtickTokens.length > 0 ? backtickTokens : wordTokens;
 
-    const agentId = agentIds.find((id) =>
-      candidateTokens.some((t) => id === t || id.startsWith(t + "-") || id.includes(t))
-    );
+    const agentId =
+      agentIds.find((id) => candidateTokens.some((t) => id === t || id.startsWith(t + "-") || id.includes(t))) ??
+      (names ? findAgentByName(targetCell, names) : undefined);
     if (agentId) {
       tasks.push({ taskId, agentId, status: kind });
     }
@@ -59,6 +69,12 @@ export function parseBoardTasks(board: string, agentIds: string[]): BoardTask[] 
 
 // PM이 디스패처가 읽을 수 있는 형식으로 작업표를 쓰도록 표 형식과 팀원 ID를 알려주는 한 줄 지침 (PTY 주입용, 개행 없음)
 export function boardProtocol(agents: { id: string; name: string; roleTitle: string }[]): string {
-  const roster = agents.map((a) => `\`${a.id}\`=${a.name}(${a.roleTitle})`).join(", ");
-  return `[작업표 규칙] .ai-agents/BLACKBOARD.md에 "| ID | 작업 | 담당 | 선행 | 기준 | 상태 |" 표로 작업을 적으세요. ID는 T1, T2…, 담당 칸에는 아래 에이전트 ID를 백틱으로 정확히 쓰고, 상태는 ⏳ 대기 / 🔥 착수 / ✅ 완료 중 하나만 씁니다. 🔥 착수로 바꾸면 담당 에이전트 터미널에 자동 전달되고, ✅ 완료되면 당신에게 보고됩니다. BLACKBOARD.md는 셸 명령(PowerShell 등)이 아닌 파일 편집 도구로 UTF-8 그대로 수정하세요(한글·이모지 깨짐 방지). 팀원: ${roster}`;
+  const roster = agents.map((a) => `${a.name}(${a.roleTitle})`).join(", ");
+  const taskPrefix = `T${Date.now()}_`;
+  return `[총괄 협업 규칙] 당신은 조율만 담당합니다. 코드 구현, 수정, 테스트를 직접 수행하거나 자체 하위 에이전트를 생성하지 마세요. 등록된 다른 팀원에게 작업을 배정하고 결과를 확인하세요. [작업표 규칙] .ai-agents/BLACKBOARD.md에 "| ID | 작업 | 담당 | 선행 | 기준 | 상태 |" 표로 작업을 적으세요. 이번 작업 ID는 ${taskPrefix}1, ${taskPrefix}2처럼 지정하고, 담당 칸에는 아래 팀원의 이름을 정확히 쓰고, 상태는 ⏳ 대기 / 🔥 착수 / ✅ 완료 중 하나만 씁니다. 🔥 착수로 바꾸면 담당 에이전트 터미널에 자동 전달되고, ✅ 완료되면 당신에게 보고됩니다. BLACKBOARD.md는 셸 명령(PowerShell 등)이 아닌 파일 편집 도구로 UTF-8 그대로 수정하세요(한글·이모지 깨짐 방지). 팀원: ${roster}`;
+}
+
+export function mailProtocol(agentId: string, agents: { id: string; name: string; roleTitle: string }[]): string {
+  const roster = agents.filter((a) => a.id !== agentId).map((a) => `${a.name}(${a.roleTitle})`).join(", ");
+  return `[팀 메시지] 팀원에게 요청, 질문, 결과를 보내려면 .ai-agents/agents/${agentId}/outbox/에 고유한 이름의 JSON 파일을 파일 편집 도구로 작성하세요. 형식: {"to":"수신 팀원 이름","subject":"제목","body":"내용"}. 임시 파일을 작성한 다음 .json으로 이름을 바꾸세요. 앱이 수신 팀원에게 전달합니다. 팀원은 이름으로 부르세요. 수신 가능한 팀원: ${roster}. 요청에는 답변하고, 결과 통보에는 불필요한 답장을 하지 마세요.`;
 }

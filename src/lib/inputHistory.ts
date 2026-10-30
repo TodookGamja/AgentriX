@@ -2,6 +2,9 @@
 // 사용자 키 입력(한 글자씩)과 프로그램 주입(텍스트+\r)이 모두 apiWriteToSession을 거치므로 거기서 호출된다.
 // 이력은 세션이 아니라 "프로젝트 폴더+에이전트" 키로 localStorage에 저장 → 릴레이·앱 재시작 후에도 같은 에이전트가 이어받음.
 const lineBufs = new Map<string, string>();
+export function hasPendingSessionInput(sessionId: string): boolean {
+  return Boolean(lineBufs.get(sessionId)?.trim());
+}
 const lastSubmission = new Map<string, number>();
 const submissionVersion = new Map<string, number>();
 

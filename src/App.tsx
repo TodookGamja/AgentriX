@@ -73,6 +73,8 @@ import {
   apiUpsertProjectAgent,
   apiUpsertRegistryItem,
   apiWriteToSession,
+  apiRouteTeamMail,
+  apiAcknowledgeTeamMail,
   apiGetSessionContext,
   apiWindowMinimize,
   apiWindowToggleMaximize,
@@ -102,9 +104,10 @@ import {
 import { AiDeepTeamModal } from "./components/AiDeepTeamModal";
 import { FolderPickerModal } from "./components/FolderPickerModal";
 import { AgentrixLogo } from "./components/AgentrixLogo";
-import { boardProtocol, parseBoardTasks } from "./lib/blackboardDispatch";
+import { boardProtocol, mailProtocol, parseBoardTasks } from "./lib/blackboardDispatch";
+import { getTeamMailDeliveries, removeTeamMailDelivery, saveTeamMailDelivery } from "./lib/teamMailDelivery";
 import { countNewChars } from "./lib/tokenEstimate";
-import { forgetSessionInput, getLastSubmission, getSubmissionVersion, getSessionInputHistory, setInstructionKeyResolver } from "./lib/inputHistory";
+import { forgetSessionInput, getLastSubmission, getSubmissionVersion, getSessionInputHistory, hasPendingSessionInput, setInstructionKeyResolver } from "./lib/inputHistory";
 import { permissionLaunch } from "./lib/permissionSettings";
 import type {
   ActiveNavTab,
@@ -259,6 +262,49 @@ export const App: React.FC = () => {
     });
     setGroupModalProjPath(null);
     showToast(`프로젝트가 '${groupName.trim() || "기본 프로젝트"}' 그룹으로 설정되었습니다.`, "info");
+  };
+
+  // 사이드바 프로젝트 드래그로 그룹 이동 (Tauri 파일 드롭 처리 때문에 HTML5 DnD 대신 포인터 이벤트 사용)
+  const [dragProject, setDragProject] = useState<{ path: string; name: string } | null>(null);
+  const [dragOverGroup, setDragOverGroup] = useState<string | null>(null);
+  const [dragPos, setDragPos] = useState({ x: 0, y: 0 });
+  const suppressProjectClickRef = useRef(false);
+
+  const startProjectDrag = (e: React.PointerEvent, proj: { path: string; name: string }) => {
+    if (e.button !== 0 || (e.target as HTMLElement).closest("button")) return;
+    const sx = e.clientX;
+    const sy = e.clientY;
+    let dragging = false;
+    let overGroup: string | null = null;
+    const onMove = (ev: PointerEvent) => {
+      if (!dragging) {
+        if (Math.hypot(ev.clientX - sx, ev.clientY - sy) < 6) return;
+        dragging = true;
+        document.body.style.userSelect = "none";
+        setDragProject(proj);
+      }
+      setDragPos({ x: ev.clientX, y: ev.clientY });
+      const el = document.elementFromPoint(ev.clientX, ev.clientY)?.closest("[data-group-drop]");
+      overGroup = el?.getAttribute("data-group-drop") ?? null;
+      setDragOverGroup(overGroup);
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      if (!dragging) return;
+      document.body.style.userSelect = "";
+      suppressProjectClickRef.current = true; // 드롭 직후 발생하는 click(프로젝트 선택) 무시
+      window.setTimeout(() => (suppressProjectClickRef.current = false), 50);
+      setDragProject(null);
+      setDragOverGroup(null);
+      if (overGroup && overGroup !== (projectGroups[proj.path] || "기본 프로젝트")) {
+        handleSetProjectGroup(proj.path, overGroup);
+      }
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
   };
 
   const handleCreateNewGroup = (name: string, targetProjPath?: string) => {
@@ -694,34 +740,27 @@ export const App: React.FC = () => {
   };
 
   const refreshAll = useCallback(async () => {
-    const results = await Promise.allSettled([
-      apiDetectClis(),
-      apiGetApiKeys(),
-      apiGetUsageDashboard(usageCliFilter, usageTimeframe),
-      apiGetRegistryItems(),
-      apiGetConfigBackups(),
-      apiGetTeamMembers(),
-      apiGetProjectFolders(),
+    // 느린 호출(사용량·쿼터)이 프로젝트 목록 표시를 막지 않도록 각 결과를 도착 즉시 반영
+    const ok = <T,>(p: Promise<T>, apply: (v: T) => void) => p.then(apply).catch(() => {});
+    await Promise.all([
+      ok(apiDetectClis(), setClis),
+      ok(apiGetApiKeys(), setApiKeys),
+      ok(apiGetUsageDashboard(usageCliFilter, usageTimeframe), setUsageDashboard),
+      ok(apiGetRegistryItems(), setRegistryItems),
+      ok(apiGetConfigBackups(), setBackups),
+      ok(apiGetTeamMembers(), setTeamMembers),
+      ok(apiGetProjectFolders(), (folders) => {
+        setProjectFolders(folders);
+        setSelectedProjectPath((prev) => {
+          if (prev && folders.some((f) => f.path === prev)) return prev;
+          try {
+            const saved = localStorage.getItem("agentrix_last_selected_project");
+            if (saved && folders.some((f) => f.path === saved)) return saved;
+          } catch {}
+          return folders[0]?.path || "";
+        });
+      }),
     ]);
-
-    if (results[0].status === "fulfilled") setClis(results[0].value);
-    if (results[1].status === "fulfilled") setApiKeys(results[1].value);
-    if (results[2].status === "fulfilled") setUsageDashboard(results[2].value);
-    if (results[3].status === "fulfilled") setRegistryItems(results[3].value);
-    if (results[4].status === "fulfilled") setBackups(results[4].value);
-    if (results[5].status === "fulfilled") setTeamMembers(results[5].value);
-    if (results[6].status === "fulfilled") {
-      const folders = results[6].value;
-      setProjectFolders(folders);
-      setSelectedProjectPath((prev) => {
-        if (prev && folders.some((f) => f.path === prev)) return prev;
-        try {
-          const saved = localStorage.getItem("agentrix_last_selected_project");
-          if (saved && folders.some((f) => f.path === saved)) return saved;
-        } catch {}
-        return folders[0]?.path || "";
-      });
-    }
   }, [
     usageCliFilter,
     usageTimeframe,
@@ -964,12 +1003,31 @@ export const App: React.FC = () => {
 
   // 사용자 확인 없는 완전 자율 협업 파이프라인 가동
   const handleStartAutonomousCollaboration = async () => {
-    if (projectAgents.length === 0) {
-      showToast("먼저 배정할 에이전트를 추가해 주세요.", "error");
+    if (startingTeamProjectsRef.current.has(selectedProjectPath)) {
+      showToast("이 프로젝트의 팀을 이미 시작하고 있습니다.", "info");
+      return;
+    }
+    if (projectAgents.length < 2) {
+      showToast("총괄과 작업을 배정받을 팀원을 각각 한 명 이상 추가해 주세요.", "error");
       return;
     }
 
-    await handleSpawnAllProjectAgents();
+    startingTeamProjectsRef.current.add(selectedProjectPath);
+    try { await handleSpawnAllProjectAgents(); }
+    catch (err) {
+      startingTeamProjectsRef.current.delete(selectedProjectPath);
+      showToast(`팀 시작 실패: ${String(err)}`, "error");
+      return;
+    }
+    const running = useAppStore.getState().sessions.filter((s) => s.cwd === selectedProjectPath && projectAgents.some((a) => a.id === s.agentId));
+    if (running.length !== projectAgents.length) {
+      startingTeamProjectsRef.current.delete(selectedProjectPath);
+      showToast("일부 팀원 세션을 시작하지 못했습니다. CLI 설치와 실행 상태를 확인하세요.", "error");
+      return;
+    }
+    if (projectAgents.some((a) => !["claude", "codex", "opencode"].includes(a.cliId) || !a.autoBrief)) {
+      showToast("일부 팀원은 작업 완료를 자동 감지할 수 없어 메시지 전달이 대기할 수 있습니다. Claude, Codex, OpenCode와 초기 역할 지시를 확인하세요.", "info");
+    }
 
     const autoMemo = `\n\n## [⚡ 무인 자율 협업 파이프라인 가동 - ${new Date().toLocaleTimeString()}]\n- 모드: 완전 자율 연동 (사용자 승인 질문 없이 즉시 수행)\n- 지침: 총괄 PM은 프로젝트의 현재 구조를 점검하여 즉시 구현/수정 태스크를 분해하고, 각 도메인 에이전트(백엔드/프론트엔드/QA)에게 할당하세요. 각 에이전트는 담당 파트를 직접 구현한 후 결과를 이 메모장에 남기고 다음 에이전트에게 인수인계하세요.\n`;
     try {
@@ -978,26 +1036,17 @@ export const App: React.FC = () => {
     } catch {}
 
     const pmSession =
-      currentProjectSessions.find(
+      running.find(
         (s) =>
           s.name.includes("PM") ||
           s.agentRole?.includes("PM") ||
           s.agentRole?.includes("리더")
-      ) || currentProjectSessions[0];
+      ) || running[0];
 
     if (pmSession) {
-      setTimeout(() => {
-        apiWriteToSession(
-          pmSession.id,
-          `프로젝트 무인 자율 협업 파이프라인이 가동되었습니다. .ai-agents/BLACKBOARD.md의 요구사항을 읽고 하위 작업을 분해하여 각 에이전트에게 할당하고 작업을 시작하세요. ${boardProtocol(projectAgents)}\r`
-        ).catch(() => {});
-      }, 2000);
+      await sendTeamGoalWhenReady(pmSession, `프로젝트 무인 자율 협업 파이프라인이 가동되었습니다. .ai-agents/BLACKBOARD.md의 요구사항을 읽고 하위 작업을 분해하여 각 에이전트에게 할당하고 작업을 시작하세요. ${boardProtocol(projectAgents.filter((a) => a.id !== pmSession.agentId))} ${mailProtocol(pmSession.agentId!, projectAgents)}\r`);
     }
-
-    showToast(
-      "⚡ 무인 자율 협업 파이프라인 가동! 사용자 승인 없이 에이전트 간 업무가 연속 연동됩니다.",
-      "success"
-    );
+    startingTeamProjectsRef.current.delete(selectedProjectPath);
   };
 
   const handleToggleAgentWrapper = async (agent: ProjectAgentRecord) => {
@@ -1319,12 +1368,31 @@ ${recentSnippet || "진행 내역 기록 없음"}
   };
 
   const handleStartAutonomousRelayWithGoal = async (goal: string) => {
-    if (projectAgents.length === 0) {
-      showToast("먼저 배정할 에이전트를 추가해 주세요.", "error");
+    if (startingTeamProjectsRef.current.has(selectedProjectPath)) {
+      showToast("이 프로젝트의 팀을 이미 시작하고 있습니다.", "info");
+      return;
+    }
+    if (projectAgents.length < 2) {
+      showToast("총괄과 작업을 배정받을 팀원을 각각 한 명 이상 추가해 주세요.", "error");
       return;
     }
 
-    await handleSpawnAllProjectAgents();
+    startingTeamProjectsRef.current.add(selectedProjectPath);
+    try { await handleSpawnAllProjectAgents(); }
+    catch (err) {
+      startingTeamProjectsRef.current.delete(selectedProjectPath);
+      showToast(`팀 시작 실패: ${String(err)}`, "error");
+      return;
+    }
+    const running = useAppStore.getState().sessions.filter((s) => s.cwd === selectedProjectPath && projectAgents.some((a) => a.id === s.agentId));
+    if (running.length !== projectAgents.length) {
+      startingTeamProjectsRef.current.delete(selectedProjectPath);
+      showToast("일부 팀원 세션을 시작하지 못했습니다. CLI 설치와 실행 상태를 확인하세요.", "error");
+      return;
+    }
+    if (projectAgents.some((a) => !["claude", "codex", "opencode"].includes(a.cliId) || !a.autoBrief)) {
+      showToast("일부 팀원은 작업 완료를 자동 감지할 수 없어 메시지 전달이 대기할 수 있습니다. Claude, Codex, OpenCode와 초기 역할 지시를 확인하세요.", "info");
+    }
 
     const autoMemo = `\n\n## [⚡ 무인 자율 협업 가동 - ${new Date().toLocaleTimeString()}]\n- 사용자 목표: ${goal}\n- 실행 권한 모드: 완전 자동 승인 (--yolo / Full-Auto, 승인 질문 일체 생략)\n- 총괄 PM 지침: 목표를 분석하여 하위 작업을 세분화하고, .ai-agents/BLACKBOARD.md를 통해 백엔드(Rust), 프론트엔드(UI), QA 에이전트에게 업무를 인수인계하세요. 구현 완료 후 최종 결과를 사용자에게 보고하세요.\n`;
     try {
@@ -1332,26 +1400,12 @@ ${recentSnippet || "진행 내역 기록 없음"}
       await apiSaveProjectBlackboard(selectedProjectPath, cur + autoMemo);
     } catch {}
 
-    setTimeout(() => {
-      const pmSession =
-        sessions.find(
-          (s) =>
-            s.cwd === selectedProjectPath &&
-            (s.name.includes("PM") ||
-              s.agentRole?.includes("PM") ||
-              s.agentRole?.includes("리더"))
-        ) || sessions.find((s) => s.cwd === selectedProjectPath);
-
-      if (pmSession) {
-        const pmDirective = `[무인 자율 협업 오케스트레이션 지침] 사용자 목표: "${goal.replace(/[\r\n]+/g, " ")}". 당신은 총괄 PM 리더입니다. 요구사항을 분석하여 .ai-agents/BLACKBOARD.md에 설계 결정을 남기고, 각 도메인 에이전트에게 작업을 순차 전달하세요. 사용자는 당신의 보고만을 기다립니다. 즉시 작업을 시작하세요. ${boardProtocol(projectAgents)}\r\n`;
-        apiWriteToSession(pmSession.id, pmDirective).catch(() => {});
-      }
-    }, 2000);
-
-    showToast(
-      `🚀 총괄 PM에게 목표가 전달되었으며, 무인 자율 협업이 시작되었습니다!`,
-      "success"
-    );
+    const pmSession = running.find((s) => s.name.includes("PM") || s.agentRole?.includes("PM") || s.agentRole?.includes("리더")) || running[0];
+    if (pmSession) {
+      const pmDirective = `[무인 자율 협업 오케스트레이션 지침] 사용자 목표: "${goal.replace(/[\r\n]+/g, " ")}". 당신은 총괄 PM 리더입니다. 요구사항을 분석하여 .ai-agents/BLACKBOARD.md에 설계 결정을 남기고, 각 도메인 에이전트에게 작업을 순차 전달하세요. 사용자는 당신의 보고만을 기다립니다. 즉시 작업을 시작하세요. ${boardProtocol(projectAgents.filter((a) => a.id !== pmSession.agentId))} ${mailProtocol(pmSession.agentId!, projectAgents)}\r`;
+      await sendTeamGoalWhenReady(pmSession, pmDirective);
+    }
+    startingTeamProjectsRef.current.delete(selectedProjectPath);
   };
 
   const handleTrustProjectFolder = async () => {
@@ -2008,60 +2062,222 @@ ${recentSnippet || "진행 내역 기록 없음"}
 
   // 블랙보드 작업표 자동 디스패치: 🔥 착수 행 → 담당 에이전트 세션, ✅ 행 → PM 세션에 1회 전달
   // ponytail: 10초 폴링 + 세션 busy 여부 미판단, 지연/입력 충돌이 문제되면 파일 감시·idle 감지로 교체
-  const dispatchStateRef = useRef({ sessions: currentProjectSessions, agents: projectAgents });
-  dispatchStateRef.current = { sessions: currentProjectSessions, agents: projectAgents };
-  const hasProjectSessions = currentProjectSessions.length > 0;
-  useEffect(() => {
-    if (!selectedProjectPath || !hasProjectSessions) return;
-    const storeKey = `agentrix_bb_dispatched:${selectedProjectPath}`;
-    const sent = new Set<string>(JSON.parse(localStorage.getItem(storeKey) || "[]"));
-    const tick = async () => {
-      const { sessions: projSessions, agents } = dispatchStateRef.current;
-      let board: string;
-      try {
-        board = await apiGetProjectBlackboard(selectedProjectPath);
-      } catch {
-        return;
+  const teamDeliveryLocksRef = useRef(new Set<string>());
+  const startingTeamProjectsRef = useRef(new Set<string>());
+  const sendToIdleTeamSession = async (session: typeof currentProjectSessions[number], prompt: string): Promise<boolean> => {
+    if (teamDeliveryLocksRef.current.has(session.id)) return false;
+    teamDeliveryLocksRef.current.add(session.id);
+    try {
+      if (hasPendingSessionInput(session.id) || optimizationRunningRef.current.has(session.id)) return false;
+      const claimed = Object.entries(contextSourceRef.current).filter(([id]) => id !== session.id).map(([, src]) => src);
+      const ctx = await apiGetSessionContext(session, claimed).catch(() => null);
+      if (!ctx?.completedAt || ctx.completedAt <= getLastSubmission(session.id) || hasPendingSessionInput(session.id)) return false;
+      if (!useAppStore.getState().sessions.some((s) => s.id === session.id)) return false;
+      contextSourceRef.current[session.id] = ctx.source;
+      await apiWriteToSession(session.id, prompt);
+      return true;
+    } finally {
+      teamDeliveryLocksRef.current.delete(session.id);
+    }
+  };
+  const sendTeamGoalWhenReady = async (session: typeof currentProjectSessions[number], prompt: string) => {
+    try {
+      if (!session.agentId) throw new Error("총괄 에이전트가 지정되지 않았습니다.");
+      if (getTeamMailDeliveries().some((d) => d.project === session.cwd && d.agentId === session.agentId)) {
+        throw new Error("총괄에게 처리 중이거나 결과 확인이 필요한 전달이 있습니다.");
       }
-      const tasks = parseBoardTasks(board, agents.map((a) => a.id));
+      saveTeamMailDelivery({ id: crypto.randomUUID(), agentId: session.agentId, project: session.cwd, sessionId: "", submittedAt: 0, kind: "goal", payload: prompt });
+      showToast("협업 목표를 전달 대기열에 저장했습니다. 총괄 세션 준비가 확인되면 전달합니다.", "info");
+    } catch (err) {
+      showToast(`협업 목표 저장 실패: ${String(err)}`, "error");
+    }
+  };
+
+  useEffect(() => {
+    let stopped = false;
+    let polling = false;
+    const tick = async () => {
+      if (polling) return;
+      polling = true;
+      try {
+        const active = useAppStore.getState().sessions.filter((s) => s.agentId);
+        const projects = [...new Set(active.map((s) => s.cwd))];
+        for (const project of projects) {
+          if (stopped) break;
+          try {
+          const [messages, agents] = await Promise.all([apiRouteTeamMail(project), apiGetProjectAgents(project)]);
+          for (const session of active.filter((s) => s.cwd === project)) {
+          if (stopped || !session.agentId) continue;
+          const deliveries = getTeamMailDeliveries().filter((d) => d.project === project && d.agentId === session.agentId);
+          if (deliveries.some((d) => d.kind)) continue;
+          const pending = deliveries.find((d) => !d.kind);
+          if (pending && pending.sessionId !== session.id) continue;
+          const message = messages.find((m) => m.to === session.agentId && (!pending || m.id === pending.id));
+          if (pending && !message) {
+            removeTeamMailDelivery(project, pending.agentId, pending.id);
+            continue;
+          }
+          if (!pending && !message) continue;
+          const claimed = Object.entries(contextSourceRef.current).filter(([id]) => id !== session.id).map(([, src]) => src);
+          const ctx = await apiGetSessionContext(session, claimed).catch(() => null);
+          if (!ctx?.completedAt || ctx.completedAt <= getLastSubmission(session.id)) continue;
+          contextSourceRef.current[session.id] = ctx.source;
+          if (pending) {
+            if (ctx.completedAt <= pending.submittedAt) continue;
+            await apiAcknowledgeTeamMail(pending.project, pending.agentId, pending.id);
+            removeTeamMailDelivery(pending.project, pending.agentId, pending.id);
+            continue;
+          }
+          if (!message || stopped) continue;
+          if (getTeamMailDeliveries().some((d) => d.project === project && d.agentId === session.agentId)) continue;
+          const sender = agents.find((a) => a.id === message.from)?.name ?? message.from;
+          const prompt = `[팀 메시지: ${sender}] 제목: ${message.subject.replace(/[\r\n]+/g, " ")} 내용: ${message.body.replace(/[\r\n]+/g, " ")} ${mailProtocol(session.agentId, agents)}\r`;
+          const delivery = { id: message.id, agentId: session.agentId, project, sessionId: session.id, submittedAt: Date.now() };
+          saveTeamMailDelivery(delivery);
+          if (!await sendToIdleTeamSession(session, prompt)) {
+            removeTeamMailDelivery(project, session.agentId, message.id);
+            continue;
+          }
+          saveTeamMailDelivery({ ...delivery, submittedAt: getLastSubmission(session.id) });
+          }
+          } catch (err) {
+            console.error("Team mail routing failed", project, err);
+          }
+        }
+      } catch (err) {
+        console.error("Team mail routing failed", err);
+      } finally {
+        polling = false;
+      }
+    };
+    void tick();
+    const id = window.setInterval(tick, 10000);
+    return () => { stopped = true; window.clearInterval(id); };
+  }, []);
+  useEffect(() => {
+    let polling = false;
+    let stopped = false;
+    const tick = async () => {
+      if (polling) return;
+      polling = true;
+      try {
+      const active = useAppStore.getState().sessions.filter((s) => s.agentId);
+      for (const project of new Set(active.map((s) => s.cwd))) {
+      if (stopped) break;
+      if (startingTeamProjectsRef.current.has(project)) continue;
+      const projSessions = active.filter((s) => s.cwd === project);
+      const storeKey = `agentrix_bb_dispatched:${project}`;
+      let sent: Set<string>;
+      try {
+        const stored: unknown = JSON.parse(localStorage.getItem(storeKey) || "[]");
+        if (!Array.isArray(stored) || !stored.every((item) => typeof item === "string")) throw new Error("Invalid dispatch record");
+        sent = new Set<string>(stored);
+      } catch (err) {
+        console.error("Team dispatch record is invalid", project, err);
+        continue;
+      }
+      let board: string;
+      let agents: ProjectAgentRecord[];
+      try {
+        [board, agents] = await Promise.all([apiGetProjectBlackboard(project), apiGetProjectAgents(project)]);
+      } catch {
+        continue;
+      }
+      const goals = getTeamMailDeliveries().filter((d) => d.project === project && d.kind === "goal");
+      for (const goal of goals) {
+        if (!goal.sessionId) {
+          const session = projSessions.find((s) => s.agentId === goal.agentId);
+          if (!session || !goal.payload) continue;
+          try {
+            const reserved = { ...goal, sessionId: session.id, submittedAt: Date.now() };
+            saveTeamMailDelivery(reserved);
+            if (await sendToIdleTeamSession(session, goal.payload)) {
+              saveTeamMailDelivery({ ...reserved, submittedAt: getLastSubmission(session.id) });
+              showToast("총괄 PM에게 협업 목표를 전달했습니다.", "success");
+            } else {
+              saveTeamMailDelivery(goal);
+            }
+          } catch (err) { console.error("Team goal delivery failed", err); }
+        } else {
+          const session = projSessions.find((s) => s.id === goal.sessionId && s.agentId === goal.agentId);
+          if (!session) continue;
+          const claimed = Object.entries(contextSourceRef.current).filter(([id]) => id !== session.id).map(([, src]) => src);
+          const ctx = await apiGetSessionContext(session, claimed).catch(() => null);
+          if (ctx?.completedAt && ctx.completedAt > goal.submittedAt && ctx.completedAt > getLastSubmission(session.id)) {
+            removeTeamMailDelivery(project, goal.agentId, goal.id, "goal");
+          }
+        }
+      }
+      if (goals.length > 0) continue;
+      for (const delivery of getTeamMailDeliveries().filter((d) => d.project === project && d.kind)) {
+        const session = projSessions.find((s) => s.id === delivery.sessionId && s.agentId === delivery.agentId);
+        if (!session) continue;
+        const claimed = Object.entries(contextSourceRef.current).filter(([id]) => id !== session.id).map(([, src]) => src);
+        const ctx = await apiGetSessionContext(session, claimed).catch(() => null);
+        if (!ctx?.completedAt || ctx.completedAt <= delivery.submittedAt || ctx.completedAt <= getLastSubmission(session.id)) continue;
+        if (delivery.kind === "report") {
+          const separator = delivery.id.indexOf(":");
+          if (separator < 0) continue;
+          sent.add(`${delivery.id.slice(0, separator)}:done:${delivery.id.slice(separator + 1)}`);
+        } else {
+          sent.add(`${delivery.id}:start:${delivery.agentId}`);
+        }
+        localStorage.setItem(storeKey, JSON.stringify([...sent]));
+        removeTeamMailDelivery(project, delivery.agentId, delivery.id, delivery.kind);
+      }
+      const tasks = parseBoardTasks(board, agents.map((a) => a.id), Object.fromEntries(agents.map((a) => [a.id, a.name])));
       const pmSession = projSessions.find(
         (s) => s.name.includes("PM") || s.agentRole?.includes("PM") || s.agentRole?.includes("리더")
       ) ?? projSessions[0];
-      const doneIds: string[] = [];
+      const doneTasks: typeof tasks = [];
       for (const t of tasks) {
         const key = `${t.taskId}:${t.status}:${t.agentId}`;
         if (sent.has(key)) continue;
         if (t.status === "done") {
           if (!pmSession) continue;
-          doneIds.push(t.taskId);
-          sent.add(key);
+          if (getTeamMailDeliveries().some((d) => d.project === project && d.agentId === t.agentId && d.id === t.taskId && d.kind === "task")) continue;
+          doneTasks.push(t);
           continue;
         }
         const target = projSessions.find((s) => s.agentId === t.agentId);
         if (!target) continue; // 세션이 뜨면 다음 폴링에서 재시도
+        if (getTeamMailDeliveries().some((d) => d.project === project && d.agentId === t.agentId)) continue;
         try {
-          await apiWriteToSession(
-            target.id,
-            `[PM 배정] .ai-agents/BLACKBOARD.md 작업표의 ${t.taskId} 작업을 수행하세요. 완료하면 해당 행의 상태를 ✅ 완료로 바꾸고 결과를 한 줄 메모로 남기세요. BLACKBOARD.md는 셸 명령이 아닌 파일 편집 도구로 수정하세요(한글 깨짐 방지).\r`
-          );
-          sent.add(key);
+          const delivery = { id: t.taskId, agentId: t.agentId, project, sessionId: target.id, submittedAt: Date.now(), kind: "task" as const };
+          saveTeamMailDelivery(delivery);
+          if (!await sendToIdleTeamSession(
+            target,
+            `[PM 배정] .ai-agents/BLACKBOARD.md 작업표의 ${t.taskId} 작업을 수행하세요. 완료하면 해당 행의 상태를 ✅ 완료로 바꾸고 결과를 한 줄 메모로 남기세요. BLACKBOARD.md는 셸 명령이 아닌 파일 편집 도구로 수정하세요(한글 깨짐 방지). ${mailProtocol(t.agentId, agents)}\r`
+          )) {
+            removeTeamMailDelivery(project, t.agentId, t.taskId, "task");
+            continue;
+          }
+          saveTeamMailDelivery({ ...delivery, submittedAt: getLastSubmission(target.id) });
           showToast(`📋 ${t.taskId} → '${target.name}' 자동 배정`, "info");
         } catch {}
       }
-      // 표 전체가 ✅면 PM이 이미 최종 보고 중이므로 완료 알림을 또 보내지 않는다 (중복 라운드 방지)
-      const allDone = tasks.length > 0 && tasks.every((t) => t.status === "done");
-      if (pmSession && doneIds.length > 0 && !allDone) {
-        apiWriteToSession(
-          pmSession.id,
-          `[완료 보고] ${doneIds.join(", ")} 작업이 ✅ 완료되었습니다. .ai-agents/BLACKBOARD.md를 확인하고 선행 조건이 풀린 다음 작업의 상태를 🔥 착수로 바꾸세요. 남은 작업이 없으면 사용자에게 최종 보고하세요.\r`
-        ).catch(() => {});
+      if (pmSession?.agentId && doneTasks.length > 0 && !getTeamMailDeliveries().some((d) => d.project === project && d.agentId === pmSession.agentId)) {
+        try {
+          const task = doneTasks[0];
+          const delivery = { id: `${task.taskId}:${task.agentId}`, agentId: pmSession.agentId, project, sessionId: pmSession.id, submittedAt: Date.now(), kind: "report" as const };
+          saveTeamMailDelivery(delivery);
+          if (await sendToIdleTeamSession(pmSession, `[완료 보고] ${task.taskId} 작업이 완료되었습니다. .ai-agents/BLACKBOARD.md를 확인하고 다음 작업을 배정하거나 최종 보고하세요.\r`)) {
+            saveTeamMailDelivery({ ...delivery, submittedAt: getLastSubmission(pmSession.id) });
+          } else {
+            removeTeamMailDelivery(project, delivery.agentId, delivery.id, "report");
+          }
+        } catch {}
       }
       localStorage.setItem(storeKey, JSON.stringify([...sent]));
+      }
+      } catch (err) {
+        console.error("Team dispatch failed", err);
+      } finally { polling = false; }
     };
     tick();
     const id = window.setInterval(tick, 10000);
-    return () => window.clearInterval(id);
-  }, [selectedProjectPath, hasProjectSessions]);
+    return () => { stopped = true; window.clearInterval(id); };
+  }, []);
 
   // 사용량/쿼터 자동 새로고침 (CLI 응답 후 반영되도록 주기적으로 갱신)
   useEffect(() => {
@@ -2452,7 +2668,13 @@ ${recentSnippet || "진행 내역 기록 없음"}
                           const isGroupCollapsed = Boolean(collapsedGroups[groupName]);
 
                           return (
-                            <div key={groupName} className="space-y-1.5">
+                            <div
+                              key={groupName}
+                              data-group-drop={groupName}
+                              className={`space-y-1.5 rounded-xl transition ${
+                                dragProject && dragOverGroup === groupName ? "ring-2 ring-indigo-500/70 bg-indigo-500/5" : ""
+                              }`}
+                            >
                               {/* 그룹 헤더 (그룹별 접기/펴기) */}
                               <div
                                 onClick={() => toggleGroupCollapsed(groupName)}
@@ -2509,7 +2731,10 @@ ${recentSnippet || "진행 내역 기록 없음"}
                                     return (
                                       <div key={proj.path} className="space-y-1">
                                         <div
-                                          onClick={() => handleSelectProject(proj.path)}
+                                          onPointerDown={(e) => startProjectDrag(e, proj)}
+                                          onClick={() => {
+                                            if (!suppressProjectClickRef.current) handleSelectProject(proj.path);
+                                          }}
                                           className={`group px-2.5 py-2 rounded-xl border flex items-center justify-between gap-2 cursor-pointer transition-all ${
                                             isSelected
                                               ? "bg-indigo-500/10 border-indigo-500/50 border-l-[3px] border-l-indigo-500 text-indigo-400 dark:text-indigo-300 font-semibold shadow-sm"
@@ -3314,6 +3539,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
               onApplyToCli={handleApplyToCli}
               onCreateItem={handleCreateRegistryItem}
               onScanLocalExtensions={handleScanLocalExtensions}
+              onToolsInstalled={refreshAll}
             />
           )}
 
@@ -3931,6 +4157,17 @@ ${recentSnippet || "진행 내역 기록 없음"}
         activeSessionEstTokens={activeSessionId ? (sessionTokens[activeSessionId] || 0) : 0}
       />
 
+      {/* 프로젝트 그룹 이동 드래그 중 커서를 따라다니는 라벨 */}
+      {dragProject && (
+        <div
+          className="fixed z-[200] pointer-events-none px-2.5 py-1.5 rounded-lg bg-indigo-600 text-white text-[11px] font-semibold shadow-xl"
+          style={{ left: dragPos.x + 12, top: dragPos.y + 12 }}
+        >
+          {dragProject.name}
+          {dragOverGroup ? ` → ${dragOverGroup}` : ""}
+        </div>
+      )}
+
       {/* 모달 6: AI 심층 팀빌딩 & AI 엔진 연동 설정 모달 */}
       <AiDeepTeamModal
         isOpen={showAiDeepModal}
@@ -3938,6 +4175,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
         projectPath={selectedProjectPath}
         projectName={getShortFolderName(selectedProjectPath)}
         projectContext={projectDeepContext}
+        clis={clis}
         savedApiKeys={apiKeys}
         onApplyDeepAgents={handleApplyDeepAgents}
       />

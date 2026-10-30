@@ -485,18 +485,46 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     if (onActivity) onActivity();
   };
 
+  // CLI의 선택/질문 화면 조작용 키 → 터미널 이스케이프 시퀀스 (Shift 조합은 xterm 표기 1;2)
+  const sendTermKey = (seq: string) => {
+    apiWriteToSession(session.id, seq).catch(console.error);
+    if (onActivity) onActivity();
+  };
+  const ARROW_CODE: Record<string, string> = { ArrowUp: "A", ArrowDown: "B", ArrowRight: "C", ArrowLeft: "D" };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // 입력창이 비어 있으면 방향키/Tab/Esc는 CLI 화면(질문 선택 등)으로 그대로 전달.
+    // 메시지 기록 넘기기는 Ctrl+↑/↓로 이동.
+    const emptyInput = promptText === "" && attachments.length === 0;
+    if (emptyInput && !e.ctrlKey && !e.altKey && !e.metaKey && !e.nativeEvent.isComposing) {
+      const arrow = ARROW_CODE[e.key];
+      if (arrow) {
+        e.preventDefault();
+        sendTermKey(`\x1b[${e.shiftKey ? "1;2" : ""}${arrow}`);
+        return;
+      }
+      if (e.key === "Tab") {
+        e.preventDefault();
+        sendTermKey(e.shiftKey ? "\x1b[Z" : "\t");
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        sendTermKey("\x1b");
+        return;
+      }
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSendChatPrompt();
-    } else if (e.key === "ArrowUp" && !promptText.includes("\n")) {
+    } else if (e.key === "ArrowUp" && (!emptyInput || e.ctrlKey) && !promptText.includes("\n")) {
       if (promptHistory.length > 0 && historyIdx + 1 < promptHistory.length) {
         e.preventDefault();
         const nextIdx = historyIdx + 1;
         setHistoryIdx(nextIdx);
         setPromptText(promptHistory[nextIdx]);
       }
-    } else if (e.key === "ArrowDown" && !promptText.includes("\n")) {
+    } else if (e.key === "ArrowDown" && (!emptyInput || e.ctrlKey) && !promptText.includes("\n")) {
       if (historyIdx > 0) {
         e.preventDefault();
         const nextIdx = historyIdx - 1;
@@ -775,7 +803,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
                 attachFiles(files);
               }
             }}
-            placeholder={`[${folderName}] ${session.name}에게 보낼 메시지 (파일/이미지는 Ctrl+V로 첨부)...`}
+            placeholder={`[${folderName}] ${session.name}에게 보낼 메시지 (Ctrl+V 첨부 · 비어 있을 때 방향키/Shift+방향키/Tab/Esc는 터미널로 전달 · 기록은 Ctrl+↑↓)...`}
             className="flex-1 h-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700/90 focus:border-indigo-500 focus:outline-none text-xs text-slate-100 placeholder-slate-500 resize-none leading-relaxed"
           />
 
@@ -798,6 +826,27 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
               <CornerDownLeft className="w-3 h-3" />
               Enter만
             </button>
+            {/* CLI 질문/선택 화면 조작용 키 패드 */}
+            <div className="flex items-center gap-0.5" role="group" aria-label="터미널 방향키">
+              {[
+                ["←", "\x1b[D", "왼쪽 (←)"],
+                ["↑", "\x1b[A", "위 (↑)"],
+                ["↓", "\x1b[B", "아래 (↓)"],
+                ["→", "\x1b[C", "오른쪽 (→)"],
+                ["Tab", "\t", "Tab"],
+                ["Esc", "\x1b", "Esc"],
+              ].map(([label, seq, title]) => (
+                <button
+                  key={label}
+                  type="button"
+                  onClick={() => sendTermKey(seq)}
+                  className="px-1.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-mono transition"
+                  title={`터미널에 ${title} 키 전송`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       </div>

@@ -14,6 +14,7 @@ import {
   Wrench,
 } from "lucide-react";
 import type { BackupRecord, CliDefinition, RegistryItem } from "../types/types";
+import { TokenToolsCard } from "./TokenToolsCard";
 
 interface McpSkillViewProps {
   items: RegistryItem[];
@@ -21,6 +22,7 @@ interface McpSkillViewProps {
   clis: CliDefinition[];
   onToggleItem: (itemId: string, enabled: boolean) => Promise<void>;
   onApplyToCli: (itemId: string, cliId: string) => Promise<void>;
+  onToolsInstalled?: () => void;
   onScanLocalExtensions: () => Promise<void>;
   onCreateItem: (payload: {
     id: string;
@@ -100,6 +102,7 @@ export const McpSkillView: React.FC<McpSkillViewProps> = ({
   onToggleItem,
   onApplyToCli,
   onScanLocalExtensions,
+  onToolsInstalled,
   onCreateItem,
 }) => {
   const [filterKind, setFilterKind] = useState<"all" | "mcp" | "skill" | "plugin">("all");
@@ -207,6 +210,8 @@ export const McpSkillView: React.FC<McpSkillViewProps> = ({
           </button>
         </div>
       </div>
+
+      <TokenToolsCard onInstalled={onToolsInstalled} />
 
       {/* 핵심 토큰 관리 도구 (Headroom MCP & Caveman Skill 기본 적용 영역) */}
       <div className="rounded-2xl bg-slate-900/40 border border-slate-800/80 p-5 space-y-4 shadow-sm">

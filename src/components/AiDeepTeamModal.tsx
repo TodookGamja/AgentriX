@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Select } from "./Select";
 import {
   AlertCircle,
@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import type {
   ApiKeyStatus,
+  CliDefinition,
   AiProviderConfig,
   AiProviderType,
   DetectedCliCredential,
@@ -26,6 +27,9 @@ import type {
   ProjectDeepContext,
 } from "../types/types";
 import { testAiConnection, generateDeepAiTeam, generateDeepAiTeamWithCli } from "../lib/aiDeepAnalyzer";
+import type { TeamCliOption, TeamHints } from "../lib/aiDeepAnalyzer";
+import { installedAgentClis } from "../lib/agentCli";
+import { loadCliModels } from "./ModelPicker";
 import { apiGetDetectedCliCredentials } from "../lib/tauriBridge";
 
 interface AiDeepTeamModalProps {
@@ -34,6 +38,7 @@ interface AiDeepTeamModalProps {
   projectPath: string;
   projectName: string;
   projectContext: ProjectDeepContext | null;
+  clis: CliDefinition[];
   savedApiKeys?: ApiKeyStatus[];
   onApplyDeepAgents: (agents: ProjectAgentInput[]) => void;
 }
@@ -80,12 +85,32 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
   projectPath,
   projectName,
   projectContext,
+  clis,
   savedApiKeys: _savedApiKeys,
   onApplyDeepAgents,
 }) => {
   // 모드: "cli" (설치된 CLI 직접 연동) vs "api" (API 키 연동)
   const [activeTab, setActiveTab] = useState<"cli" | "api">("cli");
+  const installed = installedAgentClis(clis);
+  // 분석(프롬프트 실행)은 비대화형 실행이 검증된 CLI만 지원. 팀 배정은 설치된 모든 CLI 가능
+  const analyzers = installed.filter((c) => ["claude", "codex", "antigravity", "grok"].includes(c.id));
+  const installedKey = installed.map((c) => c.id).join(",");
   const [selectedCli, setSelectedCli] = useState<string>("claude");
+  // 팀에 배정할 AI (설치된 CLI 중 사용자가 선택, 기본은 전부)
+  const [teamCliIds, setTeamCliIds] = useState<string[]>([]);
+  const toggleTeamCli = (id: string) =>
+    setTeamCliIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+
+  // 설치된 CLI가 바뀌면(모달 열 때 포함) 분석 CLI와 팀 CLI 선택을 설치 목록 기준으로 보정
+  useEffect(() => {
+    const ids = installedKey ? installedKey.split(",") : [];
+    const analyzerIds = ids.filter((id) => ["claude", "codex", "antigravity", "grok"].includes(id));
+    setSelectedCli((prev) => (analyzerIds.includes(prev) || analyzerIds.length === 0 ? prev : analyzerIds[0]));
+    setTeamCliIds((prev) => {
+      const kept = prev.filter((id) => ids.includes(id));
+      return kept.length > 0 ? kept : ids;
+    });
+  }, [installedKey, isOpen]);
 
   const [detectedCreds, setDetectedCreds] = useState<DetectedCliCredential[]>([]);
   const [config, setConfig] = useState<AiProviderConfig>(() => {
@@ -104,6 +129,16 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [generatedAgents, setGeneratedAgents] = useState<ProjectAgentInput[]>([]);
+  // 사용자가 직접 지정하는 팀 구성 요청 (예: "프론트 담당은 미라, QA는 준")
+  const [requestText, setRequestText] = useState("");
+  // 재추천 시 같은 구성이 반복되지 않도록 이전에 나온 이름 기억
+  const prevNamesRef = useRef<string[]>([]);
+
+  const updateAgent = (idx: number, patch: Partial<ProjectAgentInput>) =>
+    setGeneratedAgents((prev) => prev.map((a, i) => (i === idx ? { ...a, ...patch } : a)));
+  // 팀원끼리 이름으로 소통하므로 이름은 비어 있거나 겹치면 안 됨
+  const nameKeys = generatedAgents.map((a) => a.name.trim().toLowerCase());
+  const nameProblem = nameKeys.some((k, i) => !k || nameKeys.indexOf(k) !== i);
 
   // 모달 열릴 때 로컬 감지된 CLI 크레덴셜 목록 조회
   useEffect(() => {
@@ -111,6 +146,7 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
     setTestStatus({ testing: false });
     setAnalysisError(null);
     setGeneratedAgents([]);
+    prevNamesRef.current = [];
 
     apiGetDetectedCliCredentials()
       .then((creds) => {
@@ -183,17 +219,26 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
 
     try {
       let agents: ProjectAgentInput[];
+      // 선택한 설치 CLI와 각 CLI의 모델 목록을 AI에게 전달 → 설치되지 않은 AI는 추천되지 않음
+      const options: TeamCliOption[] = await Promise.all(
+        installed
+          .filter((c) => teamCliIds.includes(c.id))
+          .map(async (c) => ({ id: c.id, name: c.name, models: await loadCliModels(c.id) }))
+      );
+      if (options.length === 0) throw new Error("팀에 사용할 AI를 하나 이상 선택해 주세요.");
+      const hints: TeamHints = { request: requestText, avoidNames: prevNamesRef.current.slice(-12) };
       if (activeTab === "cli") {
         // CLI 직접 연동 (API 키 불필요)
-        agents = await generateDeepAiTeamWithCli(selectedCli, projectContext);
+        agents = await generateDeepAiTeamWithCli(selectedCli, projectContext, options, hints);
       } else {
         // API 키 연동
         if (!config.apiKey && config.provider !== "ollama") {
           throw new Error("AI API 키를 먼저 입력하고 저장해 주세요.");
         }
         handleSaveConfig();
-        agents = await generateDeepAiTeam(config, projectContext);
+        agents = await generateDeepAiTeam(config, projectContext, options, hints);
       }
+      prevNamesRef.current = [...prevNamesRef.current, ...agents.map((a) => a.name)];
       setGeneratedAgents(agents);
     } catch (err: any) {
       setAnalysisError(err?.message || String(err));
@@ -203,7 +248,7 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
   };
 
   const handleConfirmApply = () => {
-    if (generatedAgents.length === 0) return;
+    if (generatedAgents.length === 0 || nameProblem) return;
     onApplyDeepAgents(generatedAgents);
     onClose();
   };
@@ -286,36 +331,13 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
 
               {/* CLI 라디오 선택 카드 */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
-                {[
-                  {
-                    id: "claude",
-                    name: "Claude Code",
-                    desc: "Anthropic Claude 최신 지능 (코드베이스 분석 탁월)",
-                    badge: "추천",
-                    color: "border-amber-500/40 text-amber-600 dark:text-amber-400",
-                  },
-                  {
-                    id: "antigravity",
-                    name: "Antigravity (AGY)",
-                    desc: "Google DeepMind 에이전틱 코딩 CLI 엔진",
-                    badge: "공식 연동",
-                    color: "border-indigo-500/40 text-indigo-600 dark:text-indigo-400",
-                  },
-                  {
-                    id: "codex",
-                    name: "Codex CLI",
-                    desc: "OpenAI 기반 터미널 코딩 에이전트",
-                    badge: "OpenAI",
-                    color: "border-emerald-500/40 text-emerald-600 dark:text-emerald-400",
-                  },
-                  {
-                    id: "grok",
-                    name: "Grok CLI",
-                    desc: "xAI 초고속 추론 에이전트",
-                    badge: "xAI",
-                    color: "border-purple-500/40 text-purple-600 dark:text-purple-400",
-                  },
-                ].map((item) => {
+                {analyzers.map((c) => ({
+                  id: c.id,
+                  name: c.name,
+                  desc: c.provider,
+                  badge: c.id === "claude" ? "추천" : "설치됨",
+                  color: "border-indigo-500/40 text-indigo-600 dark:text-indigo-400",
+                })).map((item) => {
                   const isSelected = selectedCli === item.id;
                   return (
                     <div
@@ -508,7 +530,62 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
             </div>
           )}
 
-          {/* 섹션 2: 분석 대상 프로젝트 컨텍스트 요약 */}
+          {/* 섹션 1.5: 팀에 사용할 AI 선택 (설치된 CLI만) */}
+              <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2.5">
+                <div className="flex items-center justify-between text-xs font-bold text-slate-200">
+                  <span className="flex items-center gap-2">
+                    <Cpu className="w-4 h-4 text-indigo-400" />
+                    팀에 사용할 AI 선택
+                  </span>
+                  <span className="text-[10px] font-medium text-slate-400">
+                    선택한 AI에게만 역할과 모델이 배정됩니다
+                  </span>
+                </div>
+                {installed.length === 0 ? (
+                  <p className="text-[11px] text-amber-400">설치된 AI CLI가 없습니다. 먼저 CLI를 설치해 주세요.</p>
+                ) : (
+                  <div className="flex flex-wrap gap-1.5">
+                    {installed.map((c) => {
+                      const on = teamCliIds.includes(c.id);
+                      return (
+                        <button
+                          key={c.id}
+                          type="button"
+                          onClick={() => toggleTeamCli(c.id)}
+                          className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold transition ${
+                            on
+                              ? "bg-indigo-600 text-white border-indigo-500"
+                              : "bg-slate-900 text-slate-400 border-slate-700 hover:border-slate-500"
+                          }`}
+                        >
+                          {on ? "✓ " : ""}
+                          {c.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+{/* 섹션 1.6: 팀 구성 요청 (이름·역할 직접 지정) */}
+              <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+                <label className="text-xs font-bold text-slate-200 flex items-center gap-2">
+                  <UserPlus className="w-4 h-4 text-indigo-400" />
+                  팀 구성 요청 (선택)
+                </label>
+                <textarea
+                  value={requestText}
+                  onChange={(e) => setRequestText(e.target.value)}
+                  rows={2}
+                  placeholder='예: 프론트엔드 담당은 "미라", QA는 "준"으로 해줘. 보안 검토 역할도 꼭 넣어줘.'
+                  className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 resize-none"
+                />
+                <p className="text-[10px] text-slate-500">
+                  추천 후에도 아래 카드에서 이름과 역할을 직접 고칠 수 있습니다. 팀원끼리는 이 이름으로 서로를 부르며 소통합니다.
+                </p>
+              </div>
+
+              {/* 섹션 2: 분석 대상 프로젝트 컨텍스트 요약 */}
           <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2 text-xs">
             <div className="flex items-center justify-between text-slate-200 font-semibold">
               <span className="flex items-center gap-1.5">
@@ -563,9 +640,9 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                {generatedAgents.map((ag) => (
+                {generatedAgents.map((ag, idx) => (
                   <div
-                    key={ag.name}
+                    key={idx}
                     className="p-3 rounded-xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1.5 relative overflow-hidden shadow-sm"
                   >
                     <div
@@ -575,13 +652,23 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
                     <div className="flex items-center gap-2 pt-1">
                       <span className="text-xl">{ag.avatarEmoji}</span>
                       <div className="min-w-0 flex-1">
-                        <div className="font-bold text-xs text-slate-900 dark:text-slate-100 truncate">{ag.name}</div>
-                        <div className="text-[10px] text-slate-500 dark:text-slate-400 truncate font-medium">
-                          {ag.roleTitle}
-                        </div>
+                        <input
+                          value={ag.name}
+                          onChange={(e) => updateAgent(idx, { name: e.target.value })}
+                          aria-label="에이전트 이름"
+                          className={`w-full bg-transparent font-bold text-xs text-slate-900 dark:text-slate-100 border-b focus:outline-none focus:border-indigo-500 ${
+                            nameKeys[idx] === "" || nameKeys.indexOf(nameKeys[idx]) !== idx ? "border-rose-500" : "border-transparent hover:border-slate-600"
+                          }`}
+                        />
+                        <input
+                          value={ag.roleTitle}
+                          onChange={(e) => updateAgent(idx, { roleTitle: e.target.value })}
+                          aria-label="에이전트 역할"
+                          className="w-full bg-transparent text-[10px] text-slate-500 dark:text-slate-400 font-medium border-b border-transparent hover:border-slate-600 focus:outline-none focus:border-indigo-500"
+                        />
                       </div>
                       <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-slate-950 border border-slate-800 text-indigo-400 font-semibold uppercase">
-                        {ag.cliId}
+                        {ag.cliId}{ag.model ? ` · ${ag.model}` : ""}
                       </span>
                     </div>
                     <p className="text-[11px] text-slate-300 line-clamp-2 leading-relaxed">
@@ -625,14 +712,27 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
                 )}
               </button>
             ) : (
+              <>
+              <button
+                type="button"
+                onClick={handleRunDeepAnalysis}
+                disabled={isAnalyzing}
+                className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 text-xs font-semibold flex items-center gap-2 transition"
+              >
+                {isAnalyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
+                <span>다시 추천</span>
+              </button>
               <button
                 type="button"
                 onClick={handleConfirmApply}
-                className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-lg flex items-center gap-2 transition"
+                disabled={nameProblem}
+                title={nameProblem ? "이름이 비어 있거나 겹칩니다" : undefined}
+                className="disabled:opacity-50 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-lg flex items-center gap-2 transition"
               >
                 <UserPlus className="w-4 h-4" />
                 <span>이 AI 팀을 프로젝트에 즉시 적용</span>
               </button>
+              </>
             )}
           </div>
         </div>

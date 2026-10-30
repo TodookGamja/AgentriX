@@ -5,8 +5,10 @@ pub mod cli;
 pub mod context;
 pub mod db;
 pub mod handoff;
+pub mod tools;
 pub mod mcp;
 pub mod pty;
+pub mod team_mail;
 pub mod usage;
 
 use cli::CliDefinition;
@@ -418,6 +420,28 @@ fn get_project_blackboard(project_path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn route_team_mail(state: State<'_, AppState>, project_path: String) -> Result<Vec<team_mail::InboxMessage>, String> {
+    if db::is_forbidden_system_dir(&project_path) || !std::path::Path::new(&project_path).is_dir() {
+        return Err("Invalid project directory".into());
+    }
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let agents = db::get_project_agents(&conn, &project_path).map_err(|e| e.to_string())?;
+    let roster = agents.into_iter().map(|a| (a.id, a.name)).collect::<Vec<_>>();
+    team_mail::route(std::path::Path::new(&project_path), &roster)
+}
+
+#[tauri::command]
+fn acknowledge_team_mail(state: State<'_, AppState>, project_path: String, agent_id: String, message_id: String) -> Result<(), String> {
+    if db::is_forbidden_system_dir(&project_path) || !std::path::Path::new(&project_path).is_dir() {
+        return Err("Invalid project directory".into());
+    }
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let agents = db::get_project_agents(&conn, &project_path).map_err(|e| e.to_string())?;
+    if !agents.iter().any(|a| a.id == agent_id) { return Err("Unknown agent".into()); }
+    team_mail::acknowledge(std::path::Path::new(&project_path), &agent_id, &message_id)
+}
+
+#[tauri::command]
 fn save_project_blackboard(project_path: String, content: String) -> Result<(), String> {
     db::save_project_blackboard(&project_path, &content).map_err(|e| e.to_string())
 }
@@ -779,6 +803,16 @@ async fn run_cli_deep_analysis(
 }
 
 #[tauri::command]
+async fn check_token_tools() -> Result<Vec<tools::ToolStatus>, String> {
+    tokio::task::spawn_blocking(tools::check).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn install_token_tool(tool_id: String) -> Result<tools::InstallResult, String> {
+    tokio::task::spawn_blocking(move || tools::install(&tool_id)).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn trust_project_folder(project_path: String) -> Result<(), String> {
     pty::auto_trust_project_folder(&project_path);
     Ok(())
@@ -970,8 +1004,8 @@ async fn sync_usage_logs(
     let db = state.db.clone();
     tokio::task::spawn_blocking(move || {
         usage::prefetch_live_quotas();
+        let _ = usage::sync_all_cli_logs_shared(&db);
         let conn = db.lock().map_err(|e| e.to_string())?;
-        let _ = usage::sync_all_cli_logs(&conn);
         db::get_usage_dashboard(&conn, cli_filter.as_deref(), timeframe.as_deref()).map_err(|e| e.to_string())
     })
     .await
@@ -1507,9 +1541,9 @@ fn main() {
     // 초기 UI 로딩과 첫 쿼터 조회가 0ms 지연 없이 완료된 후 백그라운드 스캔 실행
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(1200));
+        let _ = usage::sync_all_cli_logs_shared(&db_clone);
         if let Ok(c) = db_clone.lock() {
             let _ = mcp::discover_local_cli_extensions(&c);
-            let _ = usage::sync_all_cli_logs(&c);
         }
     });
 
@@ -1632,12 +1666,16 @@ fn main() {
             delete_project_agent,
             seed_project_agents_preset,
             get_project_blackboard,
+            route_team_mail,
+            acknowledge_team_mail,
             save_project_blackboard,
             save_session_handoff,
             trust_project_folder,
             analyze_project_workspace,
             get_project_deep_context,
             check_npm_cli_updates,
+            check_token_tools,
+            install_token_tool,
             install_npm_cli_update,
             get_detected_cli_credentials,
             run_cli_deep_analysis,

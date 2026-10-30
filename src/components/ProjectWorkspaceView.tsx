@@ -30,6 +30,8 @@ import type {
   SessionInfo,
 } from "../types/types";
 import { SynapseGraphView } from "./SynapseGraphView";
+import { TeamMailStatus } from "./TeamMailStatus";
+import { fitAgentsToInstalled } from "../lib/agentCli";
 import { ModelPicker, getCliDefaultModel, setCliDefaultModel } from "./ModelPicker";
 
 // 일반 CLI 실행 시 사용할 기본 모델 (localStorage 저장)
@@ -126,7 +128,8 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
     projectPath.split(/[/\\]/).filter(Boolean).pop() ||
     "Project";
 
-  const recommendations = analysis?.recommendedAgents ?? [];
+  // 설치되지 않은 CLI가 추천에 섞이지 않도록 설치된 CLI로 보정
+  const recommendations = fitAgentsToInstalled(analysis?.recommendedAgents ?? [], clis);
 
   const isRecAlreadyAdded = (rec: ProjectAgentInput) => {
     return agents.some(
@@ -425,8 +428,8 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
                 [{projectName}] 전담 역할 에이전트 ({agents.length}명)
               </h3>
               <div className="text-xs text-slate-400 mt-1 space-y-0.5">
-                <p>· 사용자는 총괄 PM에게만 지시하며, 에이전트들이 서로 대화를 주고받으며 협업합니다.</p>
-                <p>· [무인 자율 협업 가동] 시 사용자 확인 질문 없이 즉시 연동됩니다.</p>
+                <p>· 사용자는 총괄 PM에게만 지시하며, 에이전트들은 공유 블랙보드를 통해 작업합니다.</p>
+                <p>· 팀원의 작업 완료가 확인되면 대기 중인 작업과 메시지를 전달합니다.</p>
               </div>
             </div>
 
@@ -853,6 +856,8 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
         </div>
       </div>
 
+      <TeamMailStatus key={projectPath} projectPath={projectPath} agents={agents} sessions={runningSessions} />
+
       {/* =====================================================================
           모달: 👑 총괄 PM 중심 무인 자율 협업 오케스트레이션 대화창
          ===================================================================== */}
@@ -866,10 +871,10 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
                 </div>
                 <div>
                   <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
-                    👑 총괄 PM 및 에이전트 상호 P2P 무인 자율 협업
+                    👑 총괄 PM 및 팀원 협업
                   </h3>
                   <p className="text-xs text-slate-400 break-keep">
-                    총괄 PM이 지시를 내릴 뿐만 아니라, 도메인 에이전트들이 서로 직접 실시간 소통하며 작업을 자율 완수합니다.
+                    총괄 PM이 작업표로 팀원에게 작업을 전달하고, 팀원은 메시지함으로 서로 요청과 결과를 주고받습니다. 작업 완료를 확인할 수 있는 CLI에서 메시지를 전달합니다.
                   </p>
                 </div>
               </div>
@@ -900,10 +905,10 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
                 <label className="text-xs font-bold text-slate-300 flex items-center justify-between">
                   <span className="flex items-center gap-1.5">
                     <Radio className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
-                    유기적 상호 P2P 릴레이 & 자율 대화 구조
+                    작업 배정 및 팀 메시지
                   </span>
                   <span className="text-[11px] font-mono text-emerald-400 font-semibold">
-                    ⚡ 완전 자동 실행 (승인 질문 일체 생략)
+                    ⚡ 세션 완료 후 전달
                   </span>
                 </label>
 
@@ -919,7 +924,7 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
                   <div className="pl-3 py-1 space-y-2 border-l-2 border-indigo-500/40">
                     <div className="text-[10px] font-bold text-indigo-300 uppercase tracking-wider flex items-center gap-1.5">
                       <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
-                      도메인 에이전트 간 직접 상호 연동 (Peer-to-Peer Relay)
+                      도메인 에이전트 메시지 중계
                     </div>
 
                     {agents.length > 0 ? (
@@ -939,7 +944,7 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
                             <div className="min-w-0">
                               <span className="font-bold text-slate-200 mr-1.5">{ag.name}:</span>
                               <span className="text-slate-400">
-                                담당 직무({ag.roleTitle})를 수행하며 다른 도메인 에이전트와 필요한 API 규격, 상태, 파일 변경사항을 직접 주고받습니다.
+                                담당 직무({ag.roleTitle})를 수행하며 필요한 API 규격, 상태, 파일 변경사항을 공유 블랙보드에 기록합니다.
                               </span>
                             </div>
                           </div>
@@ -963,7 +968,7 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
 
             <div className="px-6 py-3.5 bg-slate-950 border-t border-slate-800 flex items-center justify-between gap-3">
               <span className="text-[11px] text-slate-400 break-keep hidden sm:inline">
-                💡 총괄 PM과 에이전트들이 사람 개입 없이 스스로 대화를 주고받으며 작업을 완료합니다.
+                💡 CLI 권한과 작업 완료 감지 여부에 따라 확인이나 대기가 필요할 수 있습니다.
               </span>
               <div className="flex items-center gap-2 shrink-0 ml-auto">
                 <button

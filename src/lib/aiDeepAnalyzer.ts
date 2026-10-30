@@ -6,6 +6,73 @@ export interface AiTestResult {
   message: string;
 }
 
+/** 팀 편성에 사용할 수 있는 CLI와 각 CLI의 선택 가능한 모델 (사용자가 고른 설치된 CLI만 전달) */
+export interface TeamCliOption {
+  id: string;
+  name: string;
+  models: string[];
+}
+
+const DEFAULT_CLIS = ["claude", "codex", "antigravity", "grok"];
+
+// 허용 목록(사용자가 선택한 설치된 CLI) 밖의 CLI는 허용 목록의 첫 번째로 대체
+function pickCli(cliId: unknown, options?: TeamCliOption[]): string {
+  const allowed = options?.length ? options.map((o) => o.id) : DEFAULT_CLIS;
+  return typeof cliId === "string" && allowed.includes(cliId) ? cliId : allowed[0];
+}
+
+// 목록에 없는 모델명(환각)은 버리고 CLI 기본 모델 사용
+function pickModel(cliId: unknown, model: unknown, options?: TeamCliOption[]): string {
+  const opt = options?.find((o) => o.id === cliId);
+  return opt && typeof model === "string" && opt.models.includes(model) ? model : "";
+}
+
+/** 사용자 요청과 재추천 시 변주를 위한 힌트 */
+export interface TeamHints {
+  /** 사용자가 직접 지정한 팀 구성 요청 (이름·역할 지정 등) */
+  request?: string;
+  /** 이전에 추천된 에이전트 이름 — 같은 구성을 반복하지 않도록 */
+  avoidNames?: string[];
+}
+
+// 매 실행마다 다른 관점으로 편성하도록 무작위 관점 부여 (같은 프로젝트라도 똑같은 팀만 나오는 문제 방지)
+const TEAM_LENSES = [
+  "출시 속도와 빠른 반복 중심의 소수정예",
+  "품질·테스트·안정성 중심",
+  "아키텍처·유지보수성 중심",
+  "사용자 경험·프론트엔드 완성도 중심",
+  "성능·보안·운영 중심",
+  "문서화·DX·협업 프로세스 중심",
+];
+
+function buildHintsPrompt(hints?: TeamHints): string {
+  const lens = TEAM_LENSES[Math.floor(Math.random() * TEAM_LENSES.length)];
+  const size = 3 + Math.floor(Math.random() * 3);
+  const lines = [
+    "",
+    "",
+    `[편성 관점] 이번에는 "${lens}" 관점으로, 약 ${size}명 규모의 팀을 기획하세요. 흔한 정석 구성(PM·백엔드·프론트·QA의 반복)에 머무르지 말고 이 프로젝트에만 맞는 개성 있는 역할과 고유한 이름을 쓰세요.`,
+  ];
+  if (hints?.avoidNames?.length) lines.push(`[이전 추천 — 이름과 역할 구성을 겹치지 않게 새로 기획] ${hints.avoidNames.join(", ")}`);
+  if (hints?.request?.trim()) lines.push(`[사용자 요청 — 최우선 반영] ${hints.request.trim().replace(/\s+/g, " ")}`);
+  lines.push("에이전트 name은 서로 겹치지 않는 고유한 이름이어야 하며, 팀원끼리 이 이름으로 서로를 부르며 소통합니다.");
+  return lines.join("\n");
+}
+
+function buildTeamOptionsPrompt(options?: TeamCliOption[]): string {
+  if (!options || options.length === 0) return "";
+  const lines = options.map(
+    (o) => `- id: ${o.id} (${o.name}) / 모델: ${o.models.length ? o.models.join(", ") : "목록 없음 (빈 문자열)"}`
+  );
+  return [
+    "",
+    "",
+    "[사용 가능한 AI — 이 목록에 없는 CLI는 절대 배정하지 마세요]",
+    ...lines,
+    "각 에이전트의 역할 난이도에 맞게 CLI와 모델을 골라 cliId, model에 채우세요 (리더/설계는 고성능 모델, 단순 반복 작업은 가벼운 모델).",
+  ].join("\n");
+}
+
 const SYSTEM_PROMPT = `당신은 실리콘밸리 최고 수준의 멀티 AI 개발팀 수석 아키텍트입니다.
 사용자가 제공하는 프로젝트의 코드베이스 구조, README, 설정 파일 및 기술 스택 정보를 심층 분석하여,
 이 프로젝트의 개발 생산성을 극대화할 수 있는 전담 AI 에이전트 3~5인 팀을 기획해야 합니다.
@@ -16,7 +83,8 @@ const SYSTEM_PROMPT = `당신은 실리콘밸리 최고 수준의 멀티 AI 개�
   {
     "name": "에이전트 이름 (예: 총괄 아키텍트 & PM)",
     "roleTitle": "구체적인 직무 타이틀",
-    "cliId": "claude" | "codex" | "antigravity" | "grok",
+    "cliId": "에이전트가 사용할 CLI id (아래 [사용 가능한 AI] 목록의 id 중에서만 선택)",
+    "model": "해당 CLI의 모델 (아래 목록의 값 중에서만 선택, 확신이 없으면 빈 문자열)",
     "avatarEmoji": "역할에 맞는 이모지 1개 (예: 👑, 🛠️, 🎨, 🔍, 🛡️, 📊)",
     "accentColor": "HEX 색상 코드 (예: #f97316, #10b981, #8b5cf6, #ef4444, #06b6d4)",
     "rolePrompt": "에이전트에게 주입할 상세한 페르소나, 목표, 행동 규칙 및 지침 (2~3문장)",
@@ -24,7 +92,7 @@ const SYSTEM_PROMPT = `당신은 실리콘밸리 최고 수준의 멀티 AI 개�
   }
 ]`;
 
-function buildUserPrompt(context: ProjectDeepContext): string {
+function buildUserPrompt(context: ProjectDeepContext, options?: TeamCliOption[], hints?: TeamHints): string {
   return `다음 프로젝트 정보를 면밀히 분석하고, 이 프로젝트에 가장 적합한 전문 AI 에이전트 팀(3~5명)을 JSON으로 기획하세요:
 
 [프로젝트 정보]
@@ -42,10 +110,10 @@ ${context.readmeSnippet || "README 파일 없음"}
 ${context.manifestSnippet || "설정 파일 내용 없음"}
 
 위 프로젝트의 도메인, 프론트/백엔드/데이터/테스트 필요성을 정확히 파악하여 전문 에이전트 팀을 편성하세요.
-응답은 오직 순수 JSON 배열만 반환해야 합니다.`;
+응답은 오직 순수 JSON 배열만 반환해야 합니다.${buildTeamOptionsPrompt(options)}${buildHintsPrompt(hints)}`;
 }
 
-function parseAgentJson(rawText: string, context: ProjectDeepContext): ProjectAgentInput[] {
+function parseAgentJson(rawText: string, context: ProjectDeepContext, options?: TeamCliOption[]): ProjectAgentInput[] {
   // 마크다운 코드블록 제거
   let cleaned = rawText
     .replace(/^```json\s*/im, "")
@@ -76,12 +144,20 @@ function parseAgentJson(rawText: string, context: ProjectDeepContext): ProjectAg
   }
 
   const slug = context.projectName.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  const used = new Set<string>();
+  const uniqueName = (raw: string): string => {
+    let name = raw;
+    for (let n = 2; used.has(name.trim().toLowerCase()); n++) name = `${raw} ${n}`;
+    used.add(name.trim().toLowerCase());
+    return name;
+  };
   return parsed.map((item, idx) => ({
     id: `deep-ai-${slug}-${idx + 1}-${Date.now().toString(36)}`,
     projectPath: context.projectPath,
-    name: item.name || `AI 에이전트 ${idx + 1}`,
+    name: uniqueName(item.name || `AI 에이전트 ${idx + 1}`),
     roleTitle: item.roleTitle || "전담 엔지니어",
-    cliId: ["claude", "codex", "antigravity", "grok"].includes(item.cliId) ? item.cliId : "claude",
+    cliId: pickCli(item.cliId, options),
+    model: pickModel(item.cliId, item.model, options),
     useWrapper: true,
     avatarEmoji: item.avatarEmoji || "🤖",
     accentColor: item.accentColor || "#6366f1",
@@ -92,11 +168,13 @@ function parseAgentJson(rawText: string, context: ProjectDeepContext): ProjectAg
 
 export async function generateDeepAiTeamWithCli(
   cliId: string,
-  context: ProjectDeepContext
+  context: ProjectDeepContext,
+  options?: TeamCliOption[],
+  hints?: TeamHints
 ): Promise<ProjectAgentInput[]> {
-  const prompt = `${SYSTEM_PROMPT}\n\n${buildUserPrompt(context)}`;
+  const prompt = `${SYSTEM_PROMPT}\n\n${buildUserPrompt(context, options, hints)}`;
   const resultText = await apiRunCliDeepAnalysis(cliId, context.projectPath, prompt);
-  return parseAgentJson(resultText, context);
+  return parseAgentJson(resultText, context, options);
 }
 
 export async function testAiConnection(config: AiProviderConfig): Promise<AiTestResult> {
@@ -199,9 +277,11 @@ export async function testAiConnection(config: AiProviderConfig): Promise<AiTest
 
 export async function generateDeepAiTeam(
   config: AiProviderConfig,
-  context: ProjectDeepContext
+  context: ProjectDeepContext,
+  options?: TeamCliOption[],
+  hints?: TeamHints
 ): Promise<ProjectAgentInput[]> {
-  const userPrompt = buildUserPrompt(context);
+  const userPrompt = buildUserPrompt(context, options, hints);
   let responseText = "";
 
   if (config.provider === "anthropic") {
@@ -290,5 +370,5 @@ export async function generateDeepAiTeam(
     responseText = data.message?.content || "";
   }
 
-  return parseAgentJson(responseText, context);
+  return parseAgentJson(responseText, context, options);
 }
