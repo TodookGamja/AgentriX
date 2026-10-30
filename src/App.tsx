@@ -2943,25 +2943,19 @@ ${recentSnippet || "진행 내역 기록 없음"}
               </div>
             </div>
 
-                {focusedCliId === "cursor" ? (
+                {focusedCliId === "cursor" && !sidebarQuota?.hasOfficialQuota ? (
                   <div className="space-y-1">
                     <div className="flex items-center justify-between text-[11px]">
                       <span className="text-slate-400 font-medium">월간 전체 사용량</span>
-                      {sidebarQuota?.hasOfficialQuota ? (
-                        <span className="font-mono font-bold text-emerald-400">{Math.round(sidebarQuota.remainingPercent5h)}% 남음</span>
-                      ) : (
-                        <span className="text-slate-400">확인 불가</span>
-                      )}
+                      <span className="text-slate-400">확인 불가</span>
                     </div>
-                    <p className="text-[10px] text-slate-500">
-                      {sidebarQuota?.hasOfficialQuota ? (cleanResetTime(sidebarQuota.resetsAt5h) ? `${cleanResetTime(sidebarQuota.resetsAt5h)} 갱신` : "월간 사용량 연동됨") : "Cursor 로그인 정보를 읽지 못했습니다"}
-                    </p>
+                    <p className="text-[10px] text-slate-500">Cursor 로그인 정보를 읽지 못했습니다</p>
                   </div>
                 ) : (<>
                 {/* 5시간 한도 게이지 */}
             <div className="space-y-1">
               <div className="flex items-center justify-between text-[11px]">
-                <span className="text-slate-400 font-medium">5시간 잔여</span>
+                <span className="text-slate-400 font-medium">{focusedCliId === "cursor" ? "Cursor 모델" : "5시간 잔여"}</span>
                 <div className="flex items-center gap-1.5">
                   {cleanResetTime(activeReset5h) && focusedCliId !== "grok" && remainPct5h < 100 && (
                     <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-amber-500/10 text-amber-600 dark:text-amber-300 font-bold border border-amber-500/20">
@@ -2994,7 +2988,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
             {/* 주간 한도 게이지 */}
             <div className="space-y-1">
               <div className="flex items-center justify-between text-[11px]">
-                <span className="text-slate-400 font-medium">주간 잔여</span>
+                <span className="text-slate-400 font-medium">{focusedCliId === "cursor" ? "기타 모델" : "주간 잔여"}</span>
                 <div className="flex items-center gap-1.5">
                   {cleanResetTime(activeResetWk) && remainPctWeekly < 100 && (
                     <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-indigo-500/10 text-indigo-600 dark:text-indigo-300 font-bold border border-indigo-500/20">

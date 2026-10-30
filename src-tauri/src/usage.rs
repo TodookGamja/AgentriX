@@ -1557,7 +1557,12 @@ fn fetch_cursor_quota_live() -> Option<CliQuotaStatus> {
         .ok()?
         .into_json()
         .ok()?;
-    let used = v.get("planUsage")?.get("totalPercentUsed")?.as_f64()?.clamp(0.0, 100.0).round();
+    let plan = v.get("planUsage")?;
+    let pct = |k: &str| plan.get(k).and_then(|p| p.as_f64()).map(|p| p.clamp(0.0, 100.0).round());
+    let total = pct("totalPercentUsed")?;
+    // Auto/Composer(Cursor 모델) → 5h 슬롯, 지정 모델(API) → weekly 슬롯. 둘 다 월간 청구 주기 기준
+    let used_cursor = pct("autoPercentUsed").unwrap_or(total);
+    let used_other = pct("apiPercentUsed").unwrap_or(total);
     let end = v
         .get("billingCycleEnd")
         .and_then(|e| e.as_str())
@@ -1570,11 +1575,11 @@ fn fetch_cursor_quota_live() -> Option<CliQuotaStatus> {
         plan_label: "Cursor".into(),
         source_label: "Cursor 월간 사용량 연동".into(),
         has_official_quota: true,
-        used_percent_5h: used,
-        remaining_percent_5h: 100.0 - used,
+        used_percent_5h: used_cursor,
+        remaining_percent_5h: 100.0 - used_cursor,
         resets_at_5h: end.clone(),
-        used_percent_weekly: used,
-        remaining_percent_weekly: 100.0 - used,
+        used_percent_weekly: used_other,
+        remaining_percent_weekly: 100.0 - used_other,
         resets_at_weekly: end,
         status_message: None,
         sub_groups: None,
