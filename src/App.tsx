@@ -102,6 +102,7 @@ import {
   TokenOptimizationConfig,
 } from "./components/TokenOptimizationModal";
 import { AiDeepTeamModal } from "./components/AiDeepTeamModal";
+import { MarkdownLite } from "./components/MarkdownLite";
 import { FolderPickerModal } from "./components/FolderPickerModal";
 import { AgentrixLogo } from "./components/AgentrixLogo";
 import { boardProtocol, mailProtocol, parseBoardTasks } from "./lib/blackboardDispatch";
@@ -4223,9 +4224,10 @@ ${recentSnippet || "진행 내역 기록 없음"}
               {updateInfo.release_notes ? (
                 <div>
                   <span className="block text-[11px] font-semibold text-slate-300 mb-1">업데이트 변경 내역:</span>
-                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-slate-200 text-[11px] font-mono max-h-40 overflow-y-auto whitespace-pre-wrap leading-relaxed">
-                    {updateInfo.release_notes}
-                  </div>
+                  <MarkdownLite
+                    text={updateInfo.release_notes}
+                    className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-slate-200 text-[11px] max-h-60 overflow-y-auto leading-relaxed space-y-0.5"
+                  />
                 </div>
               ) : (
                 <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-slate-300 text-center">
