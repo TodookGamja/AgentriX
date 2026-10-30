@@ -60,3 +60,36 @@ test("App restores cache on focus and persists only live quota", () => {
   assert.match(app, /persistMiniQuotaCache\(\(k, v\) => localStorage\.setItem\(k, v\), updated\)/);
   assert.match(app, /isSidebarQuotaValid = isLiveQuotaUsable\(sidebarQuota\)/);
 });
+
+test("regression: persist → restore round-trip for focused cli", () => {
+  const store = new Map();
+  api.persistMiniQuotaCache((k, v) => store.set(k, v), sample);
+  const restored = api.restoreMiniQuotaCache((k) => store.get(k) ?? null, "claude");
+  assert.deepEqual(restored, sample);
+  assert.equal(api.restoreMiniQuotaCache(() => null, "claude"), null);
+});
+
+test("regression: missing per-cli falls back to global; empty store yields null", () => {
+  const store = new Map();
+  store.set(
+    "agentrix_mini_quota_cached",
+    JSON.stringify({ ...sample, cliId: "global", remainPct5h: 33 })
+  );
+  const fallback = api.restoreMiniQuotaCache((k) => store.get(k) ?? null, "codex");
+  assert.equal(fallback.cliId, "global");
+  assert.equal(fallback.remainPct5h, 33);
+  assert.equal(api.restoreMiniQuotaCache(() => null, "codex"), null);
+});
+
+test("regression: 13:50 sentinel in either per-cli or global cache is discarded", () => {
+  const store = new Map();
+  store.set(
+    "agentrix_mini_quota_claude",
+    JSON.stringify({ ...sample, resetsAtWeekly: "13:50" })
+  );
+  store.set(
+    "agentrix_mini_quota_cached",
+    JSON.stringify({ ...sample, cliId: "global", resetsAt5h: "13:50" })
+  );
+  assert.equal(api.restoreMiniQuotaCache((k) => store.get(k) ?? null, "claude"), null);
+});

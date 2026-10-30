@@ -46,3 +46,29 @@ test("App remaps split slots and writes continue prompt after relay", () => {
   assert.match(app, /apiWriteToSession\(newSession\.id, handoffContinuePrompt\(isManual\)\)/);
   assert.match(app, /apiSaveSessionHandoff\(targetSession\.cwd, "SESSION_HANDOFF\.md"/);
 });
+
+test("regression: remap leaves unrelated slots untouched when id missing", () => {
+  const slots = ["keep", null, "other", "keep"];
+  assert.deepEqual(api.remapSplitSlotsAfterRelay(slots, "missing", "new"), slots);
+  assert.deepEqual(api.remapSplitSlotsAfterRelay([], "a", "b"), []);
+});
+
+test("regression: empty / bare name still produces relay suffix 1", () => {
+  const empty = api.nextRelaySessionName("");
+  assert.equal(empty.relayCount, 1);
+  assert.equal(empty.baseName, "");
+  assert.equal(empty.newSessionName, " (릴레이 1)");
+  const bare = api.nextRelaySessionName("Solo");
+  assert.equal(bare.baseName, "Solo");
+  assert.equal(bare.newSessionName, "Solo (릴레이 1)");
+});
+
+test("regression: successive remaps chain across multiple relays", () => {
+  let slots = ["s1", "s2", null, "s1"];
+  slots = api.remapSplitSlotsAfterRelay(slots, "s1", "s1r1");
+  slots = api.remapSplitSlotsAfterRelay(slots, "s1r1", "s1r2");
+  assert.deepEqual(slots, ["s1r2", "s2", null, "s1r2"]);
+  const name = api.nextRelaySessionName(api.nextRelaySessionName("Worker").newSessionName);
+  assert.equal(name.relayCount, 2);
+  assert.equal(name.newSessionName, "Worker (릴레이 2)");
+});

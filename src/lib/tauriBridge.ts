@@ -9,7 +9,7 @@ export async function apiInstallNpmCliUpdate(packageName: string): Promise<void>
 }
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { recordSessionInput } from "./inputHistory";
-import { queueSessionWrite } from "./sessionWriteQueue";
+import { enterReady, queueSessionWrite } from "./sessionWriteQueue";
 import type {
   ApiKeyStatus,
   ApplyResult,
@@ -300,10 +300,16 @@ export async function apiWriteToSession(sessionId: string, data: string): Promis
     // 긴 글·여러 줄(Shift+Enter)일수록 TUI가 붙여넣기를 소화하는 시간이 길어 대기도 늘린다.
     const body = data.replace(/\r\n?$/, "");
     if (body !== data && body.length > 0) {
+      const sentAt = Date.now();
       await invoke("write_to_session", { sessionId, data: body });
       const lines = body.split("\n").length;
-      const wait = Math.min(1500, 200 + body.length + (lines > 1 ? 300 : 0));
-      await new Promise((r) => setTimeout(r, wait));
+      const minWait = Math.min(1500, 200 + body.length + (lines > 1 ? 300 : 0));
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 50));
+        // quietMs 0 = 마지막 출력 시각
+        const last = await invoke<number | null>("get_session_quiet_since", { sessionId, quietMs: 0 }).catch(() => null);
+        if (enterReady(sentAt, last, Date.now(), minWait)) break;
+      }
       return invoke("write_to_session", { sessionId, data: "\r" });
     }
     return invoke("write_to_session", { sessionId, data });

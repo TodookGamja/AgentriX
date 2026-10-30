@@ -3237,6 +3237,8 @@ ${recentSnippet || "진행 내역 기록 없음"}
                       }}
                       title={`${s.name} ${s.agentRole ? `(${s.agentRole})` : ""}`}
                       className={`group flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium cursor-pointer border transition shrink-0 whitespace-nowrap ${
+                        busySessionIds.split(",").includes(s.id) ? "animate-pulse motion-reduce:animate-none " : ""
+                      }${
                         isPrimary
                           ? "bg-slate-950 text-slate-100 font-bold border-indigo-500/80 shadow-sm"
                           : isVisibleInSplit
@@ -3245,7 +3247,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
                       }`}
                     >
                       <span
-                        className={`w-2 h-2 rounded-full shrink-0 ${busySessionIds.split(",").includes(s.id) ? "animate-pulse motion-reduce:animate-none" : ""}`}
+                        className="w-2 h-2 rounded-full shrink-0"
                         style={{
                           backgroundColor: cliDef?.accentColor ?? "#818cf8",
                         }}
@@ -3482,13 +3484,6 @@ ${recentSnippet || "진행 내역 기록 없음"}
                       : "border-slate-800/90 hover:border-slate-700"
                   }`}
                 >
-                  {busySessionIds.split(",").includes(session.id) && (
-                    <div
-                      aria-hidden
-                      className="busy-glow absolute inset-0 z-10 rounded-xl pointer-events-none"
-                      style={{ "--busy-color": cliDef?.accentColor ?? "#6366f1" } as React.CSSProperties}
-                    />
-                  )}
                   {/* 분할 모드일 때 각 슬롯 상단 컨트롤 바 */}
                   {splitLayout !== "single" && (
                     <div className="flex items-center justify-between px-2.5 py-1 bg-slate-900/95 border-b border-slate-800 text-xs shrink-0 select-none">

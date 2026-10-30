@@ -73,3 +73,42 @@ test("App wires layout cycle + fixed slot resolve into split UI", () => {
   assert.match(app, /layout: splitLayout/);
   assert.match(app, /splitSlotSessionIds/);
 });
+
+test("regression: full cycle returns to single; unknown layout resets to single", () => {
+  let layout = "single";
+  const seen = [];
+  for (let i = 0; i < 4; i++) {
+    layout = api.nextSplitLayout(layout);
+    seen.push(layout);
+  }
+  assert.deepEqual(seen, ["split-h", "split-v", "grid-4", "single"]);
+  // indexOf miss → idx 0 → LAYOUT_CYCLE[0] === "single"
+  assert.equal(api.nextSplitLayout("not-a-layout"), "single");
+});
+
+test("regression: grid-4 fills four distinct slots then nulls when sessions run out", () => {
+  const sessions = [{ id: "a" }, { id: "b" }, { id: "c" }];
+  const panes = api.resolvePaneSessions({
+    layout: "grid-4",
+    sessions,
+    projectSessions: sessions,
+    activeSessionId: "a",
+    splitSlotSessionIds: [null, null, null, null],
+  });
+  assert.equal(panes.filter(Boolean).length, 3);
+  assert.equal(panes[3], null);
+  assert.equal(panes.filter(Boolean).map((p) => p.id).join(","), "a,b,c");
+});
+
+test("regression: duplicate slot ids collapse to one session per pane", () => {
+  const sessions = [{ id: "a" }, { id: "b" }];
+  const panes = api.resolvePaneSessions({
+    layout: "split-h",
+    sessions,
+    projectSessions: sessions,
+    activeSessionId: "a",
+    splitSlotSessionIds: ["a", "a", null, null],
+  });
+  assert.equal(panes[0].id, "a");
+  assert.equal(panes[1].id, "b");
+});

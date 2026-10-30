@@ -1067,8 +1067,8 @@ async fn get_session_context(
 /// 로그로 턴 종료를 못 읽는 CLI용: 터미널 출력이 10초 멈춘 시각 (팀 배정 유휴 판정)
 /// ponytail: 진행 표시 없이 10초 넘게 조용히 일하는 CLI면 유휴로 오판, 그런 CLI가 생기면 리더 함수로 로그 판정 추가
 #[tauri::command]
-fn get_session_quiet_since(state: State<'_, AppState>, session_id: String) -> Option<i64> {
-    state.pty.output_quiet_since(&session_id, 10_000)
+fn get_session_quiet_since(state: State<'_, AppState>, session_id: String, quiet_ms: Option<i64>) -> Option<i64> {
+    state.pty.output_quiet_since(&session_id, quiet_ms.unwrap_or(10_000))
 }
 
 #[tauri::command]
