@@ -2947,9 +2947,15 @@ ${recentSnippet || "진행 내역 기록 없음"}
                   <div className="space-y-1">
                     <div className="flex items-center justify-between text-[11px]">
                       <span className="text-slate-400 font-medium">월간 전체 사용량</span>
-                      <span className="text-slate-400">확인 불가</span>
+                      {sidebarQuota?.hasOfficialQuota ? (
+                        <span className="font-mono font-bold text-emerald-400">{Math.round(sidebarQuota.remainingPercent5h)}% 남음</span>
+                      ) : (
+                        <span className="text-slate-400">확인 불가</span>
+                      )}
                     </div>
-                    <p className="text-[10px] text-slate-500">Cursor 월간 사용량 미연동</p>
+                    <p className="text-[10px] text-slate-500">
+                      {sidebarQuota?.hasOfficialQuota ? (cleanResetTime(sidebarQuota.resetsAt5h) ? `${cleanResetTime(sidebarQuota.resetsAt5h)} 갱신` : "월간 사용량 연동됨") : "Cursor 로그인 정보를 읽지 못했습니다"}
+                    </p>
                   </div>
                 ) : (<>
                 {/* 5시간 한도 게이지 */}

@@ -1541,13 +1541,71 @@ pub fn prefetch_live_quotas() {
     });
 }
 
+static CURSOR_QUOTA_CACHE: OnceLock<Mutex<Option<(Instant, CliQuotaStatus)>>> = OnceLock::new();
+
+/// Cursor Agent CLI가 쓰는 `api2.cursor.sh` DashboardService/GetCurrentPeriodUsage로 월간 전체 사용량 조회
+/// (토큰: %APPDATA%/Cursor/auth.json — 만료 시 조회 실패로 간주, cursor 자체 갱신에 맡김)
+fn fetch_cursor_quota_live() -> Option<CliQuotaStatus> {
+    let raw = std::fs::read_to_string(crate::cli::home_dir().join("AppData").join("Roaming").join("Cursor").join("auth.json")).ok()?;
+    let token = serde_json::from_str::<Value>(&raw).ok()?.get("accessToken")?.as_str()?.to_string();
+    let v: Value = ureq::post("https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage")
+        .set("Authorization", &format!("Bearer {}", token))
+        .set("Content-Type", "application/json")
+        .set("Connect-Protocol-Version", "1")
+        .timeout(std::time::Duration::from_secs(5))
+        .send_string("{}")
+        .ok()?
+        .into_json()
+        .ok()?;
+    let used = v.get("planUsage")?.get("totalPercentUsed")?.as_f64()?.clamp(0.0, 100.0).round();
+    let end = v
+        .get("billingCycleEnd")
+        .and_then(|e| e.as_str())
+        .and_then(|ms| ms.parse::<i64>().ok())
+        .and_then(DateTime::from_timestamp_millis)
+        .and_then(|d| format_iso_kst(&d.to_rfc3339()));
+    Some(CliQuotaStatus {
+        cli_id: "cursor".into(),
+        cli_name: "Cursor Agent CLI".into(),
+        plan_label: "Cursor".into(),
+        source_label: "Cursor 월간 사용량 연동".into(),
+        has_official_quota: true,
+        used_percent_5h: used,
+        remaining_percent_5h: 100.0 - used,
+        resets_at_5h: end.clone(),
+        used_percent_weekly: used,
+        remaining_percent_weekly: 100.0 - used,
+        resets_at_weekly: end,
+        status_message: None,
+        sub_groups: None,
+    })
+}
+
+pub fn extract_cursor_quota() -> Option<CliQuotaStatus> {
+    let cache = CURSOR_QUOTA_CACHE.get_or_init(|| Mutex::new(None));
+    if let Ok(guard) = cache.lock() {
+        if let Some((at, cached)) = guard.as_ref() {
+            if at.elapsed().as_secs() < 60 {
+                return Some(cached.clone());
+            }
+        }
+    }
+    let live = fetch_cursor_quota_live()?;
+    if let Ok(mut guard) = cache.lock() {
+        *guard = Some((Instant::now(), live.clone()));
+    }
+    Some(live)
+}
+
 pub fn collect_all_cli_quotas(force_refresh: bool) -> Vec<CliQuotaStatus> {
-    vec![
+    let mut quotas = vec![
         extract_claude_quota(force_refresh),
         extract_codex_quota(),
         extract_grok_quota(),
         extract_antigravity_quota(force_refresh),
-    ]
+    ];
+    quotas.extend(extract_cursor_quota());
+    quotas
 }
 
 static INITIAL_LOG_SYNC_DONE: OnceLock<Mutex<bool>> = OnceLock::new();

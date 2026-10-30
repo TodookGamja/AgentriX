@@ -515,9 +515,15 @@ export const UsageView: React.FC<UsageViewProps> = ({
                     <div className="space-y-1">
                       <div className="flex items-center justify-between text-xs">
                         <span className="text-slate-300 font-semibold">월간 전체 사용량</span>
-                        <span className="text-slate-400">확인 불가</span>
+                        {q.hasOfficialQuota ? (
+                          <span className="font-mono font-bold text-emerald-400">{Math.round(q.remainingPercent5h)}% 남음</span>
+                        ) : (
+                          <span className="text-slate-400">확인 불가</span>
+                        )}
                       </div>
-                      <p className="text-[11px] text-slate-500">Cursor 월간 사용량이 연동되지 않았습니다.</p>
+                      <p className="text-[11px] text-slate-500">
+                        {q.hasOfficialQuota ? `사용 ${Math.round(q.usedPercent5h)}%${q.resetsAt5h ? ` · ${q.resetsAt5h} 갱신` : ""}` : "Cursor 로그인 정보를 읽지 못했습니다."}
+                      </p>
                     </div>
                   ) : (<>
                   {/* 5시간 세션 한도 게이지 */}
