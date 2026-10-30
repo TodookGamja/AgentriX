@@ -67,9 +67,20 @@ fn version_of(name: &str) -> Option<String> {
     ok.then(|| out.lines().next().unwrap_or("").trim().to_string()).filter(|v| !v.is_empty())
 }
 
+/// uv tool list --show-extras 출력에서 headroom-ai의 proxy 옵션 설치 여부.
+/// uv로 설치하지 않은 경우(pip 등)는 확인할 방법이 없어 None → 설치된 것으로 간주
+fn headroom_proxy_extra() -> Option<bool> {
+    let uv = find_tool("uv")?;
+    let (ok, out) = run(&uv, &["tool", "list", "--show-extras"]);
+    if !ok { return None; }
+    out.lines().find(|l| l.trim_start().starts_with("headroom-ai")).map(|l| l.contains("proxy"))
+}
+
 pub fn check() -> Vec<ToolStatus> {
     let uv = version_of("uv");
     let headroom = version_of("headroom");
+    // 본체만 있고 프록시 구성요소(fastapi 등)가 없으면 프록시가 즉시 종료되므로 미설치로 취급
+    let missing_proxy = headroom.is_some() && headroom_proxy_extra() == Some(false);
     vec![
         ToolStatus {
             id: "uv".into(),
@@ -87,8 +98,8 @@ pub fn check() -> Vec<ToolStatus> {
         ToolStatus {
             id: "headroom".into(),
             name: "Headroom (토큰 최적화 프록시/MCP)".into(),
-            installed: headroom.is_some(),
-            version: headroom,
+            installed: headroom.is_some() && !missing_proxy,
+            version: if missing_proxy { headroom.map(|v| format!("{v} · 프록시 구성요소 누락")) } else { headroom },
             requires: Some("uv".into()),
             requires_met: uv.is_some(),
             install_command: format!("uv tool install \"{HEADROOM_SPEC}\""),
@@ -113,7 +124,7 @@ pub fn install(id: &str) -> InstallResult {
             let Some(uv) = find_tool("uv") else {
                 return InstallResult { ok: false, output: "uv가 필요합니다. 먼저 uv를 설치해 주세요.".into() };
             };
-            let (ok, out) = run(&uv, &["tool", "install", "--upgrade", HEADROOM_SPEC]);
+            let (ok, out) = run(&uv, &["tool", "install", "--force", HEADROOM_SPEC]);
             InstallResult { ok: ok && find_tool("headroom").is_some(), output: out }
         }
         _ => InstallResult { ok: false, output: format!("알 수 없는 도구: {id}") },
