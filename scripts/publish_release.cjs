@@ -23,7 +23,6 @@ ${ko}
 
 ### 📦 다운로드 안내
 - **단일 무설치 실행 파일**: \`AgentriX.exe\` (다운로드 후 바로 실행)
-- **포터블 압축 패키지**: \`AgentriX-Portable-${tag}-win-x64.zip\`
 - **윈도우 정식 설치 인스톨러**: \`AgentriX-Setup-${tag}.exe\`
 
 ---
@@ -35,7 +34,6 @@ ${en}
 
 ### 📦 Downloads
 - **Single portable executable**: \`AgentriX.exe\` (run directly after download)
-- **Portable ZIP package**: \`AgentriX-Portable-${tag}-win-x64.zip\`
 - **Windows installer**: \`AgentriX-Setup-${tag}.exe\`
 ${prevTag ? `
 **Full Changelog**: https://github.com/${owner}/${repo}/compare/${prevTag}...${tag}
@@ -51,9 +49,17 @@ if (process.argv[2] === '--notes') {
 }
 
 async function main() {
+  execSync('cargo test --manifest-path src-tauri/Cargo.toml --release verify_release_artifact -- --ignored', { stdio: 'inherit' });
     const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
     const version = pkg.version;
     const tag = `v${version}`;
+    const setupName = `AgentriX-Setup-${tag}.exe`;
+    const filesToUpload = [
+        { localPath: path.resolve('release/AgentriX.exe'), name: 'AgentriX.exe', mime: 'application/octet-stream' },
+        { localPath: path.resolve('release/AgentriX.exe.sig'), name: 'AgentriX.exe.sig', mime: 'application/octet-stream' },
+        { localPath: path.resolve(`release/${setupName}`), name: setupName, mime: 'application/octet-stream' }
+    ];
+    for (const file of filesToUpload) fs.accessSync(file.localPath, fs.constants.R_OK);
     const prevTag = (await (await fetch(`https://api.github.com/repos/${owner}/${repo}/releases?per_page=10`)).json())
         .map((r) => r.tag_name).find((t) => t !== tag);
     const notes = renderNotes(tag, prevTag);
@@ -158,20 +164,6 @@ async function main() {
     }
 
     // 4. Upload files
-    const zipName = `AgentriX-Portable-${tag}-win-x64.zip`;
-    const setupName = `AgentriX-Setup-${tag}.exe`;
-    const filesToUpload = [
-        { localPath: path.resolve('release/AgentriX.exe'), name: 'AgentriX.exe', mime: 'application/octet-stream' },
-        { localPath: path.resolve(`release/${zipName}`), name: zipName, mime: 'application/zip' }
-    ];
-    const setupPath = path.resolve(`release/AgentriX-Setup-${tag}.exe`);
-    if (fs.existsSync(setupPath)) {
-        filesToUpload.push({
-            localPath: setupPath,
-            name: setupName,
-            mime: 'application/octet-stream'
-        });
-    }
 
     for (const f of filesToUpload) {
         console.log(`Uploading ${f.name} (${(fs.statSync(f.localPath).size / 1024 / 1024).toFixed(2)} MB)...`);

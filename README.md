@@ -78,8 +78,8 @@
 ### 🛠️ Quick Start
 
 #### Download Portable Binary (No Installation Required)
-1. Download `AgentriX-Portable-v1.0.3-win-x64.zip` or `AgentriX.exe` from [GitHub Releases](https://github.com/TodookGamja/AgentriX/releases).
-2. Extract or place into any folder and double-click to run.
+1. Download `AgentriX.exe` (portable) or `AgentriX-Setup-v1.0.3.exe` (installer) from [GitHub Releases](https://github.com/TodookGamja/AgentriX/releases).
+2. Place `AgentriX.exe` in any folder and double-click to run. Later versions update in-app (signature verified).
 
 #### Build from Source
 ```bash
@@ -163,8 +163,8 @@ build_release.bat
 ### 🛠️ 빠른 시작
 
 #### 포터블 바이너리 실행 (무설치)
-1. [Releases](https://github.com/TodookGamja/AgentriX/releases) 탭에서 최신 `AgentriX-Portable-v1.0.3-win-x64.zip` 또는 `AgentriX.exe` 다운로드
-2. 원하는 폴더에 넣고 바로 더블클릭하여 실행
+1. [Releases](https://github.com/TodookGamja/AgentriX/releases) 탭에서 `AgentriX.exe`(무설치) 또는 `AgentriX-Setup-v1.0.3.exe`(설치형) 다운로드
+2. `AgentriX.exe`는 원하는 폴더에 넣고 바로 더블클릭하여 실행. 이후 버전은 앱 안에서 업데이트(서명 검증)
 
 #### 소스코드 빌드
 ```bash

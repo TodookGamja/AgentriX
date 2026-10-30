@@ -30,7 +30,7 @@ import { testAiConnection, generateDeepAiTeam, generateDeepAiTeamWithCli } from 
 import type { TeamCliOption, TeamHints } from "../lib/aiDeepAnalyzer";
 import { installedAgentClis } from "../lib/agentCli";
 import { loadCliModels } from "./ModelPicker";
-import { apiGetDetectedCliCredentials } from "../lib/tauriBridge";
+import { apiGetApiKeys, apiGetDetectedCliCredentials, apiSaveApiKey } from "../lib/tauriBridge";
 
 interface AiDeepTeamModalProps {
   isOpen: boolean;
@@ -41,12 +41,6 @@ interface AiDeepTeamModalProps {
   clis: CliDefinition[];
   savedApiKeys?: ApiKeyStatus[];
   onApplyDeepAgents: (agents: ProjectAgentInput[]) => void;
-}
-
-function maskKey(key: string): string {
-  if (!key) return "******";
-  if (key.length <= 10) return "******";
-  return `${key.slice(0, 4)}...${key.slice(-4)}`;
 }
 
 const PROVIDER_MODELS: Record<AiProviderType, { label: string; models: string[] }> = {
@@ -113,15 +107,24 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
   }, [installedKey, isOpen]);
 
   const [detectedCreds, setDetectedCreds] = useState<DetectedCliCredential[]>([]);
+  const [selectedCredential, setSelectedCredential] = useState<DetectedCliCredential | null>(null);
   const [config, setConfig] = useState<AiProviderConfig>(() => {
     try {
       const v = localStorage.getItem("agentrix_deep_ai_config");
-      if (v) return JSON.parse(v);
+      if (v) return { ...DEFAULT_CONFIG, ...JSON.parse(v), apiKey: "" };
     } catch {}
     return DEFAULT_CONFIG;
   });
 
   const [showKey, setShowKey] = useState(false);
+  // 보관함(SQLite)에 저장된 deep-ai 키의 마스킹 미리보기 (원문은 프론트로 오지 않음)
+  const [savedKeyPreview, setSavedKeyPreview] = useState<string | null>(null);
+  useEffect(() => {
+    if (!isOpen) return;
+    apiGetApiKeys()
+      .then((ks) => setSavedKeyPreview(ks.find((k) => k.cliId === "deep-ai" && k.keyName === config.provider && k.hasKey)?.maskedPreview ?? null))
+      .catch(() => setSavedKeyPreview(null));
+  }, [isOpen, config.provider]);
   const [testStatus, setTestStatus] = useState<{ testing: boolean; result?: { ok: boolean; message: string } }>({
     testing: false,
   });
@@ -143,6 +146,7 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
   // 모달 열릴 때 로컬 감지된 CLI 크레덴셜 목록 조회
   useEffect(() => {
     if (!isOpen) return;
+    setSelectedCredential(null);
     setTestStatus({ testing: false });
     setAnalysisError(null);
     setGeneratedAgents([]);
@@ -152,13 +156,15 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
       .then((creds) => {
         setDetectedCreds(creds);
         // 만약 저장된 키가 없고 감지된 키가 있으면 기본값 자동 채움
-        if (!config.apiKey && creds.length > 0) {
-          const first = creds[0];
+        if (!config.apiKey && creds.some((c) => c.hasKey)) {
+          const first = creds.find((c) => c.hasKey && c.cliId === "deep-ai" && c.provider === config.provider)
+            || creds.find((c) => c.hasKey)!;
+          setSelectedCredential(first);
           setConfig((prev) => ({
             ...prev,
             provider: first.provider as AiProviderType,
-            apiKey: first.rawKey,
-            model: PROVIDER_MODELS[first.provider as AiProviderType]?.models[0] || prev.model,
+            apiKey: "",
+            model: first.provider === prev.provider ? prev.model : (PROVIDER_MODELS[first.provider as AiProviderType]?.models[0] || prev.model),
           }));
         }
       })
@@ -170,22 +176,25 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
   if (!isOpen) return null;
 
   const handleProviderChange = (provider: AiProviderType) => {
+    setSelectedCredential(detectedCreds.find((c) => c.hasKey && c.cliId === "deep-ai" && c.provider === provider) || null);
     const models = PROVIDER_MODELS[provider].models;
     setConfig((prev) => ({
       ...prev,
       provider,
+      apiKey: "",
       model: models[0] || "",
     }));
     setTestStatus({ testing: false });
   };
 
   const handleApplyDetectedCred = (cred: DetectedCliCredential) => {
+    setSelectedCredential(cred);
     const prov = cred.provider as AiProviderType;
     const models = PROVIDER_MODELS[prov]?.models || [];
     setConfig((prev) => ({
       ...prev,
       provider: prov,
-      apiKey: cred.rawKey,
+      apiKey: "",
       model: models[0] || prev.model,
     }));
     setTestStatus({
@@ -194,17 +203,22 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
     });
   };
 
-  const handleSaveConfig = () => {
-    try {
-      localStorage.setItem("agentrix_deep_ai_config", JSON.stringify(config));
-    } catch {}
+  const handleSaveConfig = async () => {
+      // 키 원문은 localStorage에 두지 않고 암호화 보관함(SQLite)에만 저장
+      const { apiKey, ...rest } = config;
+      localStorage.setItem("agentrix_deep_ai_config", JSON.stringify(rest));
+      if (apiKey) await apiSaveApiKey("deep-ai", config.provider, apiKey);
   };
 
   const handleTestConnection = async () => {
     setTestStatus({ testing: true });
-    handleSaveConfig();
-    const res = await testAiConnection(config);
-    setTestStatus({ testing: false, result: res });
+    try {
+      await handleSaveConfig();
+      const res = await testAiConnection(config, selectedCredential);
+      setTestStatus({ testing: false, result: res });
+    } catch (err) {
+      setTestStatus({ testing: false, result: { ok: false, message: `API 키 저장 실패: ${String(err)}` } });
+    }
   };
 
   // 분석 실행: Tab에 따라 CLI 직접 실행 vs API 실행 분기
@@ -232,11 +246,11 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
         agents = await generateDeepAiTeamWithCli(selectedCli, projectContext, options, hints);
       } else {
         // API 키 연동
-        if (!config.apiKey && config.provider !== "ollama") {
+        if (!config.apiKey && !selectedCredential && config.provider !== "ollama") {
           throw new Error("AI API 키를 먼저 입력하고 저장해 주세요.");
         }
-        handleSaveConfig();
-        agents = await generateDeepAiTeam(config, projectContext, options, hints);
+        await handleSaveConfig();
+        agents = await generateDeepAiTeam(config, projectContext, options, hints, selectedCredential);
       }
       prevNamesRef.current = [...prevNamesRef.current, ...agents.map((a) => a.name)];
       setGeneratedAgents(agents);
@@ -408,7 +422,7 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
                       >
                         <Zap className="w-3 h-3 text-amber-500" />
                         <span>{c.source}</span>
-                        <span className="font-mono text-[10px] text-slate-400">{maskKey(c.rawKey)}</span>
+                    <span className="font-mono text-[10px] text-slate-400">{c.maskedPreview}</span>
                       </button>
                     ))}
                   </div>
@@ -450,8 +464,8 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
                       <input
                         type={showKey ? "text" : "password"}
                         value={config.apiKey}
-                        onChange={(e) => setConfig({ ...config, apiKey: e.target.value.trim() })}
-                        placeholder={`${config.provider === "anthropic" ? "sk-ant-..." : config.provider === "openai" ? "sk-..." : "AI API 키를 입력하세요"}`}
+                      onChange={(e) => { setSelectedCredential(null); setConfig({ ...config, apiKey: e.target.value.trim() }); }}
+                      placeholder={selectedCredential ? `감지된 키 사용 중 (${selectedCredential.maskedPreview})` : savedKeyPreview ? `저장된 키 있음 (${savedKeyPreview})` : `${config.provider === "anthropic" ? "sk-ant-..." : config.provider === "openai" ? "sk-..." : "AI API 키를 입력하세요"}`}
                         className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 w-full px-3 py-2 pr-10 rounded-lg bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs font-mono text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/40"
                       />
                       <button
@@ -496,7 +510,7 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
                     <button
                       type="button"
                       onClick={handleTestConnection}
-                      disabled={testStatus.testing || (!config.apiKey && config.provider !== "ollama")}
+                  disabled={testStatus.testing || (!config.apiKey && !selectedCredential && config.provider !== "ollama")}
                       className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 border border-slate-700 text-xs font-semibold flex items-center gap-1.5 transition"
                     >
                       {testStatus.testing ? (

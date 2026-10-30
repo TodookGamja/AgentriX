@@ -507,17 +507,28 @@ fn save_clipboard_image(
 }
 
 #[tauri::command]
-fn read_file_as_base64(path: String) -> Result<String, String> {
+fn read_file_as_base64(state: State<'_, AppState>, path: String) -> Result<String, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let mut roots: Vec<std::path::PathBuf> = db::get_project_folders(&conn)
+        .map_err(|e| e.to_string())?.into_iter().map(|p| p.path.into()).collect();
+    drop(conn);
+    roots.extend(state.pty.list_sessions().into_iter().filter_map(|session| {
+        let cwd = std::path::PathBuf::from(session.cwd).canonicalize().ok()?;
+        let attachments = cwd.join(".attachments").canonicalize().ok()?;
+        attachments.starts_with(&cwd).then_some(attachments)
+    }));
+    roots.push(dirs::data_dir().unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("AI_CLI_Manager").join("pasted_images"));
+    let file_path = validate_preview_path(std::path::Path::new(&path), &roots, &cli::home_dir())?;
     use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
-    let file_path = std::path::Path::new(&path);
     if !file_path.exists() || !file_path.is_file() {
         return Err("파일을 찾을 수 없습니다.".into());
     }
-    let metadata = std::fs::metadata(file_path).map_err(|e| e.to_string())?;
+    let metadata = std::fs::metadata(&file_path).map_err(|e| e.to_string())?;
     if metadata.len() > 15 * 1024 * 1024 {
         return Err("파일 크기가 15MB를 초과하여 미리보기를 지원하지 않습니다.".into());
     }
-    let bytes = std::fs::read(file_path).map_err(|e| e.to_string())?;
+    let bytes = std::fs::read(&file_path).map_err(|e| e.to_string())?;
     let ext = file_path
         .extension()
         .map(|e| e.to_string_lossy().to_string().to_lowercase())
@@ -534,6 +545,49 @@ fn read_file_as_base64(path: String) -> Result<String, String> {
     };
     let b64 = B64.encode(&bytes);
     Ok(format!("data:{};base64,{}", mime, b64))
+}
+
+fn validate_preview_path(path: &std::path::Path, roots: &[std::path::PathBuf], home: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    let path = path.canonicalize().map_err(|_| "파일을 찾을 수 없습니다.".to_string())?;
+    let home = home.canonicalize().map_err(|_| "홈 디렉터리를 확인할 수 없습니다.".to_string())?;
+    for name in [".claude", ".codex", ".ssh", ".aws", ".azure", ".config", ".gnupg", ".claude.json"] {
+        let sensitive = home.join(name);
+        let sensitive = sensitive.canonicalize().unwrap_or(sensitive);
+        if path.starts_with(sensitive) {
+            return Err("민감한 파일은 미리 볼 수 없습니다.".into());
+        }
+    }
+    let allowed = roots.iter().filter_map(|root| root.canonicalize().ok())
+        .any(|root| !home.starts_with(&root) && path.starts_with(root));
+    if !allowed { return Err("허용된 프로젝트 밖의 파일입니다.".into()); }
+    Ok(path)
+}
+
+#[test]
+fn preview_paths_respect_registered_roots_and_sensitive_home() {
+    let base = std::env::temp_dir().join(format!("agentrix-preview-{}", uuid::Uuid::new_v4()));
+    let home = base.join("home");
+    let project = home.join("project");
+    let attachments = project.join(".attachments");
+    let sensitive = home.join(".claude");
+    std::fs::create_dir_all(&attachments).unwrap();
+    std::fs::create_dir_all(&sensitive).unwrap();
+    let image = attachments.join("image.png");
+    let secret = sensitive.join(".credentials.json");
+    let outside = home.join("outside.png");
+    for path in [&image, &secret, &outside] { std::fs::write(path, b"test").unwrap(); }
+    assert!(validate_preview_path(&image, std::slice::from_ref(&project), &home).is_ok());
+    assert!(validate_preview_path(&outside, std::slice::from_ref(&project), &home).is_err());
+    assert!(validate_preview_path(&secret, std::slice::from_ref(&home), &home).is_err());
+    assert!(validate_preview_path(&secret, std::slice::from_ref(&sensitive), &home).is_err());
+    assert!(validate_preview_path(&project.join("..").join("outside.png"), std::slice::from_ref(&project), &home).is_err());
+    #[cfg(unix)]
+    {
+        let link = project.join("link.png");
+        std::os::unix::fs::symlink(&secret, &link).unwrap();
+        assert!(validate_preview_path(&link, std::slice::from_ref(&project), &home).is_err());
+    }
+    std::fs::remove_dir_all(base).unwrap();
 }
 
 #[tauri::command]
@@ -715,12 +769,32 @@ pub struct DetectedCliCredential {
     pub cli_id: String,
     pub provider: String,
     pub key_name: String,
+    #[serde(skip)]
     pub raw_key: String,
+    pub has_key: bool,
+    pub masked_preview: String,
     pub source: String,
+}
+
+#[test]
+fn detected_credential_serialization_hides_secret() {
+    let credential = DetectedCliCredential {
+        cli_id: "claude".into(), provider: "anthropic".into(), key_name: "ANTHROPIC_API_KEY".into(),
+        raw_key: "secret-test-key".into(), has_key: true, masked_preview: "******".into(), source: "test".into(),
+    };
+    let value = serde_json::to_value(&credential).unwrap();
+    assert_eq!(value["hasKey"], true);
+    assert_eq!(value["maskedPreview"], "******");
+    assert!(value.get("rawKey").is_none());
+    assert!(!value.to_string().contains("secret-test-key"));
 }
 
 #[tauri::command]
 fn get_detected_cli_credentials(state: State<'_, AppState>) -> Result<Vec<DetectedCliCredential>, String> {
+    Ok(detect_cli_credentials(&state))
+}
+
+fn detect_cli_credentials(state: &AppState) -> Vec<DetectedCliCredential> {
     let mut results = Vec::new();
 
     // 1. 환경변수 스캔
@@ -742,6 +816,8 @@ fn get_detected_cli_credentials(state: State<'_, AppState>) -> Result<Vec<Detect
                     provider: provider.to_string(),
                     key_name: env_var.to_string(),
                     raw_key: trimmed.to_string(),
+                    has_key: true,
+                    masked_preview: "******".into(),
                     source: source.to_string(),
                 });
             }
@@ -750,6 +826,7 @@ fn get_detected_cli_credentials(state: State<'_, AppState>) -> Result<Vec<Detect
 
     // 2. 내부 암호화 DB 보관함 스캔
     if let Ok(conn) = state.db.lock() {
+        results.extend(detect_saved_deep_credentials(&conn));
         for cli_id in ["claude", "codex", "antigravity", "grok"] {
             if let Ok(env_map) = db::get_decrypted_env_for_cli(&conn, cli_id) {
                 for (k, v) in env_map {
@@ -766,6 +843,8 @@ fn get_detected_cli_credentials(state: State<'_, AppState>) -> Result<Vec<Detect
                             provider: provider.to_string(),
                             key_name: k,
                             raw_key: v,
+                            has_key: true,
+                            masked_preview: "******".into(),
                             source: "Agentrix API 키 보관함".to_string(),
                         });
                     }
@@ -785,7 +864,9 @@ fn get_detected_cli_credentials(state: State<'_, AppState>) -> Result<Vec<Detect
                         cli_id: "claude".into(),
                         provider: "anthropic".into(),
                         key_name: "ANTHROPIC_API_KEY".into(),
-                        raw_key: api_key.to_string(),
+                    raw_key: api_key.to_string(),
+                    has_key: !api_key.trim().is_empty(),
+                    masked_preview: "******".into(),
                         source: "~/.claude.json 파일".into(),
                     });
                 }
@@ -793,7 +874,79 @@ fn get_detected_cli_credentials(state: State<'_, AppState>) -> Result<Vec<Detect
         }
     }
 
-    Ok(results)
+    results
+}
+
+fn detect_saved_deep_credentials(conn: &rusqlite::Connection) -> Vec<DetectedCliCredential> {
+    let keys = db::get_decrypted_env_for_cli(conn, "deep-ai").unwrap_or_default();
+    ["anthropic", "openai", "gemini", "groq"].into_iter().filter_map(|provider| {
+        let key = keys.get(provider)?.trim();
+        if key.is_empty() { return None; }
+        Some(DetectedCliCredential {
+            cli_id: "deep-ai".into(), provider: provider.into(), key_name: provider.into(),
+            raw_key: key.into(), has_key: true, masked_preview: "******".into(),
+            source: "Deep AI 저장 키".into(),
+        })
+    }).collect()
+}
+
+#[test]
+fn saved_deep_credentials_survive_reopen_without_exposing_key() {
+    let path = std::env::temp_dir().join(format!("agentrix-deep-key-{}.sqlite", uuid::Uuid::new_v4()));
+    let conn = db::init_db_at(&path).unwrap();
+    db::save_api_key(&conn, "deep-ai", "openai", "saved-secret-test").unwrap();
+    drop(conn);
+    let conn = db::init_db_at(&path).unwrap();
+    let credentials = detect_saved_deep_credentials(&conn);
+    assert_eq!(credentials.len(), 1);
+    assert_eq!(credentials[0].provider, "openai");
+    assert_eq!(credentials[0].raw_key, "saved-secret-test");
+    let json = serde_json::to_string(&credentials).unwrap();
+    assert!(!json.contains("saved-secret-test"));
+    let selector: DetectedCliCredential = serde_json::from_str::<Vec<DetectedCliCredential>>(&json).unwrap().remove(0);
+    assert_eq!(find_detected_key(&credentials, &selector).unwrap(), "saved-secret-test");
+    drop(conn);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[tauri::command]
+async fn request_with_detected_credential(
+    state: State<'_, AppState>,
+    credential: DetectedCliCredential,
+    model: String,
+    body: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let key = find_detected_key(&detect_cli_credentials(&state), &credential)
+        .ok_or("감지된 API 키를 찾을 수 없습니다.")?.to_string();
+    let provider = credential.provider;
+    tauri::async_runtime::spawn_blocking(move || {
+        let endpoint = match provider.as_str() {
+            "anthropic" => "https://api.anthropic.com/v1/messages".to_string(),
+            "openai" => "https://api.openai.com/v1/chat/completions".to_string(),
+            "groq" => "https://api.groq.com/openai/v1/chat/completions".to_string(),
+            "gemini" if !model.is_empty() && model.bytes().all(|c| c.is_ascii_alphanumeric() || b"-_.".contains(&c)) =>
+                format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"),
+            _ => return Err("지원하지 않는 공급자 또는 모델입니다.".to_string()),
+        };
+        let request = ureq::post(&endpoint).set("Content-Type", "application/json");
+        let request = match provider.as_str() {
+            "anthropic" => request.set("x-api-key", &key).set("anthropic-version", "2023-06-01"),
+            "gemini" => request.set("x-goog-api-key", &key),
+            _ => request.set("Authorization", &format!("Bearer {key}")),
+        };
+        let response = request.send_json(body).map_err(|_| "API 요청에 실패했습니다.".to_string())?;
+        let value: serde_json::Value = response.into_json().map_err(|_| "API 응답을 읽을 수 없습니다.".to_string())?;
+        let encoded_key = serde_json::to_string(&key).map_err(|e| e.to_string())?;
+        let sanitized = serde_json::to_string(&value).map_err(|e| e.to_string())?
+            .replace(&encoded_key[1..encoded_key.len() - 1], "******");
+        serde_json::from_str(&sanitized).map_err(|e| e.to_string())
+    }).await.map_err(|e| e.to_string())?
+}
+
+fn find_detected_key<'a>(items: &'a [DetectedCliCredential], credential: &DetectedCliCredential) -> Option<&'a str> {
+    items.iter().find(|item| item.cli_id == credential.cli_id && item.provider == credential.provider
+        && item.key_name == credential.key_name && item.source == credential.source && item.has_key)
+        .map(|item| item.raw_key.as_str())
 }
 
 #[tauri::command]
@@ -1387,7 +1540,7 @@ async fn perform_in_app_update(app: tauri::AppHandle, download_url: String) -> R
     .map_err(|e| format!("업데이트 태스크 실행 오류: {}", e))?
 }
 
-const UPDATE_PUBLIC_KEY: &str = "";
+const UPDATE_PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDYwQTI5NDIwRDY4QzRERUYKUldUdlRZeldJSlNpWU5zUGtMRnlpa1ZCdkJFSVJrWkQ3UUo3RHlGT2FRZmc1TS8xbzRuYlBmaEwK";
 
 fn valid_update_url(url: &str) -> bool {
     let Some(path) = url.strip_prefix("https://github.com/TodookGamja/AgentriX/releases/download/") else { return false; };
@@ -1413,6 +1566,28 @@ mod update_security_tests {
         let b64 = base64::engine::general_purpose::STANDARD;
         assert!(verify_update(&b64.encode(key), &b64.encode(sig), b"test").is_ok());
         assert!(verify_update(&b64.encode(key), &b64.encode(sig), b"tampered").is_err());
+    }
+
+    #[test]
+    fn embedded_update_public_key_is_valid() {
+        use base64::Engine;
+        let key = base64::engine::general_purpose::STANDARD.decode(UPDATE_PUBLIC_KEY).unwrap();
+        let key = std::str::from_utf8(&key).unwrap();
+        assert!(minisign_verify::PublicKey::decode(key).is_ok());
+    }
+
+    #[test]
+    #[ignore]
+    fn verify_release_artifact() {
+        let release = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../release");
+        let data = std::fs::read(release.join("AgentriX.exe")).expect("release executable missing");
+        let signature = std::fs::read_to_string(release.join("AgentriX.exe.sig")).expect("release signature missing");
+        assert!(!UPDATE_PUBLIC_KEY.is_empty(), "release public key is not configured");
+        assert!(data.windows(UPDATE_PUBLIC_KEY.len()).any(|part| part == UPDATE_PUBLIC_KEY.as_bytes()), "release executable does not contain the configured public key");
+        verify_update(UPDATE_PUBLIC_KEY, &signature, &data).expect("release signature does not match embedded public key");
+        let mut modified = data;
+        modified[0] ^= 1;
+        assert!(verify_update(UPDATE_PUBLIC_KEY, &signature, &modified).is_err());
     }
 }
 
@@ -1798,6 +1973,7 @@ fn main() {
             install_token_tool,
             install_npm_cli_update,
             get_detected_cli_credentials,
+            request_with_detected_credential,
             run_cli_deep_analysis,
             start_session,
             write_to_session,

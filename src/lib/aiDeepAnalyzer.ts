@@ -1,5 +1,13 @@
-import type { AiProviderConfig, ProjectAgentInput, ProjectDeepContext } from "../types/types";
-import { apiRunCliDeepAnalysis } from "./tauriBridge";
+import type { AiProviderConfig, DetectedCliCredential, ProjectAgentInput, ProjectDeepContext } from "../types/types";
+import { apiRequestWithDetectedCredential, apiRunCliDeepAnalysis } from "./tauriBridge";
+
+function detectedFetch(credential: DetectedCliCredential | null, model: string): typeof fetch {
+  if (!credential) return fetch;
+  return async (_input, init) => {
+    const data = await apiRequestWithDetectedCredential(credential, model || "gemini-1.5-flash", JSON.parse(String(init?.body)));
+    return new Response(JSON.stringify(data), { status: 200 });
+  };
+}
 
 export interface AiTestResult {
   ok: boolean;
@@ -177,12 +185,13 @@ export async function generateDeepAiTeamWithCli(
   return parseAgentJson(resultText, context, options);
 }
 
-export async function testAiConnection(config: AiProviderConfig): Promise<AiTestResult> {
-  if (!config.apiKey && config.provider !== "ollama") {
+export async function testAiConnection(config: AiProviderConfig, credential: DetectedCliCredential | null = null): Promise<AiTestResult> {
+  if (!config.apiKey && !credential && config.provider !== "ollama") {
     return { ok: false, message: "API 키를 입력해 주세요." };
   }
 
   try {
+    const fetch = detectedFetch(credential, config.model);
     if (config.provider === "anthropic") {
       const res = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
@@ -279,8 +288,10 @@ export async function generateDeepAiTeam(
   config: AiProviderConfig,
   context: ProjectDeepContext,
   options?: TeamCliOption[],
-  hints?: TeamHints
+  hints?: TeamHints,
+  credential: DetectedCliCredential | null = null
 ): Promise<ProjectAgentInput[]> {
+  const fetch = detectedFetch(credential, config.model);
   const userPrompt = buildUserPrompt(context, options, hints);
   let responseText = "";
 

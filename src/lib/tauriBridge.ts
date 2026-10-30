@@ -230,6 +230,10 @@ export async function apiGetDetectedCliCredentials(): Promise<DetectedCliCredent
   return [];
 }
 
+export async function apiRequestWithDetectedCredential(credential: DetectedCliCredential, model: string, body: unknown): Promise<unknown> {
+  return invoke("request_with_detected_credential", { credential, model, body });
+}
+
 export async function apiRunCliDeepAnalysis(
   cliId: string,
   projectPath: string,

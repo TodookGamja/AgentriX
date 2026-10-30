@@ -88,7 +88,8 @@ export interface DetectedCliCredential {
   cliId: string;
   provider: string;
   keyName: string;
-  rawKey: string;
+  hasKey: boolean;
+  maskedPreview: string;
   source: string;
 }
 
