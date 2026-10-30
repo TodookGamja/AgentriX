@@ -272,8 +272,18 @@ export const UsageView: React.FC<UsageViewProps> = ({
 
   if (!data) {
     return (
-      <div className="flex items-center justify-center h-full text-slate-400">
-        사용량 데이터를 불러오는 중입니다...
+      <div className="flex flex-col items-center justify-center h-full gap-4 p-6 text-slate-400">
+        <RefreshCw className="w-6 h-6 animate-spin text-indigo-400" />
+        <span className="text-sm">사용량 데이터를 불러오는 중입니다...</span>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full max-w-3xl">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="h-24 rounded-xl bg-slate-900 border border-slate-800 p-3 space-y-2 animate-pulse">
+              <div className="h-3 w-1/3 rounded bg-slate-800" />
+              <div className="h-2 w-full rounded bg-slate-800" />
+              <div className="h-2 w-2/3 rounded bg-slate-800" />
+            </div>
+          ))}
+        </div>
       </div>
     );
   }
@@ -299,7 +309,7 @@ export const UsageView: React.FC<UsageViewProps> = ({
           <div className="flex items-center gap-2 shrink-0">
             <button
               onClick={scrollToBreakdown}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800/90 hover:bg-slate-700 text-slate-200 border border-slate-700/80 text-xs font-semibold transition shadow-sm active:scale-[0.98]"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800/90 hover:bg-slate-700 text-slate-200 border border-slate-700/80 text-xs font-semibold transition shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 active:scale-[0.98]"
               title="모델별 · CLI별 상세 내역 표로 바로 스크롤 이동"
             >
               <Layers className="w-3.5 h-3.5 text-indigo-400" />
@@ -309,7 +319,7 @@ export const UsageView: React.FC<UsageViewProps> = ({
             <button
               onClick={handleSync}
               disabled={syncing}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 text-white text-xs font-bold transition shadow-sm active:scale-[0.98]"
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 text-white text-xs font-bold transition shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 active:scale-[0.98]"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${syncing ? "animate-spin" : ""}`} />
               <span>{syncing ? "갱신 중..." : "새로고침"}</span>
@@ -325,7 +335,7 @@ export const UsageView: React.FC<UsageViewProps> = ({
                 <button
                   key={opt.id}
                   onClick={() => onTimeframeChange(opt.id)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition whitespace-nowrap ${
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
                     timeframe === opt.id
                       ? "bg-indigo-600 text-white shadow-sm"
                       : "text-slate-400 hover:text-slate-100 hover:bg-slate-800"
@@ -345,7 +355,7 @@ export const UsageView: React.FC<UsageViewProps> = ({
                 <button
                   key={cli.id}
                   onClick={() => onFilterChange(cli.id)}
-                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition whitespace-nowrap ${
+                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
                     cliFilter === cli.id
                       ? "bg-indigo-600 text-white shadow-sm"
                       : "text-slate-400 hover:text-slate-100 hover:bg-slate-800"
@@ -517,7 +527,8 @@ export const UsageView: React.FC<UsageViewProps> = ({
                         <span className="text-slate-300 font-semibold">월간 전체 사용량</span>
                         <span className="text-slate-400">확인 불가</span>
                       </div>
-                      <p className="text-[11px] text-slate-500">Cursor 로그인 정보를 읽지 못했습니다.</p>
+                      <div className="w-full h-2 bg-slate-800/40 rounded-full overflow-hidden"><div className="h-full bg-slate-700/40 w-full" /></div>
+            <p className="text-[11px] text-slate-500">Cursor 로그인 정보를 읽지 못했습니다.</p>
                     </div>
                   ) : (<>
                   {/* 5시간 세션 한도 게이지 */}
@@ -545,7 +556,7 @@ export const UsageView: React.FC<UsageViewProps> = ({
                       />
                     </div>
                     <div className="text-[11px] text-slate-400 flex items-center justify-between font-mono pt-0.5 h-4">
-                      <span className="shrink-0 text-slate-500 text-[10px]">초기화</span>
+                      <span className="shrink-0 text-slate-400 font-medium text-[10px]">초기화</span>
                       <span className="text-amber-300 font-medium truncate text-right ml-2 text-[10px]">
                         {formatCleanReset(q.resetsAt5h)}
                       </span>
@@ -569,13 +580,15 @@ export const UsageView: React.FC<UsageViewProps> = ({
                         className={`h-full rounded-full transition-all ${
                           isHighWeekly
                             ? "bg-rose-500"
-                            : "bg-indigo-500"
+                            : usedWk >= 65
+                              ? "bg-amber-500"
+                              : "bg-indigo-500"
                         }`}
                         style={{ width: `${Math.min(100, usedWk)}%` }}
                       />
                     </div>
                     <div className="text-[11px] text-slate-400 flex items-center justify-between font-mono pt-0.5 h-4">
-                      <span className="shrink-0 text-slate-500 text-[10px]">주간 리셋</span>
+                      <span className="shrink-0 text-slate-400 font-medium text-[10px]">주간 리셋</span>
                       <span className="text-indigo-300 font-medium truncate text-right ml-2 text-[10px]">
                         {formatCleanReset(q.resetsAtWeekly)}
                       </span>

@@ -33,3 +33,34 @@ test("retains in-flight deliveries across reloads and removes only the selected 
   assert.throws(() => api.saveTeamMailDelivery(first));
   assert.equal(values.get("agentrix_team_mail_deliveries"), "not json");
 });
+
+test("releases mail for a disappeared session without losing other deliveries", () => {
+  values.clear();
+  const base = { project: "p", agentId: "a", submittedAt: 1 };
+  api.saveTeamMailDelivery({ ...base, id: "mail", sessionId: "old" });
+  api.saveTeamMailDelivery({ ...base, id: "live", sessionId: "new" });
+  api.saveTeamMailDelivery({ ...base, id: "task", sessionId: "old", kind: "task" });
+  api.saveTeamMailDelivery({ ...base, project: "other", id: "other", sessionId: "old" });
+  api.pruneStaleMailDeliveries("p", ["new"]);
+  assert.deepEqual(api.getTeamMailDeliveries().map((d) => d.id).sort(), ["live", "other", "task"]);
+  values.clear();
+});
+
+test("prunes stale deliveries whose session is gone but keeps goals and live ones", () => {
+  values.clear();
+  const base = { project: "p", agentId: "forge", submittedAt: 1 };
+  api.saveTeamMailDelivery({ ...base, id: "SEC1", sessionId: "old", kind: "task" });
+  api.saveTeamMailDelivery({ ...base, id: "SEC3", sessionId: "new", kind: "task" });
+  api.saveTeamMailDelivery({ ...base, id: "g", sessionId: "", kind: "goal", payload: "x" });
+  api.saveTeamMailDelivery({ ...base, project: "other", id: "X", sessionId: "old", kind: "task" });
+  assert.equal(api.pruneStaleDeliveries("p", ["new"]), 1);
+  assert.deepEqual(api.getTeamMailDeliveries().map((d) => d.id).sort(), ["SEC3", "X", "g"]);
+});
+
+test("redelivers only when 2+ min passed with no output since submit, max 3 times", () => {
+  assert.equal(api.shouldRedeliver(2, 100, 200, 0), true);
+  assert.equal(api.shouldRedeliver(1, 100, 200, 0), false);
+  assert.equal(api.shouldRedeliver(5, 300, 200, 0), false); // 전달 뒤 출력이 있었음
+  assert.equal(api.shouldRedeliver(5, null, 200, 0), false); // 지금도 출력 중
+  assert.equal(api.shouldRedeliver(5, 100, 200, 3), false);
+});

@@ -14,6 +14,8 @@ tsconfig.tsbuildinfo
 # Rust & Tauri Builds (대용량 빌드 캐시 2GB+ 제외)
 target/
 src-tauri/target/
+target-test/
+src-tauri/target-test/
 *.exe
 *.dll
 *.pdb

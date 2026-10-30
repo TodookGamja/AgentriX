@@ -64,6 +64,40 @@ fn parse_text_mail(text: &str, roster: &[(String, String)], from: &str) -> Optio
     Some(Mail { to, subject, body: text.trim().to_string() })
 }
 
+fn route_file(project: &Path, roster: &[(String, String)], from: &str, path: &Path) -> Result<(), String> {
+    if !path.is_file() { return Ok(()); }
+    let Some(name) = path.file_stem().and_then(|v| v.to_str()) else { return Ok(()) };
+    let ext = path.extension().and_then(|v| v.to_str()).unwrap_or("");
+    if !matches!(ext, "json" | "md" | "txt") || !safe_id(name) { return Ok(()); }
+    if fs::metadata(path).map_err(|e| e.to_string())?.len() > 65536 { return Ok(()); }
+    let raw = fs::read(path).map_err(|e| e.to_string())?;
+    // Windows 편집기·PowerShell이 붙이는 UTF-8 BOM 제거 (남아 있으면 JSON 파싱이 실패해 메일이 영영 안 나감)
+    let raw = raw.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&raw);
+    let parsed = if ext == "json" { serde_json::from_slice::<Mail>(raw).ok() } else { parse_text_mail(&String::from_utf8_lossy(raw), roster, from) };
+    let Some(mut mail) = parsed else { return Ok(()) };
+    let Some(to_id) = resolve_recipient(&mail.to, roster) else { return Ok(()) };
+    if to_id == from || mail.body.trim().is_empty() { return Ok(()); }
+    mail.to = to_id;
+    let inbox = agent_dir(project, &mail.to)?.join("inbox");
+    fs::create_dir_all(&inbox).map_err(|e| e.to_string())?;
+    // 이름으로 보낸 경우에도 수신함에는 ID로 정규화해서 저장
+    let bytes = serde_json::to_vec(&mail).map_err(|e| e.to_string())?;
+    // 같은 파일명이 이미 전달됐을 때: 내용까지 같으면 중복이라 버리고, 다르면 새 메일이므로 번호를 붙여 전달
+    // (예전엔 이름만 같아도 건너뛰어 파일이 outbox에 영원히 남았음)
+    for n in 1..100 {
+        let message_name = if n == 1 { format!("{}{name}.json", sender_prefix(from)) } else { format!("{}{name}_{n}.json", sender_prefix(from)) };
+        if message_name.len() > 240 { return Ok(()); }
+        let target = inbox.join(&message_name);
+        let existing = [target.clone(), inbox.join("done").join(&message_name)].into_iter().find(|p| p.exists());
+        match existing {
+            Some(p) if fs::read(&p).ok().as_deref() == Some(&bytes[..]) => break,
+            Some(_) => continue,
+            None => { fs::write(&target, &bytes).map_err(|e| e.to_string())?; break; }
+        }
+    }
+    fs::remove_file(path).map_err(|e| e.to_string())
+}
+
 /// agents: (ID, 이름). 메시지의 `to`에는 ID 또는 이름을 쓸 수 있음
 pub fn route(project: &Path, roster: &[(String, String)]) -> Result<Vec<InboxMessage>, String> {
     let agents: Vec<String> = roster.iter().map(|(id, _)| id.clone()).collect();
@@ -73,29 +107,11 @@ pub fn route(project: &Path, roster: &[(String, String)]) -> Result<Vec<InboxMes
         let outbox = dir.join("outbox");
         fs::create_dir_all(&outbox).map_err(|e| e.to_string())?;
         fs::create_dir_all(dir.join("inbox")).map_err(|e| e.to_string())?;
-        for entry in fs::read_dir(&outbox).map_err(|e| e.to_string())? {
-            let entry = entry.map_err(|e| e.to_string())?;
-            let path = entry.path();
-            if !entry.file_type().map_err(|e| e.to_string())?.is_file() { continue; }
-            let Some(name) = path.file_stem().and_then(|v| v.to_str()) else { continue };
-            let ext = path.extension().and_then(|v| v.to_str()).unwrap_or("");
-            if !matches!(ext, "json" | "md" | "txt") || !safe_id(name) { continue; }
-            if entry.metadata().map_err(|e| e.to_string())?.len() > 65536 { continue; }
-            let raw = fs::read(&path).map_err(|e| e.to_string())?;
-            let parsed = if ext == "json" { serde_json::from_slice::<Mail>(&raw).ok() } else { parse_text_mail(&String::from_utf8_lossy(&raw), roster, from) };
-            let Some(mut mail) = parsed else { continue };
-            let Some(to_id) = resolve_recipient(&mail.to, roster) else { continue };
-            if to_id == *from || mail.body.trim().is_empty() { continue; }
-            mail.to = to_id;
-            let inbox = agent_dir(project, &mail.to)?.join("inbox");
-            fs::create_dir_all(&inbox).map_err(|e| e.to_string())?;
-            let message_name = format!("{}{name}.json", sender_prefix(from));
-            if message_name.len() > 240 { continue; }
-            let target = inbox.join(&message_name);
-            if target.exists() || inbox.join("done").join(&message_name).exists() { continue; }
-            // 이름으로 보낸 경우에도 수신함에는 ID로 정규화해서 저장
-            fs::write(&target, serde_json::to_vec(&mail).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
-            fs::remove_file(path).map_err(|e| e.to_string())?;
+        for entry in fs::read_dir(&outbox).map_err(|e| e.to_string())?.flatten() {
+            // 한 파일의 오류(잠김 등)가 나머지 팀원의 메일까지 막지 않게 파일 단위로 격리
+            if let Err(e) = route_file(project, roster, from, &entry.path()) {
+                eprintln!("team mail: {}: {e}", entry.path().display());
+            }
         }
     }
     let mut messages = Vec::new();
@@ -140,6 +156,12 @@ mod tests {
         fs::write(outbox.join("one.json"), r#"{"to":"b","subject":"hello","body":"work"}"#).unwrap();
         assert!(route(&project, &agents).unwrap().is_empty());
         assert!(acknowledge(&project, "b", "../bad").is_err());
+        // 같은 이름의 새 메일(내용 다름)은 번호를 붙여 전달, BOM이 붙은 파일도 전달
+        fs::write(outbox.join("one.json"), b"\xEF\xBB\xBF{\"to\":\"Jun\",\"subject\":\"again\",\"body\":\"new work\"}").unwrap();
+        let again = route(&project, &agents).unwrap();
+        assert_eq!(again.len(), 1);
+        assert_eq!(again[0].subject, "again");
+        assert!(!outbox.join("one.json").exists());
         // 마크다운 보고서: 수신 줄의 ID/이름 → 수신자, 자기 자신·미등록 수신자는 무시
         let md = "# 완료 보고
 - **발신**: Mira

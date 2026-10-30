@@ -35,3 +35,21 @@ export function upsertApproval(project: string, approval: TaskApproval): void {
   const rest = getApprovals(project).filter((a) => !(a.taskId === approval.taskId && a.agentId === approval.agentId));
   localStorage.setItem(approvalsKey(project), JSON.stringify([...rest, approval]));
 }
+
+// 디스패처가 착수 작업을 왜 아직 안 보냈는지/언제 보냈는지 — 작업 보드 카드에 표시해 탭을 돌지 않고 정체를 보이게 함
+const dispatchNotesKey = (project: string) => `agentrix_dispatch_notes:${project}`;
+
+export function getDispatchNotes(project: string): Record<string, string> {
+  try {
+    const v: unknown = JSON.parse(localStorage.getItem(dispatchNotesKey(project)) || "{}");
+    return v && typeof v === "object" ? (v as Record<string, string>) : {};
+  } catch {
+    return {};
+  }
+}
+
+export function setDispatchNote(project: string, taskId: string, note: string): void {
+  const notes = getDispatchNotes(project);
+  if (notes[taskId] === note) return;
+  localStorage.setItem(dispatchNotesKey(project), JSON.stringify({ ...notes, [taskId]: note }));
+}

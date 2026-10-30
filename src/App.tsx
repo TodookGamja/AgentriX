@@ -36,6 +36,7 @@ import {
   Users,
   X,
   Zap,
+  Loader2,
 } from "lucide-react";
 import { useAppStore } from "./lib/store";
 import { ModelPicker, getCliDefaultModel } from "./components/ModelPicker";
@@ -76,6 +77,7 @@ import {
   apiRouteTeamMail,
   apiAcknowledgeTeamMail,
   apiGetSessionContext,
+  apiGetSessionQuietSince,
   apiWindowMinimize,
   apiWindowToggleMaximize,
   apiWindowClose,
@@ -91,6 +93,7 @@ import {
 } from "./lib/tauriBridge";
 import { listen } from "@tauri-apps/api/event";
 import { TerminalPane } from "./components/TerminalPane";
+import { BoardPanel } from "./components/BoardPanel";
 import { ProjectWorkspaceView } from "./components/ProjectWorkspaceView";
 import { UsageView } from "./components/UsageView";
 import { McpSkillView } from "./components/McpSkillView";
@@ -105,12 +108,29 @@ import { AiDeepTeamModal } from "./components/AiDeepTeamModal";
 import { MarkdownLite } from "./components/MarkdownLite";
 import { FolderPickerModal } from "./components/FolderPickerModal";
 import { AgentrixLogo } from "./components/AgentrixLogo";
-import { boardProtocol, mailProtocol, parseBoardTasks } from "./lib/blackboardDispatch";
-import { getTeamMailDeliveries, removeTeamMailDelivery, saveTeamMailDelivery } from "./lib/teamMailDelivery";
-import { findApproval, getApprovalMode, upsertApproval } from "./lib/taskApproval";
+import { boardProtocol, collabProtocol, mailProtocol, parseBoardTasks } from "./lib/blackboardDispatch";
+import { getTeamMailDeliveries, pruneStaleDeliveries, pruneStaleMailDeliveries, removeTeamMailDelivery, saveTeamMailDelivery, shouldRedeliver } from "./lib/teamMailDelivery";
+import { findApproval, getApprovalMode, setDispatchNote, upsertApproval } from "./lib/taskApproval";
 import { countNewChars } from "./lib/tokenEstimate";
 import { forgetSessionInput, getLastSubmission, getSubmissionVersion, getSessionInputHistory, hasPendingSessionInput, setInstructionKeyResolver } from "./lib/inputHistory";
 import { permissionLaunch } from "./lib/permissionSettings";
+import {
+  nextSplitLayout,
+  resolvePaneSessions as resolveSplitPaneSessions,
+  visibleSlotCount as splitVisibleSlotCount,
+  type SplitLayout,
+} from "./lib/splitLayout";
+import {
+  handoffContinuePrompt,
+  nextRelaySessionName,
+  remapSplitSlotsAfterRelay,
+} from "./lib/handoffRelay";
+import {
+  isLiveQuotaUsable,
+  persistMiniQuotaCache,
+  restoreMiniQuotaCache,
+  type MiniQuotaSnapshot,
+} from "./lib/miniQuotaCache";
 import type {
   ActiveNavTab,
   CustomCliInput,
@@ -172,7 +192,7 @@ export const App: React.FC = () => {
   const [projectSubView, setProjectSubView] = useState<"overview" | "session">("overview");
 
   // CLI 터미널 분할 레이아웃: "single" (단일) | "split-h" (좌우 2분할) | "split-v" (상하 2분할) | "grid-4" (4분할 2x2 그리드)
-  const [splitLayout, setSplitLayout] = useState<"single" | "split-h" | "split-v" | "grid-4">("single");
+  const [splitLayout, setSplitLayout] = useState<SplitLayout>("single");
   // 분할 각 슬롯(0~3)에 사용자가 직접 지정한 세션 ID들
   const [splitSlotSessionIds, setSplitSlotSessionIds] = useState<(string | null)[]>([null, null, null, null]);
   const terminalDrafts = useRef<Record<string, { text: string; attachments: string[] }>>({});
@@ -808,52 +828,20 @@ export const App: React.FC = () => {
     [sessions, selectedProjectPath]
   );
 
-  // 분할 모드에 따른 표시 슬롯 개수
-  const visibleSlotCount =
-    splitLayout === "single" ? 1 : splitLayout === "grid-4" ? 4 : 2;
+  const visibleSlotCount = splitVisibleSlotCount(splitLayout);
 
-  // 각 분할 슬롯(0~3)에 할당될 실제 세션 계산
-  // 중요: 분할 화면 모드에서는 슬롯 0, 1, 2, 3의 화면 배치를 완전히 고정하여,
-  // 포커스가 이동하더라도 다른 화면이 1번 슬롯으로 이동하는 자리바꿈 현상을 원천 방지합니다.
-  const resolvedPaneSessions = useMemo(() => {
-    // 단일 모드일 때는 현재 활성화된 세션을 전체 화면에 표시
-    if (splitLayout === "single") {
-      const active =
-        sessions.find((s) => s.id === activeSessionId) ||
-        currentProjectSessions[0] ||
-        sessions[0] ||
-        null;
-      return [active, null, null, null];
-    }
-
-    // 분할 모드일 때: 슬롯 0, 1, 2, 3의 고정 배치 유지 (포커스 이동에 영향받지 않음)
-    const assigned: (typeof sessions[0] | null)[] = [];
-    const usedIds = new Set<string>();
-
-    for (let slot = 0; slot < 4; slot++) {
-      const preferredId = splitSlotSessionIds[slot];
-      const preferred = preferredId
-        ? sessions.find((s) => s.id === preferredId && !usedIds.has(s.id))
-        : null;
-
-      if (preferred) {
-        assigned.push(preferred);
-        usedIds.add(preferred.id);
-      } else {
-        const candidate =
-          currentProjectSessions.find((s) => !usedIds.has(s.id)) ||
-          sessions.find((s) => !usedIds.has(s.id)) ||
-          null;
-        if (candidate) {
-          assigned.push(candidate);
-          usedIds.add(candidate.id);
-        } else {
-          assigned.push(null);
-        }
-      }
-    }
-    return assigned;
-  }, [sessions, currentProjectSessions, splitLayout, splitSlotSessionIds, activeSessionId]);
+  // 각 분할 슬롯(0~3)에 할당될 실제 세션 계산 — 분할 모드에서 포커스 이동으로 자리바꿈 방지
+  const resolvedPaneSessions = useMemo(
+    () =>
+      resolveSplitPaneSessions({
+        layout: splitLayout,
+        sessions,
+        projectSessions: currentProjectSessions,
+        activeSessionId,
+        splitSlotSessionIds,
+      }),
+    [sessions, currentProjectSessions, splitLayout, splitSlotSessionIds, activeSessionId]
+  );
 
   // 좌패널에서 프로젝트를 클릭하면 -> CLI가 바로 뜨는 게 아니라 해당 프로젝트 전용 화면(ProjectWorkspaceView)이 뜸!
   const handleSelectProject = (path: string) => {
@@ -980,7 +968,7 @@ export const App: React.FC = () => {
       if (agent.autoBrief && agent.rolePrompt.trim() && agent.cliId !== "codex" && agent.cliId !== "opencode") {
         window.setTimeout(() => {
           const cleanPrompt = agent.rolePrompt.replace(/[\r\n]+/g, " ").trim();
-          const briefing = `${cleanPrompt}\r\n`;
+          const briefing = `${cleanPrompt} ${collabProtocol(agent.id, projectAgents)}\r\n`;
           apiWriteToSession(session.id, briefing).catch(() => {});
         }, 6000);
       }
@@ -1120,10 +1108,7 @@ export const App: React.FC = () => {
       ? instructions.map((t, i) => `### 지시 ${i + 1}\n\`\`\`\n${t}\n\`\`\``).join("\n\n")
       : "기록된 지시 없음";
 
-    const relayMatch = targetSession.name.match(/릴레이\s*(\d+)/);
-    const relayCount = relayMatch ? parseInt(relayMatch[1], 10) + 1 : 1;
-    const baseName = targetSession.name.replace(/\s*\(릴레이.*?\)/, "").trim();
-    const newSessionName = `${baseName} (릴레이 ${relayCount})`;
+    const { relayCount, newSessionName } = nextRelaySessionName(targetSession.name);
 
     const handoffMarkdown = `# ⚡ [AgentriX 스마트 세션 인수인계 리포트 (Session Handoff #${relayCount})]
 - **생성 일시**: ${new Date().toLocaleString("ko-KR")}
@@ -1215,16 +1200,13 @@ ${recentSnippet || "진행 내역 기록 없음"}
 
       // 화면 분할 슬롯에 이전 세션이 등록되어 있었다면 새 세션 ID로 자동 교체
       setSplitSlotSessionIds((prev) =>
-        prev.map((sid) => (sid === targetSession.id ? newSession.id : sid))
+        remapSplitSlotsAfterRelay(prev, targetSession.id, newSession.id)
       );
 
       // 5. 새 세션에 md 파일 읽기 및 연속 작업 지침 자동 주입
       setTimeout(async () => {
         try {
-          const handoffPrompt = isManual
-            ? `.ai-agents/SESSION_HANDOFF.md를 읽으세요. 거기 적힌 '직전 세션이 받은 지시' 중 아직 끝나지 않은 것을 지금 이어서 끝까지 수행하세요. 확인·요약만 하고 멈추지 마세요.\r`
-            : `.ai-agents/SESSION_HANDOFF.md를 읽고 완료된 이전 작업의 맥락을 파악한 뒤 다음 지시를 기다리세요.\r`;
-          await apiWriteToSession(newSession.id, handoffPrompt);
+          await apiWriteToSession(newSession.id, handoffContinuePrompt(isManual));
         } catch {}
       }, 6000);
 
@@ -1327,6 +1309,19 @@ ${recentSnippet || "진행 내역 기록 없음"}
       }
     };
     const id = window.setInterval(tick, 10000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  // 세션 탭 점 맥동용: 출력이 10초 넘게 멈추지 않은 세션 = 작업 중 (apiGetSessionQuietSince가 null)
+  const [busySessionIds, setBusySessionIds] = useState<string>("");
+  useEffect(() => {
+    const tick = async () => {
+      const ids = useAppStore.getState().sessions.map((s) => s.id);
+      const quiet = await Promise.all(ids.map((id) => apiGetSessionQuietSince(id).catch(() => 0)));
+      setBusySessionIds(ids.filter((_, i) => quiet[i] === null).join(","));
+    };
+    void tick();
+    const id = window.setInterval(tick, 3000);
     return () => window.clearInterval(id);
   }, []);
 
@@ -1896,105 +1891,67 @@ ${recentSnippet || "진행 내역 기록 없음"}
   };
 
   // 0ms 즉각 렌더링을 위한 직전 쿼터 로컬 스냅샷 복원 (CLI별로 분리 저장하여 즉각 복원)
-  const [cachedMiniQuota, setCachedMiniQuota] = useState<{
-    cliId: string;
-    cliName: string;
-    planLabel: string;
-    accentColor: string;
-    remainPct5h: number;
-    remainPctWeekly: number;
-    resetsAt5h: string | null;
-    resetsAtWeekly: string | null;
-  }>(() => {
-    try {
-      const perCli = localStorage.getItem(`agentrix_mini_quota_${focusedCliId}`);
-      if (perCli && !perCli.includes("13:50")) return JSON.parse(perCli);
-      const raw = localStorage.getItem("agentrix_mini_quota_cached");
-      if (raw && !raw.includes("13:50")) return JSON.parse(raw);
-    } catch {}
-    if (focusedCliId === "antigravity") {
-      return {
-        cliId: "antigravity",
-        cliName: "Antigravity (agy)",
-        planLabel: "Google DeepMind",
-        accentColor: "#a855f7",
-        remainPct5h: 90,
-        remainPctWeekly: 70,
-        resetsAt5h: getDynamicKstReset(4),
-        resetsAtWeekly: getDynamicKstWeeklyReset(6),
-      };
-    }
-    return {
-      cliId: "claude",
-      cliName: "Claude Code",
-      planLabel: "Claude Pro",
-      accentColor: "#f97316",
-      remainPct5h: 46,
-      remainPctWeekly: 74,
-      resetsAt5h: getDynamicKstReset(5),
-      resetsAtWeekly: getDynamicKstWeeklyReset(5),
-    };
+  const defaultMiniQuota = (cliId: string): MiniQuotaSnapshot =>
+    cliId === "antigravity"
+      ? {
+          cliId: "antigravity",
+          cliName: "Antigravity (agy)",
+          planLabel: "Google DeepMind",
+          accentColor: "#a855f7",
+          remainPct5h: 90,
+          remainPctWeekly: 70,
+          resetsAt5h: getDynamicKstReset(4),
+          resetsAtWeekly: getDynamicKstWeeklyReset(6),
+        }
+      : {
+          cliId: "claude",
+          cliName: "Claude Code",
+          planLabel: "Claude Pro",
+          accentColor: "#f97316",
+          remainPct5h: 46,
+          remainPctWeekly: 74,
+          resetsAt5h: getDynamicKstReset(5),
+          resetsAtWeekly: getDynamicKstWeeklyReset(5),
+        };
+
+  const [cachedMiniQuota, setCachedMiniQuota] = useState<MiniQuotaSnapshot>(() => {
+    return restoreMiniQuotaCache((k) => localStorage.getItem(k), focusedCliId) ?? defaultMiniQuota(focusedCliId);
   });
 
   // focusedCliId 변경 시 해당 CLI의 캐시로 즉시 전환 (0ms 지연 없음)
   useEffect(() => {
-    try {
-      const perCli = localStorage.getItem(`agentrix_mini_quota_${focusedCliId}`);
-      if (perCli && !perCli.includes("13:50")) {
-        setCachedMiniQuota(JSON.parse(perCli));
-        return;
-      }
-    } catch {}
-    if (focusedCliId === "antigravity") {
-      setCachedMiniQuota({
-        cliId: "antigravity",
-        cliName: "Antigravity (agy)",
-        planLabel: "Google DeepMind",
-        accentColor: "#a855f7",
-        remainPct5h: 90,
-        remainPctWeekly: 70,
-        resetsAt5h: getDynamicKstReset(4),
-        resetsAtWeekly: getDynamicKstWeeklyReset(6),
-      });
-    } else if (focusedCliId === "claude") {
-      setCachedMiniQuota({
-        cliId: "claude",
-        cliName: "Claude Code",
-        planLabel: "Claude Pro",
-        accentColor: "#f97316",
-        remainPct5h: 46,
-        remainPctWeekly: 74,
-        resetsAt5h: getDynamicKstReset(5),
-        resetsAtWeekly: getDynamicKstWeeklyReset(5),
-      });
+    const restored = restoreMiniQuotaCache((k) => localStorage.getItem(k), focusedCliId);
+    if (restored) {
+      setCachedMiniQuota(restored);
+      return;
+    }
+    if (focusedCliId === "antigravity" || focusedCliId === "claude") {
+      setCachedMiniQuota(defaultMiniQuota(focusedCliId));
     }
   }, [focusedCliId]);
 
   // 유효한 실시간 쿼터가 들어왔을 때만 캐시 갱신 (더미 100% 빈 껍데기는 이전 캐시를 덮어쓰지 못하도록 방어)
   useEffect(() => {
-    if (sidebarQuota && (sidebarQuota.hasOfficialQuota || sidebarQuota.resetsAt5h)) {
-      const updated = {
-        cliId: sidebarQuota.cliId,
-        cliName: sidebarQuota.cliName,
-        planLabel: sidebarQuota.planLabel,
+    if (isLiveQuotaUsable(sidebarQuota)) {
+      const updated: MiniQuotaSnapshot = {
+        cliId: sidebarQuota!.cliId,
+        cliName: sidebarQuota!.cliName,
+        planLabel: sidebarQuota!.planLabel,
         accentColor: focusedCliDef?.accentColor ?? "#6366f1",
-        remainPct5h: Math.round(sidebarQuota.remainingPercent5h),
-        remainPctWeekly: Math.round(sidebarQuota.remainingPercentWeekly),
-        resetsAt5h: sidebarQuota.resetsAt5h,
-        resetsAtWeekly: sidebarQuota.resetsAtWeekly,
+        remainPct5h: Math.round(sidebarQuota!.remainingPercent5h),
+        remainPctWeekly: Math.round(sidebarQuota!.remainingPercentWeekly),
+        resetsAt5h: sidebarQuota!.resetsAt5h,
+        resetsAtWeekly: sidebarQuota!.resetsAtWeekly,
       };
       setCachedMiniQuota(updated);
       try {
-        localStorage.setItem("agentrix_mini_quota_cached", JSON.stringify(updated));
-        localStorage.setItem(`agentrix_mini_quota_${sidebarQuota.cliId}`, JSON.stringify(updated));
+        persistMiniQuotaCache((k, v) => localStorage.setItem(k, v), updated);
       } catch {}
     }
   }, [sidebarQuota, focusedCliDef?.accentColor]);
 
   // 실시간 쿼터가 유효한지 검증 (공식 연동이거나 리셋 시간이 존재하는 경우에만 사용, 더미 100% 배제)
-  const isSidebarQuotaValid = Boolean(
-    sidebarQuota && (sidebarQuota.hasOfficialQuota || sidebarQuota.resetsAt5h)
-  );
+  const isSidebarQuotaValid = isLiveQuotaUsable(sidebarQuota);
 
   const activeCliName = focusedCliId === "cursor" ? (focusedCliDef?.name ?? "Cursor Agent CLI") : (isSidebarQuotaValid ? sidebarQuota?.cliName : null) ?? focusedCliDef?.name ?? cachedMiniQuota.cliName;
   const activePlanLabel = focusedCliId === "cursor" ? (sidebarQuota?.hasOfficialQuota ? sidebarQuota.planLabel : "") : (isSidebarQuotaValid ? sidebarQuota?.planLabel : null) ?? cachedMiniQuota.planLabel;
@@ -2066,17 +2023,32 @@ ${recentSnippet || "진행 내역 기록 없음"}
   }, []);
 
   // 블랙보드 작업표 자동 디스패치: 🔥 착수 행 → 담당 에이전트 세션, ✅ 행 → PM 세션에 1회 전달
-  // ponytail: 10초 폴링 + 세션 busy 여부 미판단, 지연/입력 충돌이 문제되면 파일 감시·idle 감지로 교체
+  // ponytail: 3초 폴링, 지연이 문제되면 파일 감시로 교체
   const teamDeliveryLocksRef = useRef(new Set<string>());
+  const sendBlockReasonRef = useRef<Record<string, string>>({}); // 전달 보류 사유(보드 카드 메모용)
   const startingTeamProjectsRef = useRef(new Set<string>());
+  // 턴 종료 시각: CLI 로그 우선. 로그로 못 읽는 CLI(antigravity·cursor·grok, 같은 폴더 세션이 여럿이라 로그가 모호한 codex)는
+  // 터미널 출력이 멈춘 시각으로 대신한다. 로그 완료 시각이 마지막 입력보다 앞서면(claude가 재개·릴레이로 옛 로그를 잡은 경우 포함)
+  // 그 로그는 이번 턴을 모르는 것이므로 역시 출력 정지 시각으로 대신한다 (안 그러면 그 팀원에게 영영 전달되지 않음).
+  // ponytail: claude는 권한 확인처럼 조용히 멈춘 상태를 턴 종료로 오인하지 않게 30초 무출력일 때만 대체, 오판이 보이면 로그 매칭을 고칠 것
+  const getTurnContext = async (session: typeof currentProjectSessions[number], claimed: string[]) => {
+    const ctx = await apiGetSessionContext(session, claimed).catch(() => null);
+    if (ctx?.completedAt && ctx.completedAt > getLastSubmission(session.id)) return ctx;
+    const quiet = await apiGetSessionQuietSince(session.id).catch(() => null);
+    if (!quiet || quiet <= getLastSubmission(session.id) || (session.cliId === "claude" && Date.now() - quiet < 30_000)) return ctx;
+    return { tokens: ctx?.tokens ?? 0, window: ctx?.window ?? null, source: ctx?.source ?? `pty:${session.id}`, completedAt: quiet };
+  };
   const sendToIdleTeamSession = async (session: typeof currentProjectSessions[number], prompt: string): Promise<boolean> => {
     if (teamDeliveryLocksRef.current.has(session.id)) return false;
     teamDeliveryLocksRef.current.add(session.id);
     try {
-      if (hasPendingSessionInput(session.id) || optimizationRunningRef.current.has(session.id)) return false;
+      const blocked = (why: string) => ((sendBlockReasonRef.current[session.id] = why), false);
+      if (hasPendingSessionInput(session.id)) return blocked("입력창에 30초 안에 친 글이 남아 있음");
+      if (optimizationRunningRef.current.has(session.id)) return blocked("세션 최적화 중");
       const claimed = Object.entries(contextSourceRef.current).filter(([id]) => id !== session.id).map(([, src]) => src);
-      const ctx = await apiGetSessionContext(session, claimed).catch(() => null);
-      if (!ctx?.completedAt || ctx.completedAt <= getLastSubmission(session.id) || hasPendingSessionInput(session.id)) return false;
+      const ctx = await getTurnContext(session, claimed);
+      if (!ctx?.completedAt || ctx.completedAt <= getLastSubmission(session.id)) return blocked("팀원이 응답 중(턴 종료 신호 대기)");
+      if (hasPendingSessionInput(session.id)) return blocked("입력창에 30초 안에 친 글이 남아 있음");
       if (!useAppStore.getState().sessions.some((s) => s.id === session.id)) return false;
       contextSourceRef.current[session.id] = ctx.source;
       await apiWriteToSession(session.id, prompt);
@@ -2111,8 +2083,10 @@ ${recentSnippet || "진행 내역 기록 없음"}
           if (stopped) break;
           try {
           const [messages, agents] = await Promise.all([apiRouteTeamMail(project), apiGetProjectAgents(project)]);
+          pruneStaleMailDeliveries(project, active.filter((s) => s.cwd === project).map((s) => s.id));
           for (const session of active.filter((s) => s.cwd === project)) {
           if (stopped || !session.agentId) continue;
+          try {
           const deliveries = getTeamMailDeliveries().filter((d) => d.project === project && d.agentId === session.agentId);
           if (deliveries.some((d) => d.kind)) continue;
           const pending = deliveries.find((d) => !d.kind);
@@ -2124,7 +2098,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
           }
           if (!pending && !message) continue;
           const claimed = Object.entries(contextSourceRef.current).filter(([id]) => id !== session.id).map(([, src]) => src);
-          const ctx = await apiGetSessionContext(session, claimed).catch(() => null);
+          const ctx = await getTurnContext(session, claimed);
           if (!ctx?.completedAt || ctx.completedAt <= getLastSubmission(session.id)) continue;
           contextSourceRef.current[session.id] = ctx.source;
           if (pending) {
@@ -2136,14 +2110,24 @@ ${recentSnippet || "진행 내역 기록 없음"}
           if (!message || stopped) continue;
           if (getTeamMailDeliveries().some((d) => d.project === project && d.agentId === session.agentId)) continue;
           const sender = agents.find((a) => a.id === message.from)?.name ?? message.from;
-          const prompt = `[팀 메시지: ${sender}] 제목: ${message.subject.replace(/[\r\n]+/g, " ")} 내용: ${message.body.replace(/[\r\n]+/g, " ")} ${mailProtocol(session.agentId, agents)}\r`;
+          const prompt = `[팀 메시지: ${sender}] 메일 ID: ${message.id}. 이미 처리한 ID면 다시 처리하지 마세요. 제목: ${message.subject.replace(/[\r\n]+/g, " ")} 내용: ${message.body.replace(/[\r\n]+/g, " ")} ${mailProtocol(session.agentId, agents)}\r`;
           const delivery = { id: message.id, agentId: session.agentId, project, sessionId: session.id, submittedAt: Date.now() };
           saveTeamMailDelivery(delivery);
-          if (!await sendToIdleTeamSession(session, prompt)) {
+          let sent: boolean;
+          try {
+            sent = await sendToIdleTeamSession(session, prompt);
+          } catch (err) {
+            removeTeamMailDelivery(project, session.agentId, message.id);
+            throw err;
+          }
+          if (!sent) {
             removeTeamMailDelivery(project, session.agentId, message.id);
             continue;
           }
           saveTeamMailDelivery({ ...delivery, submittedAt: getLastSubmission(session.id) });
+          } catch (err) {
+            console.error("Team mail delivery failed", project, session.id, err);
+          }
           }
           } catch (err) {
             console.error("Team mail routing failed", project, err);
@@ -2156,7 +2140,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
       }
     };
     void tick();
-    const id = window.setInterval(tick, 10000);
+    const id = window.setInterval(tick, 3000);
     return () => { stopped = true; window.clearInterval(id); };
   }, []);
   useEffect(() => {
@@ -2205,9 +2189,12 @@ ${recentSnippet || "진행 내역 기록 없음"}
           } catch (err) { console.error("Team goal delivery failed", err); }
         } else {
           const session = projSessions.find((s) => s.id === goal.sessionId && s.agentId === goal.agentId);
-          if (!session) continue;
+          if (!session) { // 총괄 세션이 재시작됨 → 목표를 미전달 상태로 되돌려 새 세션에 다시 전달
+            saveTeamMailDelivery({ ...goal, sessionId: "", submittedAt: 0 });
+            continue;
+          }
           const claimed = Object.entries(contextSourceRef.current).filter(([id]) => id !== session.id).map(([, src]) => src);
-          const ctx = await apiGetSessionContext(session, claimed).catch(() => null);
+          const ctx = await getTurnContext(session, claimed);
           if (ctx?.completedAt && ctx.completedAt > goal.submittedAt && ctx.completedAt > getLastSubmission(session.id)) {
             removeTeamMailDelivery(project, goal.agentId, goal.id, "goal");
           }
@@ -2216,10 +2203,38 @@ ${recentSnippet || "진행 내역 기록 없음"}
       if (goals.length > 0) continue;
       for (const delivery of getTeamMailDeliveries().filter((d) => d.project === project && d.kind)) {
         const session = projSessions.find((s) => s.id === delivery.sessionId && s.agentId === delivery.agentId);
-        if (!session) continue;
+        if (!session) {
+          // 받은 세션이 종료·재시작되면 완료 신호가 영영 오지 않아 같은 팀원의 다음 작업까지 막힘 → 기록을 버리고 새 세션에 다시 전달
+          // 단 완료 보고는 이미 처리됐을 수 있어 다시 보내면 중복 보고가 되므로 전달 완료로 표시하고 버린다
+          if (delivery.kind === "report") {
+            const sep = delivery.id.indexOf(":");
+            if (sep > 0) sent.add(`${delivery.id.slice(0, sep)}:done:${delivery.id.slice(sep + 1)}`);
+          }
+          removeTeamMailDelivery(project, delivery.agentId, delivery.id, delivery.kind);
+          continue;
+        }
         const claimed = Object.entries(contextSourceRef.current).filter(([id]) => id !== session.id).map(([, src]) => src);
-        const ctx = await apiGetSessionContext(session, claimed).catch(() => null);
-        if (!ctx?.completedAt || ctx.completedAt <= delivery.submittedAt || ctx.completedAt <= getLastSubmission(session.id)) continue;
+        const ctx = await getTurnContext(session, claimed);
+        if (!ctx?.completedAt || ctx.completedAt <= delivery.submittedAt || ctx.completedAt <= getLastSubmission(session.id)) {
+          const waitMin = Math.floor((Date.now() - delivery.submittedAt) / 60_000);
+          // 전달 2분 뒤에도 그 뒤로 출력이 전혀 없으면(입력이 먹히지 않음) 기록을 지워 재전달, 최대 3회
+          // ponytail: 입력창에 배정문이 남은 경우는 sendToIdleTeamSession이 막으므로 사용자가 지워야 함
+          if (delivery.kind === "task") {
+            const quiet = await apiGetSessionQuietSince(session.id).catch(() => null);
+            const retryKey = `agentrix_delivery_retries:${project}:${delivery.id}`;
+            const retries = Number(localStorage.getItem(retryKey) || 0);
+            if (shouldRedeliver(waitMin, quiet, delivery.submittedAt, retries)) {
+              localStorage.setItem(retryKey, String(retries + 1));
+              removeTeamMailDelivery(project, delivery.agentId, delivery.id, "task");
+              setDispatchNote(project, delivery.id, `응답 없음 ${waitMin}분 · 재전달 ${retries + 1}/3`);
+              continue;
+            }
+          }
+          if (delivery.kind === "task" && waitMin >= 5) {
+            setDispatchNote(project, delivery.id, `전달 ${new Date(delivery.submittedAt).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })} · ${waitMin}분째 완료 신호 없음`);
+          }
+          continue;
+        }
         if (delivery.kind === "report") {
           const separator = delivery.id.indexOf(":");
           if (separator < 0) continue;
@@ -2230,6 +2245,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
         localStorage.setItem(storeKey, JSON.stringify([...sent]));
         removeTeamMailDelivery(project, delivery.agentId, delivery.id, delivery.kind);
       }
+      pruneStaleDeliveries(project, projSessions.map((s) => s.id)); // 재출근으로 세션이 바뀐 묵은 기록이 새 배정을 막지 않게 정리
       const tasks = parseBoardTasks(board, agents.map((a) => a.id), Object.fromEntries(agents.map((a) => [a.id, a.name])));
       const pmSession = projSessions.find(
         (s) => s.name.includes("PM") || s.agentRole?.includes("PM") || s.agentRole?.includes("리더")
@@ -2264,8 +2280,20 @@ ${recentSnippet || "진행 내역 기록 없음"}
           continue;
         }
         const target = projSessions.find((s) => s.agentId === t.agentId);
-        if (!target) continue; // 세션이 뜨면 다음 폴링에서 재시도
-        if (getTeamMailDeliveries().some((d) => d.project === project && d.agentId === t.agentId)) continue;
+        if (!target) { // 세션이 뜨면 다음 폴링에서 재시도
+          setDispatchNote(project, t.taskId, "대기: 담당 팀원 세션이 없음 (출근 필요)");
+          continue;
+        }
+        const busy = getTeamMailDeliveries().find((d) => d.project === project && d.agentId === t.agentId);
+        if (busy) {
+          if (busy.id !== t.taskId) setDispatchNote(project, t.taskId, busy.kind === "task" ? `대기: 앞 작업(${busy.id.split(":")[0]}) 처리 중` : "대기: 앞 메일 처리 중");
+          else {
+            const hhmm = new Date(busy.submittedAt).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
+            const waitMin = Math.floor((Date.now() - busy.submittedAt) / 60_000);
+            setDispatchNote(project, t.taskId, `전달됨 ${hhmm}${waitMin >= 1 ? ` · 응답 없음 ${waitMin}분` : ""}`);
+          }
+          continue;
+        }
         try {
           const delivery = { id: t.taskId, agentId: t.agentId, project, sessionId: target.id, submittedAt: Date.now(), kind: "task" as const };
           saveTeamMailDelivery(delivery);
@@ -2274,9 +2302,11 @@ ${recentSnippet || "진행 내역 기록 없음"}
             `[PM 배정] .ai-agents/BLACKBOARD.md 작업표의 ${t.taskId} 작업을 수행하세요. 완료하면 해당 행의 상태를 ✅ 완료로 바꾸고 결과를 한 줄 메모로 남기세요. BLACKBOARD.md는 셸 명령이 아닌 파일 편집 도구로 수정하세요(한글 깨짐 방지). ${mailProtocol(t.agentId, agents)}\r`
           )) {
             removeTeamMailDelivery(project, t.agentId, t.taskId, "task");
+            setDispatchNote(project, t.taskId, `대기: ${sendBlockReasonRef.current[target.id] ?? "전달 조건 미충족"}`);
             continue;
           }
           saveTeamMailDelivery({ ...delivery, submittedAt: getLastSubmission(target.id) });
+          setDispatchNote(project, t.taskId, `전달됨 ${new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}`);
           showToast(`📋 ${t.taskId} → '${target.name}' 자동 배정`, "info");
         } catch {}
       }
@@ -2299,7 +2329,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
       } finally { polling = false; }
     };
     tick();
-    const id = window.setInterval(tick, 10000);
+    const id = window.setInterval(tick, 3000);
     return () => { stopped = true; window.clearInterval(id); };
   }, []);
 
@@ -2354,9 +2384,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
       // Alt + S: 터미널 분할 레이아웃 순환 (단일 -> 좌우 -> 상하 -> 4분할)
       if (e.altKey && e.key.toLowerCase() === "s") {
         e.preventDefault();
-        const cycle = ["single", "split-h", "split-v", "grid-4"] as const;
-        const curIdx = cycle.indexOf(splitLayout as any);
-        const nextLayout = cycle[(curIdx + 1) % cycle.length];
+        const nextLayout = nextSplitLayout(splitLayout);
         setSplitLayout(nextLayout);
         const labels: Record<string, string> = {
           single: "단일 전체 화면",
@@ -2942,7 +2970,16 @@ ${recentSnippet || "진행 내역 기록 없음"}
             {/* 4. 포커스된 CLI 한도 실시간 미니 위젯 */}
             <div
               onClick={handleCycleMiniCli}
-              className="flex items-center justify-between gap-1 text-[11px] cursor-pointer group hover:bg-slate-800/60 p-1.5 -m-1 rounded-lg transition"
+              role="button"
+              tabIndex={0}
+              aria-label={`모니터링 CLI 전환 (현재: ${activeCliName})`}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  handleCycleMiniCli();
+                }
+              }}
+              className="flex items-center justify-between gap-1 text-[11px] cursor-pointer group hover:bg-slate-800/60 p-1.5 -m-1 rounded-lg transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950"
               title="클릭하여 모니터링 CLI 전환 (Claude ↔ Antigravity ↔ Codex ↔ Grok)"
             >
               <div className="flex items-center gap-1.5 min-w-0">
@@ -3208,7 +3245,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
                       }`}
                     >
                       <span
-                        className="w-2 h-2 rounded-full shrink-0"
+                        className={`w-2 h-2 rounded-full shrink-0 ${busySessionIds.split(",").includes(s.id) ? "animate-pulse motion-reduce:animate-none" : ""}`}
                         style={{
                           backgroundColor: cliDef?.accentColor ?? "#818cf8",
                         }}
@@ -3234,56 +3271,60 @@ ${recentSnippet || "진행 내역 기록 없음"}
               Boolean(selectedProjectPath) &&
               projectSubView === "session" &&
               sessions.length > 0 && (
+                <>
+                <BoardPanel projectPath={selectedProjectPath} agents={projectAgents} />
                 <div className="flex items-center bg-slate-950 p-0.5 rounded-lg border border-slate-800 text-[11px] shrink-0 gap-0.5">
                   <button
                     onClick={() => setSplitLayout("single")}
-                    className={`px-2 py-1 rounded flex items-center gap-1 font-semibold transition ${
+                    className={`px-2 py-1 rounded flex items-center gap-1 font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950 ${
                       splitLayout === "single"
                         ? "bg-indigo-600 text-white shadow-sm"
                         : "text-slate-400 hover:text-slate-200"
                     }`}
-                    title="단일 터미널 전체 화면 (1개)"
+                    title="단일 터미널 전체 화면 (1개) · Alt+S 순환"
                   >
                     <Square className="w-3.5 h-3.5" />
                     <span className="hidden md:inline">단일</span>
                   </button>
                   <button
                     onClick={() => setSplitLayout("split-h")}
-                    className={`px-2 py-1 rounded flex items-center gap-1 font-semibold transition ${
+                    className={`px-2 py-1 rounded flex items-center gap-1 font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950 ${
                       splitLayout === "split-h"
                         ? "bg-indigo-600 text-white shadow-sm"
                         : "text-slate-400 hover:text-slate-200"
                     }`}
-                    title="양쪽 좌우 2분할 (Side by Side)"
+                    title="양쪽 좌우 2분할 (Side by Side) · Alt+S 순환"
                   >
                     <Columns2 className="w-3.5 h-3.5" />
                     <span className="hidden md:inline">좌우</span>
                   </button>
                   <button
                     onClick={() => setSplitLayout("split-v")}
-                    className={`px-2 py-1 rounded flex items-center gap-1 font-semibold transition ${
+                    className={`px-2 py-1 rounded flex items-center gap-1 font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950 ${
                       splitLayout === "split-v"
                         ? "bg-indigo-600 text-white shadow-sm"
                         : "text-slate-400 hover:text-slate-200"
                     }`}
-                    title="위아래 상하 2분할 (Stacked)"
+                    title="위아래 상하 2분할 (Stacked) · Alt+S 순환"
                   >
                     <Rows2 className="w-3.5 h-3.5" />
                     <span className="hidden md:inline">상하</span>
                   </button>
                   <button
                     onClick={() => setSplitLayout("grid-4")}
-                    className={`px-2 py-1 rounded flex items-center gap-1 font-semibold transition ${
+                    className={`px-2 py-1 rounded flex items-center gap-1 font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950 ${
                       splitLayout === "grid-4"
                         ? "bg-indigo-600 text-white shadow-sm"
                         : "text-slate-400 hover:text-slate-200"
                     }`}
-                    title="4군데 격자 4분할 (2x2 Grid)"
+                    title="4군데 격자 4분할 (2x2 Grid) · Alt+S 순환"
                   >
                     <Grid2X2 className="w-3.5 h-3.5" />
                     <span className="hidden md:inline">4분할</span>
                   </button>
+                  <kbd className="hidden lg:inline-flex items-center px-1.5 py-0.5 text-[9px] font-mono text-slate-400 bg-slate-900 rounded border border-slate-700/80 ml-1 select-none">Alt+S</kbd>
                 </div>
+                </>
               )}
           </div>
         </header>
@@ -3405,7 +3446,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
                         <button
                           key={cli.id}
                           onClick={() => handleStartRawCliSession(cli.id)}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-200 text-xs font-semibold border border-slate-700/80 hover:border-indigo-500/50 transition shadow-sm"
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-200 text-xs font-semibold border border-slate-700/80 hover:border-indigo-500/50 transition shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
                         >
                           <span
                             className="w-2.5 h-2.5 rounded-full shrink-0"
@@ -3435,12 +3476,19 @@ ${recentSnippet || "진행 내역 기록 없음"}
                     setActiveSessionId(session.id);
                     setLastFocusedCliId(session.cliId);
                   }}
-                  className={`${slotClass} flex flex-col bg-slate-950 rounded-xl overflow-hidden border transition-all ${
+                  className={`${slotClass} relative flex flex-col bg-slate-950 rounded-xl overflow-hidden border transition-all ${
                     activeSessionId === session.id
                       ? "border-indigo-500/90 ring-2 ring-indigo-500/50 shadow-lg shadow-indigo-950/60"
                       : "border-slate-800/90 hover:border-slate-700"
                   }`}
                 >
+                  {busySessionIds.split(",").includes(session.id) && (
+                    <div
+                      aria-hidden
+                      className="busy-glow absolute inset-0 z-10 rounded-xl pointer-events-none"
+                      style={{ "--busy-color": cliDef?.accentColor ?? "#6366f1" } as React.CSSProperties}
+                    />
+                  )}
                   {/* 분할 모드일 때 각 슬롯 상단 컨트롤 바 */}
                   {splitLayout !== "single" && (
                     <div className="flex items-center justify-between px-2.5 py-1 bg-slate-900/95 border-b border-slate-800 text-xs shrink-0 select-none">
@@ -3448,6 +3496,13 @@ ${recentSnippet || "진행 내역 기록 없음"}
                         <span className="px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 font-mono font-bold text-[10px] shrink-0">
                           #{slotIdx + 1}
                         </span>
+                        <kbd className="inline-flex items-center px-1.5 py-0.5 rounded bg-slate-900 text-slate-300 font-mono text-[9px] border border-slate-700/80 shrink-0 select-none">Alt+{slotIdx + 1}</kbd>
+                        {busySessionIds.split(",").includes(session.id) && (
+                          <span className="inline-flex items-center gap-1 text-[10px] text-slate-300 shrink-0">
+                            <Loader2 className="w-3 h-3 animate-spin motion-reduce:animate-none" />
+                            작업 중
+                          </span>
+                        )}
                         {sessions.length > 1 ? (
                           <Select
                             value={session.id}
@@ -3470,14 +3525,14 @@ ${recentSnippet || "진행 내역 기록 없음"}
                             setActiveSessionId(session.id);
                             setSplitLayout("single");
                           }}
-                          className="p-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition"
-                          title="이 터미널을 단일 전체 화면으로 확대"
+                          className="p-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950"
+                          title="이 터미널을 단일 전체 화면으로 확대 (Alt+1~4: 터미널 포커스)"
                         >
                           <Maximize2 className="w-3 h-3" />
                         </button>
                         <button
                           onClick={(e) => handleStopSession(session.id, e)}
-                          className="p-1 rounded text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition"
+                          className="p-1 rounded text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950"
                           title="세션 종료"
                         >
                           <X className="w-3 h-3" />
@@ -3497,6 +3552,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
                       isFocused={activeSessionId === session.id}
                       splitActive={splitLayout !== "single"}
                       projectAgentCount={sameProjCount}
+                      collabRules={session.agentId ? collabProtocol(session.agentId, projectAgents) : ""}
                       estimatedTokens={sessionTokens[session.id] || 0}
                       contextThresholdTokens={tokenOptConfig.contextThresholdTokens}
                       onBroadcastPrompt={handleBroadcastPrompt}

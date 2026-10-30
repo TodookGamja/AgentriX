@@ -341,6 +341,11 @@ export async function apiGetSessionContext(
   });
 }
 
+export async function apiGetSessionQuietSince(sessionId: string): Promise<number | null> {
+  if (!isTauriRuntime()) return null;
+  return invoke<number | null>("get_session_quiet_since", { sessionId });
+}
+
 export async function apiResizeSession(
   sessionId: string,
   cols: number,

@@ -276,7 +276,7 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
           </div>
           <button
             onClick={onClose}
-            className="p-1 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition"
+            className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 p-1 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition"
           >
             <X className="w-4 h-4" />
           </button>
@@ -287,7 +287,7 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
           <button
             type="button"
             onClick={() => setActiveTab("cli")}
-            className={`px-3.5 py-2 text-xs font-bold border-b-2 transition flex items-center gap-1.5 ${
+            className={`focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 px-3.5 py-2 text-xs font-bold border-b-2 transition flex items-center gap-1.5 ${
               activeTab === "cli"
                 ? "border-indigo-500 text-indigo-400"
                 : "border-transparent text-slate-400 hover:text-slate-200"
@@ -299,7 +299,7 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
           <button
             type="button"
             onClick={() => setActiveTab("api")}
-            className={`px-3.5 py-2 text-xs font-bold border-b-2 transition flex items-center gap-1.5 ${
+            className={`focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 px-3.5 py-2 text-xs font-bold border-b-2 transition flex items-center gap-1.5 ${
               activeTab === "api"
                 ? "border-indigo-500 text-indigo-400"
                 : "border-transparent text-slate-400 hover:text-slate-200"
@@ -356,7 +356,7 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
                             name="cli_choice"
                             checked={isSelected}
                             onChange={() => setSelectedCli(item.id)}
-                            className="text-indigo-600 focus:ring-indigo-500"
+                            className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 text-indigo-600 focus:ring-indigo-500"
                           />
                           {item.name}
                         </span>
@@ -404,7 +404,7 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
                         key={i}
                         type="button"
                         onClick={() => handleApplyDetectedCred(c)}
-                        className="px-2.5 py-1 rounded-md bg-white dark:bg-slate-800 border border-indigo-300 dark:border-indigo-700/60 hover:border-indigo-500 text-[11px] font-semibold text-slate-700 dark:text-slate-200 shadow-sm transition flex items-center gap-1.5"
+                        className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 px-2.5 py-1 rounded-md bg-white dark:bg-slate-800 border border-indigo-300 dark:border-indigo-700/60 hover:border-indigo-500 text-[11px] font-semibold text-slate-700 dark:text-slate-200 shadow-sm transition flex items-center gap-1.5"
                       >
                         <Zap className="w-3 h-3 text-amber-500" />
                         <span>{c.source}</span>
@@ -424,7 +424,7 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
                       key={p}
                       type="button"
                       onClick={() => handleProviderChange(p)}
-                      className={`px-2.5 py-2 rounded-lg border text-[11px] font-semibold transition text-center ${
+                      className={`focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 px-2.5 py-2 rounded-lg border text-[11px] font-semibold transition text-center ${
                         isSelected
                           ? "bg-indigo-600 text-white border-indigo-500 shadow-sm"
                           : "bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700"
@@ -452,12 +452,12 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
                         value={config.apiKey}
                         onChange={(e) => setConfig({ ...config, apiKey: e.target.value.trim() })}
                         placeholder={`${config.provider === "anthropic" ? "sk-ant-..." : config.provider === "openai" ? "sk-..." : "AI API 키를 입력하세요"}`}
-                        className="w-full px-3 py-2 pr-10 rounded-lg bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs font-mono text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+                        className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 w-full px-3 py-2 pr-10 rounded-lg bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs font-mono text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/40"
                       />
                       <button
                         type="button"
                         onClick={() => setShowKey(!showKey)}
-                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                        className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
                       >
                         {showKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                       </button>
@@ -473,7 +473,7 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
                       value={config.baseUrl || "http://localhost:11434"}
                       onChange={(e) => setConfig({ ...config, baseUrl: e.target.value.trim() })}
                       placeholder="http://localhost:11434"
-                      className="w-full px-3 py-2 rounded-lg bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs font-mono text-slate-800 dark:text-slate-100 focus:outline-none focus:border-indigo-500"
+                      className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 w-full px-3 py-2 rounded-lg bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs font-mono text-slate-800 dark:text-slate-100 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/40"
                     />
                   </div>
                 )}
@@ -497,7 +497,7 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
                       type="button"
                       onClick={handleTestConnection}
                       disabled={testStatus.testing || (!config.apiKey && config.provider !== "ollama")}
-                      className="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 border border-slate-700 text-xs font-semibold flex items-center gap-1.5 transition"
+                      className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 border border-slate-700 text-xs font-semibold flex items-center gap-1.5 transition"
                     >
                       {testStatus.testing ? (
                         <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-400" />
@@ -552,7 +552,7 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
                           key={c.id}
                           type="button"
                           onClick={() => toggleTeamCli(c.id)}
-                          className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold transition ${
+                          className={`focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold transition ${
                             on
                               ? "bg-indigo-600 text-white border-indigo-500"
                               : "bg-slate-900 text-slate-400 border-slate-700 hover:border-slate-500"
@@ -569,16 +569,25 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
 
 {/* 섹션 1.6: 팀 구성 요청 (이름·역할 직접 지정) */}
               <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
-                <label className="text-xs font-bold text-slate-200 flex items-center gap-2">
+                <label className="text-xs font-bold text-slate-200 flex items-center gap-2 justify-between">
+                  <span className="flex items-center gap-2">
                   <UserPlus className="w-4 h-4 text-indigo-400" />
                   팀 구성 요청 (선택)
+                  </span>
+                  <span className="text-[10px] text-slate-400 flex items-center gap-1 font-normal"><kbd className="px-1.5 py-0.5 text-[9px] font-mono text-slate-300 bg-slate-900 rounded border border-slate-700 select-none">Ctrl+Enter</kbd> 실행</span>
                 </label>
                 <textarea
+                  onKeyDown={(e) => {
+                    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+                      e.preventDefault();
+                      if (!isAnalyzing) handleRunDeepAnalysis();
+                    }
+                  }}
                   value={requestText}
                   onChange={(e) => setRequestText(e.target.value)}
                   rows={2}
                   placeholder='예: 프론트엔드 담당은 "미라", QA는 "준"으로 해줘. 보안 검토 역할도 꼭 넣어줘.'
-                  className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 resize-none"
+                  className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/40 resize-none"
                 />
                 <p className="text-[10px] text-slate-500">
                   추천 후에도 아래 카드에서 이름과 역할을 직접 고칠 수 있습니다. 팀원끼리는 이 이름으로 서로를 부르며 소통합니다.
@@ -656,7 +665,7 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
                           value={ag.name}
                           onChange={(e) => updateAgent(idx, { name: e.target.value })}
                           aria-label="에이전트 이름"
-                          className={`w-full bg-transparent font-bold text-xs text-slate-900 dark:text-slate-100 border-b focus:outline-none focus:border-indigo-500 ${
+                          className={`focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 w-full bg-transparent font-bold text-xs text-slate-900 dark:text-slate-100 border-b focus:outline-none focus:border-indigo-500 ${
                             nameKeys[idx] === "" || nameKeys.indexOf(nameKeys[idx]) !== idx ? "border-rose-500" : "border-transparent hover:border-slate-600"
                           }`}
                         />
@@ -664,7 +673,7 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
                           value={ag.roleTitle}
                           onChange={(e) => updateAgent(idx, { roleTitle: e.target.value })}
                           aria-label="에이전트 역할"
-                          className="w-full bg-transparent text-[10px] text-slate-500 dark:text-slate-400 font-medium border-b border-transparent hover:border-slate-600 focus:outline-none focus:border-indigo-500"
+                          className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 w-full bg-transparent text-[10px] text-slate-500 dark:text-slate-400 font-medium border-b border-transparent hover:border-slate-600 focus:outline-none focus:border-indigo-500"
                         />
                       </div>
                       <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-slate-950 border border-slate-800 text-indigo-400 font-semibold uppercase">
@@ -686,7 +695,7 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition"
+            className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition"
           >
             닫기
           </button>
@@ -697,7 +706,7 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
                 type="button"
                 onClick={handleRunDeepAnalysis}
                 disabled={isAnalyzing || (activeTab === "api" && !config.apiKey && config.provider !== "ollama")}
-                className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 via-fuchsia-600 to-pink-600 hover:from-indigo-500 hover:to-pink-500 disabled:opacity-50 text-white text-xs font-bold shadow-lg flex items-center gap-2 transition"
+                className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 px-5 py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 via-fuchsia-600 to-pink-600 hover:from-indigo-500 hover:to-pink-500 disabled:opacity-50 text-white text-xs font-bold shadow-lg flex items-center gap-2 transition"
               >
                 {isAnalyzing ? (
                   <>
@@ -717,7 +726,7 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
                 type="button"
                 onClick={handleRunDeepAnalysis}
                 disabled={isAnalyzing}
-                className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 text-xs font-semibold flex items-center gap-2 transition"
+                className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 text-xs font-semibold flex items-center gap-2 transition"
               >
                 {isAnalyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
                 <span>다시 추천</span>
@@ -727,7 +736,7 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
                 onClick={handleConfirmApply}
                 disabled={nameProblem}
                 title={nameProblem ? "이름이 비어 있거나 겹칩니다" : undefined}
-                className="disabled:opacity-50 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-lg flex items-center gap-2 transition"
+                className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 disabled:opacity-50 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-lg flex items-center gap-2 transition"
               >
                 <UserPlus className="w-4 h-4" />
                 <span>이 AI 팀을 프로젝트에 즉시 적용</span>

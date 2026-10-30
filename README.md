@@ -44,6 +44,8 @@
 - **AI Deep Team Builder**: Connect your choice of LLM (Claude, GPT-4o, Gemini, Groq, Ollama) to deeply inspect the codebase and automatically design 3–5 specialized agent personas and system prompts.
 - **Persistent Roster**: Agent team configurations are permanently stored in local SQLite database.
 - **One-Click Team Summon (`🚀 Summon All Agents`)**: Instantly launch all assigned team member sessions at once.
+- **Task Board Panel**: Header button opens a 4-column kanban (pending / in progress / done / rejected) of `.ai-agents/BLACKBOARD.md`, with manual approval and the latest 5 done cards.
+- **Busy Indicator**: Terminals that are producing output glow in their CLI color with a "working" spinner in the pane header (static border with reduced motion).
 
 #### 4. ⚡ Token Optimization & Smart Auto-Handoff Relay
 - **Two-Stage Context Guard**: Automatically attempts `/compact` compression first; triggers seamless session relay if usage remains critical.
@@ -76,7 +78,7 @@
 ### 🛠️ Quick Start
 
 #### Download Portable Binary (No Installation Required)
-1. Download `AgentriX-Portable-v1.0.0-win-x64.zip` or `AgentriX.exe` from [GitHub Releases](https://github.com/TodookGamja/AgentriX/releases).
+1. Download `AgentriX-Portable-v1.0.3-win-x64.zip` or `AgentriX.exe` from [GitHub Releases](https://github.com/TodookGamja/AgentriX/releases).
 2. Extract or place into any folder and double-click to run.
 
 #### Build from Source
@@ -126,6 +128,8 @@ build_release.bat
   - API 연결 테스트, 모델 선택, 원클릭 일괄 적용 지원
 - **영구 보존**: 직접 [삭제]를 누르지 않는 한 앱을 껐다 켜도 편성된 에이전트 팀이 SQLite DB에 영구 유지
 - **원클릭 일괄 출근 (`🚀 팀 전원 일괄 출근`)**: 앱 재실행 후 버튼 하나로 편성된 모든 에이전트 세션 동시 복원
+- **작업보드 패널**: 헤더 버튼으로 `.ai-agents/BLACKBOARD.md`를 4열 칸반(승인 대기/진행 중/완료/반려)으로 확인, 수동 승인과 최근 완료 5개 표시
+- **작업 중 표시**: 출력 중인 터미널은 CLI 색 테두리가 맥동하고 칸 헤더에 "작업 중" 스피너 표시 (동작 줄이기 설정 시 정적 테두리)
 
 #### 4. ⚡ 토큰 최적화 & 스마트 자동 세션 릴레이 (Auto-Handoff Relay)
 - **컴팩트 1회 후에도 가득일 때 자동 릴레이**: 임계치 도달 시 1차 `/compact` 압축을 자동 시도하며, 압축 후에도 토큰이 초과되면 새 세션으로 연계
@@ -159,7 +163,7 @@ build_release.bat
 ### 🛠️ 빠른 시작
 
 #### 포터블 바이너리 실행 (무설치)
-1. [Releases](https://github.com/TodookGamja/AgentriX/releases) 탭에서 최신 `AgentriX-Portable-v1.0.0-win-x64.zip` 또는 `AgentriX.exe` 다운로드
+1. [Releases](https://github.com/TodookGamja/AgentriX/releases) 탭에서 최신 `AgentriX-Portable-v1.0.3-win-x64.zip` 또는 `AgentriX.exe` 다운로드
 2. 원하는 폴더에 넣고 바로 더블클릭하여 실행
 
 #### 소스코드 빌드

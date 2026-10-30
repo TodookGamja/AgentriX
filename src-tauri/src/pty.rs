@@ -50,6 +50,13 @@ pub struct OutputBuffer {
     /// data[0]의 절대 위치 (지금까지 잘라낸 바이트 수)
     start: usize,
     data: Vec<u8>,
+    /// 마지막 출력 시각(ms). 로그로 턴 종료를 못 읽는 CLI의 유휴 판정용
+    last_output_ms: i64,
+}
+
+/// 출력이 quiet_ms 이상 멈췄으면 마지막 출력 시각을 돌려준다
+fn quiet_since(last_output_ms: i64, now_ms: i64, quiet_ms: i64) -> Option<i64> {
+    (last_output_ms > 0 && now_ms - last_output_ms >= quiet_ms).then_some(last_output_ms)
 }
 
 #[derive(Default, Clone)]
@@ -220,6 +227,7 @@ impl PtyManager {
                         {
                             let mut locked = buffer_clone.lock().unwrap();
                             locked.data.extend_from_slice(chunk_bytes);
+                            locked.last_output_ms = Utc::now().timestamp_millis();
                             if locked.data.len() > 524_288 {
                                 let drain_len = locked.data.len() - 393_216;
                                 locked.data.drain(..drain_len);
@@ -351,6 +359,12 @@ impl PtyManager {
         })
     }
 
+    pub fn output_quiet_since(&self, session_id: &str, quiet_ms: i64) -> Option<i64> {
+        let sessions = self.sessions.lock().unwrap();
+        let last = sessions.get(session_id)?.output_buffer.lock().unwrap().last_output_ms;
+        quiet_since(last, Utc::now().timestamp_millis(), quiet_ms)
+    }
+
     pub fn stop_session(&self, session_id: &str) -> Result<(), String> {
         let mut sessions = self.sessions.lock().unwrap();
         if let Some(mut session) = sessions.remove(session_id) {
@@ -474,9 +488,10 @@ fn build_platform_command(
             ]);
             return (cmd, label);
         } else {
+            let args = init_cmd.split_whitespace().map(|s| format!("'{}'", ps_escape_single_quoted(s))).collect::<Vec<_>>().join(" ");
             let ps_script = format!(
-                "Set-Location -LiteralPath '{}'; {}Write-Host '[AI CLI Manager] 작업 폴더: {}' -ForegroundColor DarkCyan; {}{}",
-                escaped_cwd, agent_banner, escaped_cwd, init_cmd, auto_flags
+                "Set-Location -LiteralPath '{}'; {}Write-Host '[AI CLI Manager] 작업 폴더: {}' -ForegroundColor DarkCyan; & {}{}",
+                escaped_cwd, agent_banner, escaped_cwd, args, auto_flags
             );
             let mut cmd = CommandBuilder::new("powershell.exe");
             cmd.args([
@@ -518,7 +533,7 @@ fn build_platform_command(
     let mut cmd = CommandBuilder::new("powershell.exe");
     let banner = format!(
         "Set-Location -LiteralPath '{}'; {}Write-Host '[AI CLI Manager] 작업 폴더: {}' -ForegroundColor DarkCyan; Write-Host '[AI CLI Manager] {} 실행 파일을 PATH에서 찾지 못해 PowerShell 대체 세션으로 시작했습니다.' -ForegroundColor Yellow; Write-Host '로그인 또는 설치 명령: {}' -ForegroundColor Cyan",
-        escaped_cwd, agent_banner, escaped_cwd, cli_def.name, cli_def.login_command
+        escaped_cwd, agent_banner, escaped_cwd, ps_escape_single_quoted(&cli_def.name), ps_escape_single_quoted(&cli_def.login_command)
     );
     cmd.args(["-NoLogo", "-NoExit", "-Command", &banner]);
     (cmd, "powershell.exe (fallback)".to_string())
@@ -527,6 +542,42 @@ fn build_platform_command(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn initial_command_and_fallback_are_quoted() {
+        let mut cli = crate::cli::builtin_clis().into_iter().find(|c| c.id == "codex").unwrap();
+        let (cmd, _) = build_platform_command(&cli, Some("calc; #"), "C:\\project", None);
+        let script = cmd.get_argv().last().unwrap().to_string_lossy();
+        assert!(script.contains("& 'calc;' '#'"));
+        cli.resolved_binary = None;
+        cli.name = "name'; calc; #".into();
+        cli.login_command = "login'; calc; #".into();
+        let (cmd, _) = build_platform_command(&cli, None, "C:\\project", None);
+        let script = cmd.get_argv().last().unwrap().to_string_lossy();
+        assert!(script.contains("name''; calc; #"));
+        assert!(script.contains("login''; calc; #"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn initial_command_does_not_execute_injected_powershell() {
+        use std::os::windows::process::CommandExt;
+        let marker = std::env::temp_dir().join(format!("agentrix-injection-{}", uuid::Uuid::new_v4()));
+        let cli = crate::cli::builtin_clis().into_iter().find(|c| c.id == "codex").unwrap();
+        let input = format!("Write-Output; New-Item -ItemType File -Path '{}'", marker.display());
+        let cwd = std::env::temp_dir();
+        let (cmd, _) = build_platform_command(&cli, Some(&input), cwd.to_str().unwrap(), None);
+        let script = cmd.get_argv().last().unwrap();
+        let _ = std::process::Command::new("powershell.exe").args(["-NoProfile", "-Command"]).arg(script).creation_flags(0x08000000).output().unwrap();
+        assert!(!marker.exists());
+    }
+
+    #[test]
+    fn quiet_since_only_after_output_stops_long_enough() {
+        assert_eq!(quiet_since(0, 50_000, 10_000), None); // 출력이 한 번도 없으면 판정 안 함
+        assert_eq!(quiet_since(45_000, 50_000, 10_000), None);
+        assert_eq!(quiet_since(40_000, 50_000, 10_000), Some(40_000));
+    }
 
     #[test]
     fn agent_launch_uses_selected_permissions_without_adding_a_sandbox() {

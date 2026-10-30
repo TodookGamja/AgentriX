@@ -547,6 +547,7 @@ fn get_project_deep_context(project_path: String) -> Result<db::ProjectDeepConte
 }
 
 fn run_quiet(prog: &str, args: &[&str], dir: Option<&std::path::Path>) -> Option<String> {
+    if std::iter::once(prog).chain(args.iter().copied()).any(|arg| arg.chars().any(|c| matches!(c, '&' | '|' | '<' | '>' | '^' | '%' | '!' | '(' | ')' | '"' | '\r' | '\n'))) { return None; }
     #[cfg(windows)]
     let mut cmd = {
         use std::os::windows::process::CommandExt;
@@ -561,6 +562,32 @@ fn run_quiet(prog: &str, args: &[&str], dir: Option<&std::path::Path>) -> Option
     if let Some(d) = dir { cmd.current_dir(d); }
     let out = cmd.output().ok()?;
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+#[cfg(test)]
+#[test]
+fn run_quiet_rejects_shell_metacharacters() {
+    assert!(run_quiet("git", &["status & calc.exe"], None).is_none());
+    assert!(run_quiet("git", &["%PATH%"], None).is_none());
+}
+
+#[cfg(all(test, windows))]
+#[test]
+fn batch_prompt_cannot_inject_commands() {
+    use std::os::windows::process::CommandExt;
+    let dir = std::env::temp_dir().join(format!("agentrix-batch-test-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&dir).unwrap();
+    let script = dir.join("test.cmd");
+    let marker = dir.join("injected");
+    std::fs::write(&script, "@echo off\r\necho %1\r\nexit /b 0\r\n").unwrap();
+    let output = std::process::Command::new(&script).arg("normal").creation_flags(0x08000000).output().unwrap();
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("normal"));
+    std::fs::write(&script, "@echo off\r\nexit /b 0\r\n").unwrap();
+    let status = std::process::Command::new(&script).arg(format!("& type nul > {}", marker.display())).creation_flags(0x08000000).status().unwrap();
+    assert!(status.success());
+    assert!(!marker.exists());
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 /// 설치된 Claude 플러그인의 마켓플레이스 저장소를 fetch해 설치 버전보다 새 버전이 있는지 확인
@@ -816,13 +843,8 @@ async fn run_cli_deep_analysis(
 
     let is_batch = effective_binary.to_lowercase().ends_with(".cmd") || effective_binary.to_lowercase().ends_with(".bat");
 
-    let mut cmd = if is_batch {
-        let mut c = std::process::Command::new("cmd.exe");
-        c.arg("/D").arg("/C").arg(&effective_binary);
-        c
-    } else {
-        std::process::Command::new(&effective_binary)
-    };
+    if is_batch { effective_binary = effective_binary.replace(['\r', '\n'], " "); }
+    let mut cmd = std::process::Command::new(&effective_binary);
 
     cmd.current_dir(&norm_path);
 
@@ -887,6 +909,13 @@ async fn get_session_context(
     tokio::task::spawn_blocking(move || context::read_context(&cli_id, &session_id, &cwd, &started_at, &claimed))
         .await
         .map_err(|e| e.to_string())
+}
+
+/// 로그로 턴 종료를 못 읽는 CLI용: 터미널 출력이 10초 멈춘 시각 (팀 배정 유휴 판정)
+/// ponytail: 진행 표시 없이 10초 넘게 조용히 일하는 CLI면 유휴로 오판, 그런 CLI가 생기면 리더 함수로 로그 판정 추가
+#[tauri::command]
+fn get_session_quiet_since(state: State<'_, AppState>, session_id: String) -> Option<i64> {
+    state.pty.output_quiet_since(&session_id, 10_000)
 }
 
 #[tauri::command]
@@ -1307,6 +1336,7 @@ fn check_app_update() -> Result<AppUpdateInfo, String> {
 
 #[tauri::command]
 fn open_external_url(url: String) -> Result<(), String> {
+    if !valid_external_url(&url) { return Err("허용되지 않은 URL입니다.".into()); }
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
@@ -1326,40 +1356,18 @@ fn open_external_url(url: String) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
-fn download_and_save_update(url: String, filename: Option<String>) -> Result<String, String> {
-    let download_dir = dirs::download_dir().unwrap_or_else(|| {
-        dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")).join("Downloads")
-    });
-    let _ = std::fs::create_dir_all(&download_dir);
-
-    let fname = filename.unwrap_or_else(|| {
-        url.split('/').last().unwrap_or("AgentriX_update.exe").to_string()
-    });
-    let target_path = download_dir.join(&fname);
-
-    let resp = ureq::get(&url)
-        .set("User-Agent", "AgentriX-Updater")
-        .call()
-        .map_err(|e| format!("다운로드 요청 실패: {}", e))?;
-
-    let mut reader = resp.into_reader();
-    let mut file = std::fs::File::create(&target_path)
-        .map_err(|e| format!("파일 생성 실패: {}", e))?;
-    std::io::copy(&mut reader, &mut file)
-        .map_err(|e| format!("파일 저장 실패: {}", e))?;
-
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        let mut cmd = std::process::Command::new("explorer");
-        cmd.arg(format!("/select,{}", target_path.to_string_lossy()));
-        cmd.creation_flags(0x08000000);
-        let _ = cmd.spawn();
-    }
-
-    Ok(target_path.to_string_lossy().to_string())
+fn valid_external_url(url: &str) -> bool {
+    !url.chars().any(|c| c.is_whitespace() || c == '\'' || c == '"' || c.is_control())
+        && tauri::Url::parse(url).is_ok_and(|parsed| matches!(parsed.scheme(), "http" | "https") && parsed.host_str().is_some())
 }
+
+#[cfg(test)]
+#[test]
+fn external_url_rejects_local_paths_and_unsafe_schemes() {
+    assert!(valid_external_url("https://example.com/path"));
+    for url in [r"C:\Windows\System32\calc.exe", "file:///C:/calc.exe", "javascript:alert(1)", "https://example.com/a b", "https://example.com/'x'"] { assert!(!valid_external_url(url)); }
+}
+
 
 #[derive(serde::Serialize, Clone, Debug)]
 pub struct UpdateProgressPayload {
@@ -1379,8 +1387,54 @@ async fn perform_in_app_update(app: tauri::AppHandle, download_url: String) -> R
     .map_err(|e| format!("업데이트 태스크 실행 오류: {}", e))?
 }
 
+const UPDATE_PUBLIC_KEY: &str = "";
+
+fn valid_update_url(url: &str) -> bool {
+    let Some(path) = url.strip_prefix("https://github.com/TodookGamja/AgentriX/releases/download/") else { return false; };
+    let parts: Vec<_> = path.split('/').collect();
+    parts.len() == 2 && parts.iter().all(|part| !part.is_empty() && !part.contains("..") && part.bytes().all(|c| c.is_ascii_alphanumeric() || b"-_.".contains(&c)))
+}
+
+#[cfg(test)]
+mod update_security_tests {
+    use super::*;
+    use base64::Engine;
+
+    #[test]
+    fn update_urls_are_restricted() {
+        assert!(valid_update_url("https://github.com/TodookGamja/AgentriX/releases/download/v1.0/AgentriX.exe"));
+        for url in ["http://github.com/TodookGamja/AgentriX/releases/download/v1/a.exe", "https://evil.com/TodookGamja/AgentriX/releases/download/v1/a.exe", "https://github.com/TodookGamja/AgentriX/releases/download/../a.exe", "https://github.com/TodookGamja/AgentriX/releases/download/%2e/a.exe", "https://github.com/TodookGamja/AgentriX/releases/download/v1/a.exe?x=1"] { assert!(!valid_update_url(url)); }
+    }
+
+    #[test]
+    fn rejects_mismatched_signature() {
+        let key = "untrusted comment: public key\nRWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3";
+        let sig = "untrusted comment: signature from minisign secret key\nRUQf6LRCGA9i559r3g7V1qNyJDApGip8MfqcadIgT9CuhV3EMhHoN1mGTkUidF/z7SrlQgXdy8ofjb7bNJJylDOocrCo8KLzZwo=\ntrusted comment: timestamp:1633700835\tfile:test\tprehashed\nwLMDjy9FLAuxZ3q4NlEvkgtyhrr0gtTu6KC4KBJdITbbOeAi1zBIYo0v4iTgt8jJpIidRJnp94ABQkJAgAooBQ==";
+        let b64 = base64::engine::general_purpose::STANDARD;
+        assert!(verify_update(&b64.encode(key), &b64.encode(sig), b"test").is_ok());
+        assert!(verify_update(&b64.encode(key), &b64.encode(sig), b"tampered").is_err());
+    }
+}
+
+fn verify_update(key: &str, signature: &str, data: &[u8]) -> Result<(), String> {
+    use base64::Engine;
+    let decode = |s: &str| -> Result<String, String> {
+        let bytes = base64::engine::general_purpose::STANDARD.decode(s.trim()).map_err(|e| e.to_string())?;
+        String::from_utf8(bytes).map_err(|e| e.to_string())
+    };
+    let key_text = decode(key)?;
+    let signature_text = decode(signature)?;
+    let public_key = minisign_verify::PublicKey::decode(&key_text).map_err(|e| e.to_string())?;
+    let signature = minisign_verify::Signature::decode(&signature_text).map_err(|e| e.to_string())?;
+    public_key.verify(data, &signature, true).map_err(|e| e.to_string())
+}
+
 fn do_perform_in_app_update(app: tauri::AppHandle, download_url: String) -> Result<(), String> {
     use std::io::{Read, Write};
+
+    if !valid_update_url(&download_url) { return Err("허용되지 않은 업데이트 URL입니다.".into()); }
+    if UPDATE_PUBLIC_KEY.is_empty() { return Err("업데이트 공개 키가 설정되지 않았습니다.".into()); }
+    let signature = ureq::get(&format!("{}.sig", download_url)).set("User-Agent", "AgentriX-SelfUpdater").call().map_err(|e| e.to_string())?.into_string().map_err(|e| e.to_string())?;
 
     let _ = app.emit("update-progress", UpdateProgressPayload {
         status: "downloading".to_string(),
@@ -1451,6 +1505,12 @@ fn do_perform_in_app_update(app: tauri::AppHandle, download_url: String) -> Resu
         }
     }
     drop(file);
+
+    let data = std::fs::read(&temp_exe).map_err(|e| e.to_string())?;
+    if let Err(e) = verify_update(UPDATE_PUBLIC_KEY, &signature, &data) {
+        let _ = std::fs::remove_file(&temp_exe);
+        return Err(format!("업데이트 서명 검증 실패: {e}"));
+    }
 
     // 유효성 검증: 크기 및 PE 헤더 확인
     let meta = std::fs::metadata(&temp_exe).map_err(|e| e.to_string())?;
@@ -1708,6 +1768,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             get_session_context,
+            get_session_quiet_since,
             detect_clis,
             add_custom_cli,
             delete_custom_cli,
@@ -1768,7 +1829,6 @@ fn main() {
             app_window_is_maximized,
             check_app_update,
             open_external_url,
-            download_and_save_update,
             perform_in_app_update,
             reset_app_data,
             save_clipboard_image,

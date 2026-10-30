@@ -26,6 +26,18 @@ import {
   apiWriteToSession,
 } from "../lib/tauriBridge";
 import { FilePickerModal } from "./FilePickerModal";
+import { isTerminalReport, shouldResizePty } from "../lib/terminalReplay";
+
+// 한 번이라도 마운트된 세션 (재마운트 = 버퍼 재생 판정용)
+const mountedSessionIds = new Set<string>();
+// 세션별 마지막으로 PTY에 보낸 크기 (재마운트 후에도 같은 크기 재전송 방지)
+const lastPtySize = new Map<string, { cols: number; rows: number }>();
+function sendPtySize(sessionId: string, cols: number, rows: number) {
+  const next = { cols, rows };
+  if (!shouldResizePty(lastPtySize.get(sessionId) ?? null, next)) return;
+  lastPtySize.set(sessionId, next);
+  apiResizeSession(sessionId, cols, rows).catch(() => {});
+}
 
 interface TerminalPaneProps {
   session: SessionInfo;
@@ -35,6 +47,7 @@ interface TerminalPaneProps {
   isFocused?: boolean;
   splitActive?: boolean;
   projectAgentCount?: number;
+  collabRules?: string;
   estimatedTokens?: number;
   contextThresholdTokens?: number;
   onBroadcastPrompt?: (text: string) => Promise<void>;
@@ -61,6 +74,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
   isFocused = false,
   splitActive = false,
   projectAgentCount = 1,
+  collabRules = "",
   estimatedTokens = 0,
   contextThresholdTokens = 100000,
   onBroadcastPrompt,
@@ -342,7 +356,12 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       } catch {}
     }
 
+    // 재마운트 재생 중 xterm이 옛 질의에 다시 답한 자동 응답은 PTY로 보내지 않는다.
+    // 첫 마운트는 CLI 시작 시 커서 위치 질의(codex 등)에 답해야 하므로 막지 않음
+    let replaying = mountedSessionIds.has(session.id);
+    mountedSessionIds.add(session.id);
     const dataDisposable = term.onData((data) => {
+      if (replaying && isTerminalReport(data)) return;
       apiWriteToSession(session.id, data).catch(console.error);
       if (data.includes("\r") && onActivity) {
         onActivity();
@@ -362,9 +381,15 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
         cursorRef.current = chunk.nextCursor;
         if (chunk.data && chunk.data.length > 0) {
           // 스크롤을 강제로 내리지 않는다: 맨 아래에 있으면 xterm이 알아서 따라가고, 위로 올려 둔 경우엔 그대로 둔다.
-          term.write(chunk.data);
-          if (replayed) onOutputChunkRef.current?.(session.id, chunk.data);
+          if (replayed) {
+            term.write(chunk.data);
+            onOutputChunkRef.current?.(session.id, chunk.data);
+          } else {
+            term.write(chunk.data, () => { replaying = false; });
+          }
           replayed = true;
+        } else if (!replayed) {
+          replaying = false;
         }
       } catch {
         // 세션 종료 시 무시
@@ -373,18 +398,23 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       }
     }, 55);
 
+    // 화면 전환 중 잠깐 변하는 크기로 CLI가 다시 그리지 않도록, 크기가 멈춘 뒤에만 맞춘다
+    let resizeTimer: number | undefined;
     const resizeObserver = new ResizeObserver(() => {
+      window.clearTimeout(resizeTimer);
+      resizeTimer = window.setTimeout(() => {
       if (!containerRef.current || containerRef.current.clientWidth === 0) {
         return;
       }
       try {
         fitAddon.fit();
         if (term.cols > 0 && term.rows > 0) {
-          apiResizeSession(session.id, term.cols, term.rows).catch(() => {});
+          sendPtySize(session.id, term.cols, term.rows);
         }
       } catch {
         // ignore layout transition
       }
+      }, 120);
     });
     resizeObserver.observe(container);
 
@@ -406,7 +436,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       try {
         fitAddon.fit();
         if (term.cols > 0 && term.rows > 0) {
-          apiResizeSession(session.id, term.cols, term.rows).catch(() => {});
+          sendPtySize(session.id, term.cols, term.rows);
         }
       } catch {
         // ignore
@@ -416,6 +446,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     return () => {
       active = false;
       window.clearInterval(pollInterval);
+      window.clearTimeout(resizeTimer);
       resizeObserver.disconnect();
       container.removeEventListener("paste", handlePaste);
       dataDisposable.dispose();
@@ -429,9 +460,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       const timer = setTimeout(() => {
         try {
           fitAddonRef.current?.fit();
-          const cols = termRef.current?.cols ?? 100;
-          const rows = termRef.current?.rows ?? 30;
-          apiResizeSession(session.id, cols, rows).catch(() => {});
+          if (termRef.current) sendPtySize(session.id, termRef.current.cols, termRef.current.rows);
         } catch {
           // ignore
         }
@@ -451,7 +480,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     if (!session.rolePrompt) return;
     const fName =
       session.cwd?.split(/[/\\]/).filter(Boolean).pop() || session.cwd;
-    const briefing = `[프로젝트 '${fName}' 에이전트 역할 부여] 당신은 '${session.agentName ?? session.name}' (${session.agentRole ?? "전담 에이전트"})입니다. 지침: ${session.rolePrompt} (.ai-agents/agents/${session.agentId}/ROLE.md 및 .ai-agents/BLACKBOARD.md 파일을 함께 참고하여 이 프로젝트 범위 내에서만 임무를 수행하세요.)\r`;
+    const briefing = `[프로젝트 '${fName}' 에이전트 역할 부여] 당신은 '${session.agentName ?? session.name}' (${session.agentRole ?? "전담 에이전트"})입니다. 지침: ${session.rolePrompt} (.ai-agents/agents/${session.agentId}/ROLE.md 및 .ai-agents/BLACKBOARD.md 파일을 함께 참고하여 이 프로젝트 범위 내에서만 임무를 수행하세요.) ${collabRules}\r`;
     await apiWriteToSession(session.id, briefing);
     termRef.current?.scrollToBottom();
     termRef.current?.focus();
@@ -580,7 +609,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
           {/* 토큰 사용량 & 스마트 인수인계 릴레이 버튼 */}
           <button
             onClick={onOpenTokenOptimization}
-            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border transition text-[11px] font-bold whitespace-nowrap shrink-0 shadow-sm ${
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border transition text-[11px] font-bold whitespace-nowrap shrink-0 shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 ${
               estimatedTokens >= (contextThresholdTokens || 100000) * 0.85
                 ? "bg-amber-100 text-amber-950 border-amber-400 hover:bg-amber-200 dark:bg-amber-500/20 dark:text-amber-300 dark:border-amber-500/50 dark:hover:bg-amber-500/30 animate-pulse font-extrabold"
                 : "bg-slate-900 text-slate-200 border-slate-800 hover:bg-slate-800 hover:text-slate-100"

@@ -15,6 +15,13 @@ function findAgentByName(cell: string, names: Record<string, string>): string | 
   return hits.length === 1 || (hits.length > 1 && hits[0][1].length > hits[1][1].length) ? hits[0][0] : undefined;
 }
 
+// 상태 칸에서 가장 앞에 나온 표시로 판정 (완료 메모에 "⏳/🔥/✅" 같은 글이 섞여도 앞의 ✅ 완료가 우선, ⏳ 대기는 null)
+export function statusKind(status: string): "start" | "done" | null {
+  const m = status.match(/⏳|대기|🔥|착수|in-progress|✅|완료|done/i);
+  if (!m) return null;
+  return /🔥|착수|in-progress/i.test(m[0]) ? "start" : /⏳|대기/.test(m[0]) ? null : "done";
+}
+
 export function parseBoardTasks(board: string, agentIds: string[], names?: Record<string, string>): BoardTask[] {
   const tasks: BoardTask[] = [];
   const lines = board.split(/\r?\n/);
@@ -48,17 +55,13 @@ export function parseBoardTasks(board: string, agentIds: string[], names?: Recor
     }
 
     const taskId = cells[1];
-    if (!/^T\w+$/i.test(taskId ?? "")) continue;
+    if (!/^[A-Za-z]+\d+\w*$/.test(taskId ?? "")) continue;
 
     const status = statusColIdx > 0 && statusColIdx < cells.length
       ? cells[statusColIdx]
       : ([...cells].reverse().find((c) => c) ?? "");
 
-    const kind = status.includes("🔥") || status.includes("착수") || status.toLowerCase().includes("in-progress")
-      ? "start"
-      : status.includes("✅") || status.includes("완료") || status.toLowerCase().includes("done")
-      ? "done"
-      : null;
+    const kind = statusKind(status);
     if (!kind) continue;
 
     const targetCell = roleColIdx > 0 && roleColIdx < cells.length ? cells[roleColIdx] : (cells[3] ?? "");
@@ -100,4 +103,13 @@ export function boardProtocol(agents: { id: string; name: string; roleTitle: str
 export function mailProtocol(agentId: string, agents: { id: string; name: string; roleTitle: string }[]): string {
   const roster = agents.filter((a) => a.id !== agentId).map((a) => `${a.name}(${a.roleTitle})`).join(", ");
   return `[팀 메시지] 팀원에게 요청, 질문, 결과를 보내려면 .ai-agents/agents/${agentId}/outbox/에 고유한 이름의 JSON 파일을 파일 편집 도구로 작성하세요. 형식: {"to":"수신 팀원 이름","subject":"제목","body":"내용"}. 임시 파일을 작성한 다음 .json으로 이름을 바꾸세요. 앱이 수신 팀원에게 전달합니다. 팀원은 이름으로 부르세요. 수신 가능한 팀원: ${roster}. 요청에는 답변하고, 결과 통보에는 불필요한 답장을 하지 마세요.`;
+}
+
+// 개별 출근·역할 주입에 붙이는 협업 규칙: PM(이름·역할에 PM/리더 포함)은 작업표+메일, 그 외는 메일만. App.tsx의 PM 판별과 같은 기준
+export function collabProtocol(agentId: string, agents: { id: string; name: string; roleTitle: string }[]): string {
+  const me = agents.find((a) => a.id === agentId);
+  if (!me) return "";
+  const isPm = me.name.includes("PM") || me.roleTitle.includes("PM") || me.roleTitle.includes("리더");
+  const mail = mailProtocol(agentId, agents);
+  return isPm ? `${boardProtocol(agents.filter((a) => a.id !== agentId))} ${mail}` : mail;
 }
