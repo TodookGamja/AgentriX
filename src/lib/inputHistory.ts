@@ -44,11 +44,14 @@ function saveHistory(sessionId: string, hist: string[]): void {
   else localStorage.setItem(k, JSON.stringify(hist));
 }
 
-export function recordSessionInput(sessionId: string, data: string): void {
+// injected=true: 프로그램 주입(역할 브리핑·팀 메일·배정문·핸드오프 안내)은 턴 추적만 갱신하고 지시 이력·입력 버퍼에는 넣지 않는다
+// (안 그러면 릴레이 때 브리핑·메일이 '직전 세션이 받은 지시'로 핸드오프 파일에 실려 새 세션 토큰만 늘어남)
+export function recordSessionInput(sessionId: string, data: string, injected = false): void {
   if (/[\r\n]/.test(data)) {
     lastSubmission.set(sessionId, Date.now());
     submissionVersion.set(sessionId, getSubmissionVersion(sessionId) + 1);
   }
+  if (injected) return;
   lastKeyAt.set(sessionId, Date.now());
   let buf = lineBufs.get(sessionId) ?? "";
   // 단독 Esc·Ctrl+C·Ctrl+U는 TUI가 입력창을 비우는 키 → 버퍼도 비운다 (안 비우면 '입력창에 글이 남음'으로 오판해 팀 전달이 영영 막힘)

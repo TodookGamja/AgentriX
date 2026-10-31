@@ -51,7 +51,7 @@
 - **Two-Stage Context Guard**: Automatically attempts `/compact` compression first; triggers seamless session relay if usage remains critical.
 - **Lossless Markdown Handover (`SESSION_HANDOFF.md`)**:
   - Generates comprehensive summaries, active agent personas, and task roadmaps into `.ai-agents/SESSION_HANDOFF.md`.
-  - Automatically loads handoff context into newly spawned sessions so workflows continue without interruption.
+  - After an auto relay the new session stays idle with nothing injected; a one-line pointer to the handoff file is prepended only to the next instruction it receives (manual relay continues immediately). The handoff file stays under 3,000 characters, focused on the last 5 instructions.
 - **Resource Protection**: Old PTY processes are cleanly terminated and freed from RAM immediately after handoff to avoid memory leaks.
 - **Manual Relay**: Single-click `[Relay]` button on any terminal header for instant on-demand session handoff.
 
@@ -78,7 +78,7 @@
 ### 🛠️ Quick Start
 
 #### Download Portable Binary (No Installation Required)
-1. Download `AgentriX.exe` (portable) or `AgentriX-Setup-v1.0.4.exe` (installer) from [GitHub Releases](https://github.com/TodookGamja/AgentriX/releases).
+1. Download `AgentriX.exe` (portable) or `AgentriX-Setup-v1.0.5.exe` (installer) from [GitHub Releases](https://github.com/TodookGamja/AgentriX/releases).
 2. Place `AgentriX.exe` in any folder and double-click to run. Later versions update in-app (signature verified).
 
 #### Build from Source
@@ -135,7 +135,7 @@ build_release.bat
 - **컴팩트 1회 후에도 가득일 때 자동 릴레이**: 임계치 도달 시 1차 `/compact` 압축을 자동 시도하며, 압축 후에도 토큰이 초과되면 새 세션으로 연계
 - **Markdown 파일 기반 무손실 인수인계 (`SESSION_HANDOFF.md`)**:
   - 직전 세션 작업 로그 요약, 담당 에이전트 역할, 후속 작업 지침을 `.ai-agents/SESSION_HANDOFF.md` 및 `BLACKBOARD.md`에 실시간 파일 기록
-  - 신규 세션 기동 시 인수인계 마크다운 파일을 자동으로 읽고 중단점부터 즉시 연속 작업 수행하도록 프롬프트 자동 주입
+  - 자동 릴레이 후 새 세션은 아무것도 주입하지 않고 대기하며, 다음 지시가 전달될 때 앞에 인수인계 파일 안내 1줄만 붙임 (수동 릴레이는 즉시 이어서 작업). 인수인계 파일은 최근 지시 5개 위주로 3,000자 이하로 유지
 - **PC 자원/메모리 과부하 원천 차단 (구 세션 프로세스 즉시 종료)**:
   - 인수인계 완료 즉시 직전 세션의 PTY 프로세스를 안전하게 종료(`apiStopSession`) 및 메모리에서 해제하여 세션 누적으로 인한 PC 버벅임 방지
 - **원클릭 수동 릴레이**: 터미널 상단 `[릴레이]` 버튼 클릭으로 원할 때 언제든 즉시 다음 세션으로 안전 인수인계 및 구 세션 정리 가능
@@ -163,7 +163,7 @@ build_release.bat
 ### 🛠️ 빠른 시작
 
 #### 포터블 바이너리 실행 (무설치)
-1. [Releases](https://github.com/TodookGamja/AgentriX/releases) 탭에서 `AgentriX.exe`(무설치) 또는 `AgentriX-Setup-v1.0.4.exe`(설치형) 다운로드
+1. [Releases](https://github.com/TodookGamja/AgentriX/releases) 탭에서 `AgentriX.exe`(무설치) 또는 `AgentriX-Setup-v1.0.5.exe`(설치형) 다운로드
 2. `AgentriX.exe`는 원하는 폴더에 넣고 바로 더블클릭하여 실행. 이후 버전은 앱 안에서 업데이트(서명 검증)
 
 #### 소스코드 빌드

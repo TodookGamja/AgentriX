@@ -355,10 +355,10 @@ pub fn normalize_project_path(raw: &str) -> String {
     s
 }
 
-pub fn sync_agent_files_on_disk(agent: &ProjectAgentRecord) {
+pub fn sync_agent_files_on_disk(agent: &ProjectAgentRecord, collab_protocol: Option<&str>) -> bool {
     let proj_dir = PathBuf::from(&agent.project_path);
     if !proj_dir.is_dir() || is_forbidden_system_dir(&agent.project_path) {
-        return;
+        return false;
     }
     let harness_dir = proj_dir.join(".ai-agents");
     let agent_dir = harness_dir.join("agents").join(&agent.id);
@@ -383,7 +383,11 @@ pub fn sync_agent_files_on_disk(agent: &ProjectAgentRecord) {
         proj_name,
         agent.role_title
     );
-    let _ = std::fs::write(agent_dir.join("ROLE.md"), role_md);
+    let role_md = match collab_protocol {
+        Some(protocol) => format!("{role_md}\n{protocol}\n"),
+        None => role_md,
+    };
+    let role_saved = std::fs::write(agent_dir.join("ROLE.md"), role_md).is_ok();
 
     let blackboard_path = harness_dir.join("BLACKBOARD.md");
     if !blackboard_path.exists() {
@@ -393,6 +397,7 @@ pub fn sync_agent_files_on_disk(agent: &ProjectAgentRecord) {
         );
         let _ = std::fs::write(&blackboard_path, initial_board);
     }
+    role_saved
 }
 
 pub fn get_project_agents(conn: &Connection, project_path: &str) -> Result<Vec<ProjectAgentRecord>> {
@@ -475,7 +480,7 @@ pub fn upsert_project_agent(
 
     let list = get_project_agents(conn, &norm_path)?;
     if let Some(saved) = list.iter().find(|a| a.id == id) {
-        sync_agent_files_on_disk(saved);
+        sync_agent_files_on_disk(saved, None);
     }
     Ok(list)
 }

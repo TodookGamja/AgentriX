@@ -93,3 +93,36 @@ test("regression: 13:50 sentinel in either per-cli or global cache is discarded"
   );
   assert.equal(api.restoreMiniQuotaCache((k) => store.get(k) ?? null, "claude"), null);
 });
+
+test("regression: focus switch restores matching per-cli snapshot after persist", () => {
+  const store = new Map();
+  const claude = { ...sample, cliId: "claude", remainPct5h: 40 };
+  const codex = {
+    ...sample,
+    cliId: "codex",
+    cliName: "Codex",
+    remainPct5h: 88,
+    resetsAt5h: "21:00",
+  };
+  api.persistMiniQuotaCache((k, v) => store.set(k, v), claude);
+  api.persistMiniQuotaCache((k, v) => store.set(k, v), codex);
+  assert.equal(api.restoreMiniQuotaCache((k) => store.get(k) ?? null, "claude").remainPct5h, 40);
+  assert.equal(api.restoreMiniQuotaCache((k) => store.get(k) ?? null, "codex").remainPct5h, 88);
+  // global key last written by codex persist
+  assert.equal(
+    JSON.parse(store.get("agentrix_mini_quota_cached")).cliId,
+    "codex"
+  );
+});
+
+test("regression: corrupt per-cli JSON falls through to global when global is clean", () => {
+  const store = new Map();
+  store.set("agentrix_mini_quota_claude", "{not-json");
+  store.set(
+    "agentrix_mini_quota_cached",
+    JSON.stringify({ ...sample, cliId: "global", remainPct5h: 12 })
+  );
+  const restored = api.restoreMiniQuotaCache((k) => store.get(k) ?? null, "claude");
+  assert.equal(restored.cliId, "global");
+  assert.equal(restored.remainPct5h, 12);
+});

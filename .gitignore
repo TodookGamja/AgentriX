@@ -65,6 +65,7 @@ roster.json
 PROGRESS*.md
 TEST_RESULT*.md
 *.ps1
+!scripts/trace_console_spawn.ps1
 examples/
 
 

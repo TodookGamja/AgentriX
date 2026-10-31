@@ -24,8 +24,7 @@ import {
   apiResizeSession,
   apiSaveClipboardImage,
   apiWriteToSession,
-} from "../lib/tauriBridge";
-import { FilePickerModal } from "./FilePickerModal";
+} from "../lib/tauriBridge";import { FilePickerModal } from "./FilePickerModal";
 import { isTerminalReport, shouldResizePty } from "../lib/terminalReplay";
 
 // 한 번이라도 마운트된 세션 (재마운트 = 버퍼 재생 판정용)
@@ -378,8 +377,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       inFlight = true;
       try {
         const chunk = await apiReadSessionOutput(session.id, cursorRef.current);
-        cursorRef.current = chunk.nextCursor;
-        if (chunk.data && chunk.data.length > 0) {
+        cursorRef.current = chunk.nextCursor;        if (chunk.data && chunk.data.length > 0) {
           // 스크롤을 강제로 내리지 않는다: 맨 아래에 있으면 xterm이 알아서 따라가고, 위로 올려 둔 경우엔 그대로 둔다.
           if (replayed) {
             term.write(chunk.data);
@@ -481,7 +479,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     const fName =
       session.cwd?.split(/[/\\]/).filter(Boolean).pop() || session.cwd;
     const briefing = `[프로젝트 '${fName}' 에이전트 역할 부여] 당신은 '${session.agentName ?? session.name}' (${session.agentRole ?? "전담 에이전트"})입니다. 지침: ${session.rolePrompt} (.ai-agents/agents/${session.agentId}/ROLE.md 및 .ai-agents/BLACKBOARD.md 파일을 함께 참고하여 이 프로젝트 범위 내에서만 임무를 수행하세요.) ${collabRules}\r`;
-    await apiWriteToSession(session.id, briefing);
+    await apiWriteToSession(session.id, briefing, true);
     termRef.current?.scrollToBottom();
     termRef.current?.focus();
     if (onActivity) onActivity();
@@ -600,10 +598,12 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
             <button
               onClick={handleInjectRoleBriefing}
               className="inline-flex items-center gap-1 px-2 py-1 rounded bg-fuchsia-600/80 hover:bg-fuchsia-500 text-white font-semibold transition text-[11px] whitespace-nowrap shrink-0 shadow"
-              title="이 프로젝트에 설정된 에이전트 전담 역할 지침(Role Briefing)을 터미널에 즉시 주입합니다"
+              title={session.roleInSystem
+                ? "역할 지침은 이미 시스템 지시로 전달돼 있습니다. 다시 알려주려면 누르세요 (대화 턴 1회 사용)"
+                : "이 프로젝트에 설정된 에이전트 전담 역할 지침(Role Briefing)을 터미널에 즉시 주입합니다"}
             >
               <Sparkles className="w-3 h-3 shrink-0" />
-              역할 주입
+              {session.roleInSystem ? "역할 다시 알려주기" : "역할 주입"}
             </button>
           )}
           {/* 토큰 사용량 & 스마트 인수인계 릴레이 버튼 */}

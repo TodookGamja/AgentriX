@@ -26,6 +26,7 @@ pub struct SessionInfo {
     pub agent_role: Option<String>,
     pub agent_emoji: Option<String>,
     pub role_prompt: Option<String>,
+    pub role_in_system: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -52,6 +53,23 @@ pub struct OutputBuffer {
     data: Vec<u8>,
     /// 마지막 출력 시각(ms). 로그로 턴 종료를 못 읽는 CLI의 유휴 판정용
     last_output_ms: i64,
+    paste_mode: bool,
+    paste_prefix: Vec<u8>,
+}
+
+fn track_paste_mode(buffer: &mut OutputBuffer, bytes: &[u8]) {
+    const ON: &[u8] = b"\x1b[?2004h";
+    const OFF: &[u8] = b"\x1b[?2004l";
+    for &byte in bytes {
+        buffer.paste_prefix.push(byte);
+        while !ON.starts_with(&buffer.paste_prefix) && !OFF.starts_with(&buffer.paste_prefix) {
+            buffer.paste_prefix.remove(0);
+        }
+        if buffer.paste_prefix == ON || buffer.paste_prefix == OFF {
+            buffer.paste_mode = buffer.paste_prefix == ON;
+            buffer.paste_prefix.clear();
+        }
+    }
 }
 
 /// 출력이 quiet_ms 이상 멈췄으면 마지막 출력 시각을 돌려준다
@@ -130,6 +148,7 @@ impl PtyManager {
         injected_env: HashMap<String, String>,
         initial_command: Option<String>,
         agent_meta: Option<ProjectAgentRecord>,
+        collab_protocol: Option<String>,
         app_handle: Option<AppHandle>,
     ) -> Result<SessionInfo, String> {
         let pty_system = native_pty_system();
@@ -151,9 +170,16 @@ impl PtyManager {
             let _ = std::fs::create_dir_all(Path::new(&safe_cwd).join(".claude"));
         }
 
-        if let Some(ref agent) = agent_meta {
-            crate::db::sync_agent_files_on_disk(agent);
-        }
+        let role_in_system = agent_meta.as_ref().is_some_and(|agent| {
+            cli_def.id == "claude" && agent.auto_brief && !agent.role_prompt.trim().is_empty()
+                && collab_protocol.as_deref().is_some_and(|s| !s.trim().is_empty())
+                && matches!(initial_command.as_deref(), None | Some("__WRAPPER__"))
+                && cli_def.resolved_binary.as_deref().is_some_and(supports_claude_prompt_file)
+        });
+        let role_in_system = if let Some(ref agent) = agent_meta {
+            let saved = crate::db::sync_agent_files_on_disk(agent, collab_protocol.as_deref());
+            role_in_system && saved
+        } else { false };
 
         let session_id = Uuid::new_v4().to_string();
         // Claude 로그 파일명(<id>.jsonl)을 PTY 세션 ID로 고정 → 실제 컨텍스트 토큰을 이 세션의 로그에서 정확히 읽음 (context.rs)
@@ -167,6 +193,7 @@ impl PtyManager {
             initial_command.as_deref(),
             &safe_cwd,
             agent_meta.as_ref(),
+            role_in_system,
         );
 
         cmd.cwd(&safe_cwd);
@@ -226,6 +253,7 @@ impl PtyManager {
                         let chunk_bytes = &buf[..n];
                         {
                             let mut locked = buffer_clone.lock().unwrap();
+                        track_paste_mode(&mut locked, chunk_bytes);
                             locked.data.extend_from_slice(chunk_bytes);
                             locked.last_output_ms = Utc::now().timestamp_millis();
                             if locked.data.len() > 524_288 {
@@ -269,6 +297,7 @@ impl PtyManager {
             agent_role: agent_meta.as_ref().map(|a| a.role_title.clone()),
             agent_emoji: agent_meta.as_ref().map(|a| a.avatar_emoji.clone()),
             role_prompt: agent_meta.as_ref().map(|a| a.role_prompt.clone()),
+            role_in_system,
         };
 
         let session = PtySession {
@@ -300,7 +329,7 @@ impl PtyManager {
             .into_iter()
             .find(|c| c.id == cli_id)
             .ok_or_else(|| format!("지원하지 않는 CLI ID입니다: {}", cli_id))?;
-        self.start_session_with_def(cli_def, cwd, injected_env, initial_command, None, app_handle)
+        self.start_session_with_def(cli_def, cwd, injected_env, initial_command, None, None, app_handle)
     }
 
     pub fn write_to_session(&self, session_id: &str, data: &[u8]) -> Result<String, String> {
@@ -359,6 +388,12 @@ impl PtyManager {
         })
     }
 
+    pub fn paste_mode(&self, session_id: &str) -> Option<bool> {
+        let sessions = self.sessions.lock().unwrap();
+        let mode = sessions.get(session_id)?.output_buffer.lock().unwrap().paste_mode;
+        Some(mode)
+    }
+
     pub fn output_quiet_since(&self, session_id: &str, quiet_ms: i64) -> Option<i64> {
         let sessions = self.sessions.lock().unwrap();
         let last = sessions.get(session_id)?.output_buffer.lock().unwrap().last_output_ms;
@@ -403,11 +438,23 @@ fn ps_escape_single_quoted(input: &str) -> String {
     input.replace('\'', "''")
 }
 
+fn supports_claude_prompt_file(binary: &str) -> bool {
+    let mut command = std::process::Command::new(binary);
+    command.arg("--help").stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    command.output().is_ok_and(|output| output.status.success() && String::from_utf8_lossy(&output.stdout).contains("--append-system-prompt[-file]"))
+}
+
 fn build_platform_command(
     cli_def: &CliDefinition,
     initial_command: Option<&str>,
     safe_cwd: &str,
     agent_meta: Option<&ProjectAgentRecord>,
+    role_in_system: bool,
 ) -> (CommandBuilder, String) {
     let escaped_cwd = ps_escape_single_quoted(safe_cwd);
     let agent_banner = if let Some(agent) = agent_meta {
@@ -422,14 +469,11 @@ fn build_platform_command(
         String::new()
     };
 
-    // Codex TUI는 기동이 느리고 시작 직후 PTY 입력을 버려서 지연 타이핑 브리핑이 유실됨 →
-    // 역할 지침을 초기 프롬프트 인자로 넘김 (App.tsx는 codex에 대해 지연 브리핑을 생략)
+    // 시스템 지시를 지원하지 않는 CLI의 역할은 프론트가 첫 전달에 붙인다.
     let auto_flags = match agent_meta {
-        Some(a) if matches!(cli_def.id.as_str(), "codex" | "opencode") && a.auto_brief && !a.role_prompt.trim().is_empty() => {
-            let prompt = a.role_prompt.split_whitespace().collect::<Vec<_>>().join(" ").replace('"', "'");
-            // OpenCode는 위치 인자가 프로젝트 경로라서 --prompt 로 전달
-            let flag = if cli_def.id == "opencode" { " --prompt" } else { "" };
-            format!("{} '{}'", flag, ps_escape_single_quoted(&prompt))
+        Some(a) if role_in_system => {
+            let path = Path::new(&a.project_path).join(".ai-agents").join("agents").join(&a.id).join("ROLE.md");
+            format!(" --append-system-prompt-file '{}'", ps_escape_single_quoted(&path.to_string_lossy()))
         }
         _ => String::new(),
     };
@@ -507,7 +551,10 @@ fn build_platform_command(
     }
 
     if let Some(ref resolved) = cli_def.resolved_binary {
-        let escaped_bin = ps_escape_single_quoted(resolved);
+        let native_claude = Path::new(resolved).parent().map(|dir| dir.join("node_modules").join("@anthropic-ai").join("claude-code").join("bin").join("claude.exe"));
+        let launch_bin = native_claude.as_deref().filter(|path| role_in_system && cli_def.id == "claude"
+            && Path::new(resolved).file_name().is_some_and(|name| name.eq_ignore_ascii_case("claude.cmd")) && path.is_file());
+        let escaped_bin = ps_escape_single_quoted(&launch_bin.map(|path| path.to_string_lossy().into_owned()).unwrap_or_else(|| resolved.clone()));
         let extra_args = cli_def
             .args
             .iter()
@@ -544,15 +591,68 @@ mod tests {
     use super::*;
 
     #[test]
+    fn paste_mode_tracks_split_sequences_and_latest_state() {
+        let mut buffer = OutputBuffer::default();
+        track_paste_mode(&mut buffer, b"noise\x1b[?20");
+        assert!(!buffer.paste_mode);
+        track_paste_mode(&mut buffer, b"04htext\x1b[?2004");
+        assert!(buffer.paste_mode);
+        track_paste_mode(&mut buffer, b"l");
+        assert!(!buffer.paste_mode);
+        track_paste_mode(&mut buffer, b"\x1b[?2004h\x1b[?2004l\x1b[?2004h");
+        assert!(buffer.paste_mode);
+    }
+
+    #[test]
+    fn claude_system_prompt_uses_file_for_direct_and_wrapper_launches() {
+        let mut cli = crate::cli::builtin_clis().into_iter().find(|c| c.id == "claude").unwrap();
+        cli.resolved_binary = Some("C:\\tools\\claude.cmd".into());
+        cli.wrapper_binary = Some("C:\\tools\\headroom.exe".into());
+        let agent = ProjectAgentRecord {
+            id: "agent".into(), project_path: "C:\\O'Brien".into(), name: "Agent".into(),
+            role_title: "Developer".into(), cli_id: "claude".into(), use_wrapper: true,
+            avatar_emoji: "".into(), accent_color: "".into(), role_prompt: "long\nrole".repeat(2000),
+            auto_brief: true, created_at: "".into(), model: "".into(),
+        };
+        for initial in [None, Some("__WRAPPER__")] {
+            let (cmd, _) = build_platform_command(&cli, initial, &agent.project_path, Some(&agent), true);
+            let script = cmd.get_argv().last().unwrap().to_string_lossy();
+            assert!(script.contains("--append-system-prompt-file 'C:\\O''Brien"));
+            assert!(script.contains("ROLE.md'"));
+            assert!(!script.contains("long\nrole"));
+            assert!(script.len() < 8191);
+        }
+    }
+
+    #[test]
+    fn role_file_keeps_full_multiline_protocol() {
+        let dir = std::env::temp_dir().join(format!("agentrix-role-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let prompt = "역할 지침\n".repeat(2000);
+        let protocol = "협업 규칙\n".repeat(2000);
+        let agent = ProjectAgentRecord {
+            id: "agent".into(), project_path: dir.to_string_lossy().into_owned(), name: "Agent".into(),
+            role_title: "Developer".into(), cli_id: "claude".into(), use_wrapper: false,
+            avatar_emoji: "".into(), accent_color: "".into(), role_prompt: prompt.clone(),
+            auto_brief: true, created_at: "".into(), model: "".into(),
+        };
+        assert!(crate::db::sync_agent_files_on_disk(&agent, Some(&protocol)));
+        let role = std::fs::read_to_string(dir.join(".ai-agents").join("agents").join("agent").join("ROLE.md")).unwrap();
+        assert!(role.contains(&prompt));
+        assert!(role.contains(&protocol));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn initial_command_and_fallback_are_quoted() {
         let mut cli = crate::cli::builtin_clis().into_iter().find(|c| c.id == "codex").unwrap();
-        let (cmd, _) = build_platform_command(&cli, Some("calc; #"), "C:\\project", None);
+        let (cmd, _) = build_platform_command(&cli, Some("calc; #"), "C:\\project", None, false);
         let script = cmd.get_argv().last().unwrap().to_string_lossy();
         assert!(script.contains("& 'calc;' '#'"));
         cli.resolved_binary = None;
         cli.name = "name'; calc; #".into();
         cli.login_command = "login'; calc; #".into();
-        let (cmd, _) = build_platform_command(&cli, None, "C:\\project", None);
+        let (cmd, _) = build_platform_command(&cli, None, "C:\\project", None, false);
         let script = cmd.get_argv().last().unwrap().to_string_lossy();
         assert!(script.contains("name''; calc; #"));
         assert!(script.contains("login''; calc; #"));
@@ -566,7 +666,7 @@ mod tests {
         let cli = crate::cli::builtin_clis().into_iter().find(|c| c.id == "codex").unwrap();
         let input = format!("Write-Output; New-Item -ItemType File -Path '{}'", marker.display());
         let cwd = std::env::temp_dir();
-        let (cmd, _) = build_platform_command(&cli, Some(&input), cwd.to_str().unwrap(), None);
+        let (cmd, _) = build_platform_command(&cli, Some(&input), cwd.to_str().unwrap(), None, false);
         let script = cmd.get_argv().last().unwrap();
         let _ = std::process::Command::new("powershell.exe").args(["-NoProfile", "-Command"]).arg(script).creation_flags(0x08000000).output().unwrap();
         assert!(!marker.exists());
@@ -590,15 +690,36 @@ mod tests {
             auto_brief: true, created_at: "".into(), model: "".into(),
         };
         cli.args = vec!["--sandbox".into(), "danger-full-access".into(), "--ask-for-approval".into(), "never".into()];
-        let (cmd, _) = build_platform_command(&cli, None, "C:\\project", Some(&agent));
+        let (cmd, _) = build_platform_command(&cli, None, "C:\\project", Some(&agent), false);
         let script = cmd.get_argv().last().unwrap().to_string_lossy();
         assert!(script.contains("'--sandbox' 'danger-full-access' '--ask-for-approval' 'never'"));
         assert!(!script.contains("workspace-write"));
-        assert!(script.contains("Do the work"));
+        assert!(!script.contains("Do the work"));
         cli.args.clear();
-        let (cmd, _) = build_platform_command(&cli, None, "C:\\project", Some(&agent));
+        let (cmd, _) = build_platform_command(&cli, None, "C:\\project", Some(&agent), false);
         let script = cmd.get_argv().last().unwrap().to_string_lossy();
         assert!(!script.contains("--sandbox"));
+    }
+
+    #[test]
+    fn codex_and_opencode_do_not_receive_role_at_launch() {
+        for id in ["codex", "opencode"] {
+            let mut cli = crate::cli::builtin_clis().into_iter().find(|c| c.id == id).unwrap();
+            cli.resolved_binary = Some(format!("C:\\tools\\{id}.cmd"));
+            cli.wrapper_binary = Some("C:\\tools\\headroom.exe".into());
+            let agent = ProjectAgentRecord {
+                id: "agent".into(), project_path: "C:\\project".into(), name: "Agent".into(),
+                role_title: "Developer".into(), cli_id: id.into(), use_wrapper: true,
+                avatar_emoji: "".into(), accent_color: "".into(), role_prompt: "unique role instruction".into(),
+                auto_brief: true, created_at: "".into(), model: "".into(),
+            };
+            for initial in [None, Some("__WRAPPER__")] {
+                let (cmd, _) = build_platform_command(&cli, initial, &agent.project_path, Some(&agent), false);
+                let script = cmd.get_argv().last().unwrap().to_string_lossy();
+                assert!(!script.contains("unique role instruction"));
+                assert!(!script.contains("--prompt"));
+            }
+        }
     }
 
     #[test]
@@ -607,7 +728,7 @@ mod tests {
         cli.resolved_binary = Some("C:\\tools\\codex.cmd".into());
         cli.wrapper_binary = Some("C:\\tools\\headroom.exe".into());
         cli.args = vec!["--sandbox".into(), "workspace-write".into()];
-        let (cmd, _) = build_platform_command(&cli, Some("__WRAPPER__"), "C:\\project", None);
+        let (cmd, _) = build_platform_command(&cli, Some("__WRAPPER__"), "C:\\project", None, false);
         let script = cmd.get_argv().last().unwrap().to_string_lossy();
         assert!(script.contains("'C:\\tools\\headroom.exe' wrap 'codex' --port 8788 --"));
         assert!(script.contains("'--sandbox' 'workspace-write'"));

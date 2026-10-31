@@ -100,3 +100,41 @@ test("SEC: OAuth credential path is read in-process only; preview blocks .creden
   assert.match(main, /\.credentials\.json/);
   assert.match(main, /민감한 파일은 미리 볼 수 없습니다/);
 });
+
+test("SEC: release assets include .sig; repo has no private minisign key", () => {
+  const releaseDir = path.join(ROOT, "release");
+  if (fs.existsSync(releaseDir)) {
+    const names = fs.readdirSync(releaseDir);
+    const hasExe = names.some((n) => n === "AgentriX.exe" || /^AgentriX-Setup-v.+\.exe$/.test(n));
+    const hasSig = names.includes("AgentriX.exe.sig");
+    assert.equal(hasExe, true, "release/ missing AgentriX.exe or setup");
+    assert.equal(hasSig, true, "release/ missing AgentriX.exe.sig");
+    const sigText = fs.readFileSync(path.join(releaseDir, "AgentriX.exe.sig"), "utf8");
+    assert.match(sigText, /untrusted comment: signature|RU[A-Za-z0-9+/=\s]+/);
+    assert.doesNotMatch(sigText, /private key|RWR[A-Za-z0-9+/=]{20,}/);
+  }
+  const walk = (dir, acc = []) => {
+    if (!fs.existsSync(dir)) return acc;
+    for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (ent.name === "node_modules" || ent.name === "target" || ent.name === "target-test") continue;
+      const full = path.join(dir, ent.name);
+      if (ent.isDirectory()) walk(full, acc);
+      else if (/\.(key|minisign)$/i.test(ent.name) || /secret\.key$/i.test(ent.name)) acc.push(full);
+    }
+    return acc;
+  };
+  assert.deepEqual(walk(ROOT).filter((p) => !p.includes(`${path.sep}.tauri${path.sep}`)), []);
+});
+
+test("SEC: CSP baseline keeps default-src self; img-src http: tracked as V104_SEC5 Medium", () => {
+  const conf = JSON.parse(read("src-tauri/tauri.conf.json"));
+  assert.match(conf.app.security.csp, /default-src 'self'/);
+  assert.match(conf.app.security.csp, /img-src[^;]*https:/);
+  // V104_SEC5: remove bare http: from img-src when Forge lands the fix.
+  // Until then, presence is expected and reported as Medium (not a gate fail).
+  assert.equal(
+    /img-src[^;]*\bhttp:/.test(conf.app.security.csp),
+    true,
+    "expected img-src http: until V104_SEC5; flip assertion when fixed"
+  );
+});

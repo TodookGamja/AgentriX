@@ -112,6 +112,7 @@ import { boardProtocol, collabProtocol, mailProtocol, parseBoardTasks } from "./
 import { getTeamMailDeliveries, pruneStaleDeliveries, pruneStaleMailDeliveries, removeTeamMailDelivery, saveTeamMailDelivery, shouldRedeliver } from "./lib/teamMailDelivery";
 import { findApproval, getApprovalMode, setDispatchNote, upsertApproval } from "./lib/taskApproval";
 import { countNewChars } from "./lib/tokenEstimate";
+import { deliveryGate, type PendingDelivery } from "./lib/deliveryGate";
 import { forgetSessionInput, getLastSubmission, getSubmissionVersion, getSessionInputHistory, hasPendingSessionInput, setInstructionKeyResolver } from "./lib/inputHistory";
 import { permissionLaunch } from "./lib/permissionSettings";
 import {
@@ -122,6 +123,8 @@ import {
 } from "./lib/splitLayout";
 import {
   handoffContinuePrompt,
+  markFirstInputPrefix,
+  markHandoffHint,
   nextRelaySessionName,
   remapSplitSlotsAfterRelay,
 } from "./lib/handoffRelay";
@@ -952,7 +955,9 @@ export const App: React.FC = () => {
         agent.id,
         undefined,
         perm.args,
-        perm.auto
+        perm.auto,
+        undefined,
+        collabProtocol(agent.id, projectAgents)
       );
       addSession(session);
       setActiveNav("terminal");
@@ -964,13 +969,10 @@ export const App: React.FC = () => {
         "success"
       );
 
-      // codex/opencode는 pty.rs에서 초기 프롬프트 인자로 전달됨
-      if (agent.autoBrief && agent.rolePrompt.trim() && agent.cliId !== "codex" && agent.cliId !== "opencode") {
-        window.setTimeout(() => {
-          const cleanPrompt = agent.rolePrompt.replace(/[\r\n]+/g, " ").trim();
-          const briefing = `${cleanPrompt} ${collabProtocol(agent.id, projectAgents)}\r\n`;
-          apiWriteToSession(session.id, briefing).catch(() => {});
-        }, 6000);
+      // 시스템 지시로 역할을 전달한 CLI(roleInSystem)는 아무것도 보내지 않는다.
+      // 그 외 CLI는 출근 시 역할만 보내면 "구체적인 작업이 없다"는 턴을 소모하므로, 첫 배정·메일 앞에 붙여 한 번에 보낸다.
+      if (agent.autoBrief && agent.rolePrompt.trim() && !session.roleInSystem) {
+        markFirstInputPrefix(session.id, `${agent.rolePrompt.replace(/[\r\n]+/g, " ").trim()} ${collabProtocol(agent.id, projectAgents)} `);
       }
     } catch (err) {
       showToast(`에이전트 실행 실패: ${String(err)}`, "error");
@@ -1102,10 +1104,11 @@ export const App: React.FC = () => {
     const recentSnippet = (sessionRecentOutputRef.current[sessionId] || "")
       .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "")
       .trim()
-      .slice(-1400);
+      .slice(-800);
     const instructions = getSessionInputHistory(sessionId);
+    // 토큰 절감: 최근 5개·각 300자만 (더 오래된 지시는 BLACKBOARD 기록에 의존)
     const instructionList = instructions.length
-      ? instructions.map((t, i) => `### 지시 ${i + 1}\n\`\`\`\n${t}\n\`\`\``).join("\n\n")
+      ? instructions.slice(-5).map((t) => (t.length > 300 ? `${t.slice(0, 300)}…` : t)).map((t, i) => `### 지시 ${i + 1}\n\`\`\`\n${t}\n\`\`\``).join("\n\n")
       : "기록된 지시 없음";
 
     const { relayCount, newSessionName } = nextRelaySessionName(targetSession.name);
@@ -1142,11 +1145,9 @@ ${recentSnippet || "진행 내역 기록 없음"}
         await apiSaveSessionHandoff(targetSession.cwd, "SESSION_HANDOFF.md", handoffMarkdown);
         if (tokenOptConfig.syncToBlackboard) {
           const existingBb = (await apiGetProjectBlackboard(targetSession.cwd)) || "";
-          const handoffLog = `\n\n### ⚡ [스마트 세션 자동 인수인계 (Relay #${relayCount})] - ${new Date().toLocaleString("ko-KR")}\n` +
-            `- **이전 세션**: \`${targetSession.name}\` (누적 추정 토큰 한도 도달 -> 프로세스 정리 완료)\n` +
-            `- **담당 에이전트**: ${agentName} (${agentRole})\n` +
-            `- **인수인계 파일**: \`.ai-agents/SESSION_HANDOFF.md\`\n` +
-            `- **연속 작업 지침**: 신규 세션에서 인수인계 파일을 읽고 중단점부터 이어서 작업을 완수하세요.\n`;
+          const handoffLog = `
+- ⚡ Relay #${relayCount} ${new Date().toLocaleString("ko-KR")} \`${targetSession.name}\` → \`.ai-agents/SESSION_HANDOFF.md\`
+`;
           await apiSaveProjectBlackboard(targetSession.cwd, existingBb + handoffLog);
         }
       } catch (e) {
@@ -1204,11 +1205,16 @@ ${recentSnippet || "진행 내역 기록 없음"}
       );
 
       // 5. 새 세션에 md 파일 읽기 및 연속 작업 지침 자동 주입
-      setTimeout(async () => {
-        try {
-          await apiWriteToSession(newSession.id, handoffContinuePrompt(isManual));
-        } catch {}
-      }, 6000);
+      // 자동 릴레이는 주입 없이 첫 입력 때 안내 1줄만 붙인다 (새 세션마다 프롬프트가 또 들어가 토큰이 늘던 문제)
+      if (isManual) {
+        setTimeout(async () => {
+          try {
+            await apiWriteToSession(newSession.id, handoffContinuePrompt(true), true);
+          } catch {}
+        }, 6000);
+      } else {
+        markHandoffHint(newSession.id);
+      }
 
       // 6. 🔥 핵심: 기존 세션 즉시 완전 종료 및 PC 메모리/자원 회수!
       if (tokenOptConfig.closeOldSession ?? true) {
@@ -2026,7 +2032,8 @@ ${recentSnippet || "진행 내역 기록 없음"}
   // ponytail: 3초 폴링, 지연이 문제되면 파일 감시로 교체
   const teamDeliveryLocksRef = useRef(new Set<string>());
   const sendBlockReasonRef = useRef<Record<string, string>>({}); // 전달 보류 사유(보드 카드 메모용)
-  const startingTeamProjectsRef = useRef(new Set<string>());
+  const pendingDeliveryRef = useRef<Record<string, PendingDelivery>>({}); // 직전 전달의 턴 시작 확인 대기(deliveryGate)
+  const startingTeamProjectsRef =useRef(new Set<string>());
   // 턴 종료 시각: CLI 로그 우선. 로그로 못 읽는 CLI(antigravity·cursor·grok, 같은 폴더 세션이 여럿이라 로그가 모호한 codex)는
   // 터미널 출력이 멈춘 시각으로 대신한다. 로그 완료 시각이 마지막 입력보다 앞서면(claude가 재개·릴레이로 옛 로그를 잡은 경우 포함)
   // 그 로그는 이번 턴을 모르는 것이므로 역시 출력 정지 시각으로 대신한다 (안 그러면 그 팀원에게 영영 전달되지 않음).
@@ -2050,8 +2057,21 @@ ${recentSnippet || "진행 내역 기록 없음"}
       if (!ctx?.completedAt || ctx.completedAt <= getLastSubmission(session.id)) return blocked("팀원이 응답 중(턴 종료 신호 대기)");
       if (hasPendingSessionInput(session.id)) return blocked("입력창에 30초 안에 친 글이 남아 있음");
       if (!useAppStore.getState().sessions.some((s) => s.id === session.id)) return false;
+      const pending = pendingDeliveryRef.current[session.id];
+      const logBased = !ctx.source.startsWith("pty:");
+      const quiet = pending ? await apiGetSessionQuietSince(session.id).catch(() => 0) : 0;
+      const action = deliveryGate(pending, logBased && ctx.completedAt > (pending?.at ?? 0), quiet, Date.now());
+      if (action === "resend") {
+        pendingDeliveryRef.current[session.id] = { ...pending!, retriedAt: Date.now() };
+        await apiWriteToSession(session.id, "\r", true);
+        return blocked("앞 전달의 제출 확인 중(Enter 재전송)");
+      }
+      if (action === "wait") return blocked("앞 전달의 작업 시작 확인 중");
+      if (action === "stuck") return blocked("입력창에 멈춤: 앞 전달이 제출되지 않았을 수 있음");
+      delete pendingDeliveryRef.current[session.id];
       contextSourceRef.current[session.id] = ctx.source;
-      await apiWriteToSession(session.id, prompt);
+      await apiWriteToSession(session.id, prompt, true);
+      pendingDeliveryRef.current[session.id] = { at: getLastSubmission(session.id) };
       return true;
     } finally {
       teamDeliveryLocksRef.current.delete(session.id);

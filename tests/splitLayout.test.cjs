@@ -112,3 +112,45 @@ test("regression: duplicate slot ids collapse to one session per pane", () => {
   assert.equal(panes[0].id, "a");
   assert.equal(panes[1].id, "b");
 });
+
+test("regression: layout cycle preserves slot map across all four modes", () => {
+  const sessions = [{ id: "a" }, { id: "b" }, { id: "c" }, { id: "d" }];
+  const slots = ["d", "c", "b", "a"];
+  let layout = "single";
+  const byLayout = {};
+  for (let i = 0; i < 4; i++) {
+    layout = api.nextSplitLayout(layout);
+    byLayout[layout] = api.resolvePaneSessions({
+      layout,
+      sessions,
+      projectSessions: sessions,
+      activeSessionId: "a",
+      splitSlotSessionIds: slots,
+    });
+  }
+  assert.equal(byLayout["split-h"][0].id, "d");
+  assert.equal(byLayout["split-h"][1].id, "c");
+  assert.equal(byLayout["split-v"][0].id, "d");
+  assert.equal(byLayout["split-v"][1].id, "c");
+  assert.equal(
+    byLayout["grid-4"].map((p) => (p ? String(p.id) : "")).join(","),
+    "d,c,b,a"
+  );
+  assert.equal(byLayout["single"][0].id, "a");
+  assert.equal(api.visibleSlotCount("split-h"), api.visibleSlotCount("split-v"));
+});
+
+test("regression: stale slot id outside project falls back without shifting later slots", () => {
+  const sessions = [{ id: "a" }, { id: "b" }, { id: "c" }];
+  const panes = api.resolvePaneSessions({
+    layout: "grid-4",
+    sessions,
+    projectSessions: [{ id: "b" }, { id: "c" }],
+    activeSessionId: "b",
+    splitSlotSessionIds: ["gone", "b", null, null],
+  });
+  assert.equal(panes[0].id, "b");
+  assert.equal(panes[1].id, "c");
+  assert.equal(panes[2].id, "a");
+  assert.equal(panes[3], null);
+});

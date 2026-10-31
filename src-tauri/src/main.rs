@@ -1072,6 +1072,11 @@ fn get_session_quiet_since(state: State<'_, AppState>, session_id: String, quiet
 }
 
 #[tauri::command]
+fn get_session_paste_mode(state: State<'_, AppState>, session_id: String) -> Option<bool> {
+    state.pty.paste_mode(&session_id)
+}
+
+#[tauri::command]
 fn start_session(
     state: State<'_, AppState>,
     app: AppHandle,
@@ -1083,6 +1088,7 @@ fn start_session(
     permission_args: Option<Vec<String>>,
     permission_auto: Option<bool>,
     suppress_brief: Option<bool>,
+    collab_protocol: Option<String>,
 ) -> Result<SessionInfo, String> {
     let (mut cli_def, mut injected_env, mut agent_meta, headroom_enabled) = {
         let conn = state.db.lock().map_err(|e| e.to_string())?;
@@ -1134,6 +1140,7 @@ fn start_session(
         injected_env,
         headroom_command(initial_command, headroom_enabled),
         agent_meta,
+        collab_protocol,
         Some(app),
     )
 }
@@ -1944,6 +1951,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_session_context,
             get_session_quiet_since,
+            get_session_paste_mode,
             detect_clis,
             add_custom_cli,
             delete_custom_cli,

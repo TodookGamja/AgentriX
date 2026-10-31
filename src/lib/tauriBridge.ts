@@ -9,7 +9,8 @@ export async function apiInstallNpmCliUpdate(packageName: string): Promise<void>
 }
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { recordSessionInput } from "./inputHistory";
-import { enterReady, queueSessionWrite } from "./sessionWriteQueue";
+import { applyHandoffHint } from "./handoffRelay";
+import { enterReady, needsEnterRetry, pasteWrap, queueSessionWrite } from "./sessionWriteQueue";
 import type {
   ApiKeyStatus,
   ApplyResult,
@@ -262,7 +263,8 @@ export async function apiStartSession(
   model?: string,
   permissionArgs?: string[],
   permissionAuto?: boolean,
-  suppressBrief?: boolean
+  suppressBrief?: boolean,
+  collabProtocol?: string
 ): Promise<SessionInfo> {
   if (isTauriRuntime()) {
     return invoke<SessionInfo>("start_session", {
@@ -274,6 +276,7 @@ export async function apiStartSession(
       permissionArgs: permissionArgs ?? null,
       permissionAuto: permissionAuto ?? false,
       suppressBrief: suppressBrief ?? false,
+      collabProtocol: collabProtocol ?? null,
     });
   }
   const id = `sess-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -291,8 +294,9 @@ export async function apiStartSession(
   };
 }
 
-export async function apiWriteToSession(sessionId: string, data: string): Promise<void> {
-  recordSessionInput(sessionId, data);
+export async function apiWriteToSession(sessionId: string, data: string, injected = false): Promise<void> {
+  recordSessionInput(sessionId, data, injected);
+  data = applyHandoffHint(sessionId, data);
   return queueSessionWrite(sessionId, async () => {
   if (isTauriRuntime()) {
     // TUI(Claude/Codex 등)는 "텍스트+\r" 한 덩어리를 붙여넣기로 인식해 Enter를 줄바꿈으로 삼킨다.
@@ -301,7 +305,8 @@ export async function apiWriteToSession(sessionId: string, data: string): Promis
     const body = data.replace(/\r\n?$/, "");
     if (body !== data && body.length > 0) {
       const sentAt = Date.now();
-      await invoke("write_to_session", { sessionId, data: body });
+      const wrapped = pasteWrap(body, (await invoke<boolean | null>("get_session_paste_mode", { sessionId }).catch(() => null)) === true);
+      await invoke("write_to_session", { sessionId, data: wrapped });
       const lines = body.split("\n").length;
       const minWait = Math.min(1500, 200 + body.length + (lines > 1 ? 300 : 0));
       for (;;) {
@@ -310,7 +315,15 @@ export async function apiWriteToSession(sessionId: string, data: string): Promis
         const last = await invoke<number | null>("get_session_quiet_since", { sessionId, quietMs: 0 }).catch(() => null);
         if (enterReady(sentAt, last, Date.now(), minWait)) break;
       }
-      return invoke("write_to_session", { sessionId, data: "\r" });
+      await invoke("write_to_session", { sessionId, data: "\r" });
+      // codex가 \r을 입력창 줄바꿈으로 삼켰을 때의 안전장치: 2초 안에 출력이 없으면 1회 재전송
+      if (wrapped !== body) {
+        const enterAt = Date.now();
+        await new Promise((r) => setTimeout(r, 2000));
+        const out = await invoke<number | null>("get_session_quiet_since", { sessionId, quietMs: 0 }).catch(() => null);
+        if (needsEnterRetry(enterAt, out)) await invoke("write_to_session", { sessionId, data: "\r" });
+      }
+      return;
     }
     return invoke("write_to_session", { sessionId, data });
   }
