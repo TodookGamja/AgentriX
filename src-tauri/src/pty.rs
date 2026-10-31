@@ -461,9 +461,16 @@ fn build_platform_command(
         let esc_name = ps_escape_single_quoted(&agent.name);
         let esc_role = ps_escape_single_quoted(&agent.role_title);
         let esc_id = ps_escape_single_quoted(&agent.id);
+        let role_status = if role_in_system {
+            " — 역할: 시스템 지시로 적용됨"
+        } else if agent.auto_brief && !agent.role_prompt.trim().is_empty() {
+            " — 역할: 첫 지시에 붙여 전달 예정"
+        } else {
+            ""
+        };
         format!(
-            "Write-Host '[에이전트 출근] {} ({}) — 지침 파일: .ai-agents/agents/{}/ROLE.md' -ForegroundColor Magenta; ",
-            esc_name, esc_role, esc_id
+            "Write-Host '[에이전트 출근] {} ({}) — 지침 파일: .ai-agents/agents/{}/ROLE.md{}' -ForegroundColor Magenta; ",
+            esc_name, esc_role, esc_id, role_status
         )
     } else {
         String::new()

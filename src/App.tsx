@@ -123,8 +123,8 @@ import {
 } from "./lib/splitLayout";
 import {
   handoffContinuePrompt,
-  markFirstInputPrefix,
   markHandoffHint,
+  markRolePrefix,
   nextRelaySessionName,
   remapSplitSlotsAfterRelay,
 } from "./lib/handoffRelay";
@@ -972,7 +972,7 @@ export const App: React.FC = () => {
       // 시스템 지시로 역할을 전달한 CLI(roleInSystem)는 아무것도 보내지 않는다.
       // 그 외 CLI는 출근 시 역할만 보내면 "구체적인 작업이 없다"는 턴을 소모하므로, 첫 배정·메일 앞에 붙여 한 번에 보낸다.
       if (agent.autoBrief && agent.rolePrompt.trim() && !session.roleInSystem) {
-        markFirstInputPrefix(session.id, `${agent.rolePrompt.replace(/[\r\n]+/g, " ").trim()} ${collabProtocol(agent.id, projectAgents)} `);
+        markRolePrefix(session.id, `${agent.rolePrompt.replace(/[\r\n]+/g, " ").trim()} ${collabProtocol(agent.id, projectAgents)} `);
       }
     } catch (err) {
       showToast(`에이전트 실행 실패: ${String(err)}`, "error");
@@ -2038,11 +2038,13 @@ ${recentSnippet || "진행 내역 기록 없음"}
   // 터미널 출력이 멈춘 시각으로 대신한다. 로그 완료 시각이 마지막 입력보다 앞서면(claude가 재개·릴레이로 옛 로그를 잡은 경우 포함)
   // 그 로그는 이번 턴을 모르는 것이므로 역시 출력 정지 시각으로 대신한다 (안 그러면 그 팀원에게 영영 전달되지 않음).
   // ponytail: claude는 권한 확인처럼 조용히 멈춘 상태를 턴 종료로 오인하지 않게 30초 무출력일 때만 대체, 오판이 보이면 로그 매칭을 고칠 것
+  // 한 번도 제출받지 않은 새 세션(출근 브리핑 턴 없음, v1.0.5~)은 진행 중인 턴이 있을 수 없으므로 30초 규칙 없이 출력이 멈추면 바로 받는다.
   const getTurnContext = async (session: typeof currentProjectSessions[number], claimed: string[]) => {
     const ctx = await apiGetSessionContext(session, claimed).catch(() => null);
-    if (ctx?.completedAt && ctx.completedAt > getLastSubmission(session.id)) return ctx;
+    const lastSubmit = getLastSubmission(session.id);
+    if (ctx?.completedAt && ctx.completedAt > lastSubmit) return ctx;
     const quiet = await apiGetSessionQuietSince(session.id).catch(() => null);
-    if (!quiet || quiet <= getLastSubmission(session.id) || (session.cliId === "claude" && Date.now() - quiet < 30_000)) return ctx;
+    if (!quiet || quiet <= lastSubmit || (session.cliId === "claude" && lastSubmit > 0 && Date.now() - quiet < 30_000)) return ctx;
     return { tokens: ctx?.tokens ?? 0, window: ctx?.window ?? null, source: ctx?.source ?? `pty:${session.id}`, completedAt: quiet };
   };
   const sendToIdleTeamSession = async (session: typeof currentProjectSessions[number], prompt: string): Promise<boolean> => {

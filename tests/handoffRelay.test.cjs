@@ -9,6 +9,21 @@ const js = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind
 const api = {};
 vm.runInNewContext(js, { exports: api });
 
+test("role prefix: pending until first submitted input, then sent", () => {
+  api.markRolePrefix("r1", "ROLE ");
+  assert.equal(api.getRoleState("r1"), "pending");
+  assert.equal(api.applyHandoffHint("r1", "a"), "a");
+  assert.equal(api.getRoleState("r1"), "pending");
+  assert.equal(api.applyHandoffHint("r1", "작업\r"), "ROLE 작업\r");
+  assert.equal(api.getRoleState("r1"), "sent");
+  assert.equal(api.getRoleState("none"), undefined);
+});
+
+test("fresh sessions skip claude 30s quiet rule in getTurnContext", () => {
+  const app = fs.readFileSync("src/App.tsx", "utf8");
+  assert.match(app, /session\.cliId === "claude" && lastSubmit > 0 && Date\.now\(\) - quiet < 30_000/);
+});
+
 test("relay naming increments and strips prior relay suffix", () => {
   const first = api.nextRelaySessionName("🔧 Builder");
   assert.equal(first.relayCount, 1);
@@ -117,7 +132,7 @@ test("T7: launch passes collabProtocol to start_session and skips chat briefing 
   assert.match(app, /agent\.rolePrompt\.trim\(\) && !session\.roleInSystem/);
   // 출근 시 브리핑 쓰기 0건: 역할은 첫 전달 앞에 붙는다
   assert.ok(!/apiWriteToSession\(session\.id, briefing/.test(app));
-  assert.match(app, /markFirstInputPrefix\(session\.id, /);
+  assert.match(app, /markRolePrefix\(session\.id, /);
   assert.ok(!app.includes("pendingRolePrefixRef")); // 팀 전달 쪽 중복 부착 제거
 });
 

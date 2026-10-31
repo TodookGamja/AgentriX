@@ -82,6 +82,7 @@ export interface ProjectDeepContext {
   manifestSnippet?: string | null;
   fileTree: string[];
   detectedStacks: string[];
+  languageStats?: string[];
 }
 
 export interface DetectedCliCredential {

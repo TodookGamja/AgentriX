@@ -59,9 +59,9 @@ function buildHintsPrompt(hints?: TeamHints): string {
   const lines = [
     "",
     "",
-    `[편성 관점] 이번에는 "${lens}" 관점으로, 약 ${size}명 규모의 팀을 기획하세요. 흔한 정석 구성(PM·백엔드·프론트·QA의 반복)에 머무르지 말고 이 프로젝트에만 맞는 개성 있는 역할과 고유한 이름을 쓰세요.`,
+    `[편성 관점] 이번에는 "${lens}" 관점으로, 약 ${size}명 규모의 팀을 기획하세요. 관점은 역할의 비중·세부 전문성·이름에 반영하고, 이름은 이 프로젝트에 맞게 개성 있게 지으세요. 관점과 상관없이 코드를 직접 구현하는 개발 에이전트(writesCode: true)는 반드시 1명 이상 포함합니다.`,
   ];
-  if (hints?.avoidNames?.length) lines.push(`[이전 추천 — 이름과 역할 구성을 겹치지 않게 새로 기획] ${hints.avoidNames.join(", ")}`);
+  if (hints?.avoidNames?.length) lines.push(`[이전 추천 이름 — 같은 이름은 쓰지 마세요. 개발 역할은 이름만 바꿔 다시 포함해도 됩니다] ${hints.avoidNames.join(", ")}`);
   if (hints?.request?.trim()) lines.push(`[사용자 요청 — 최우선 반영] ${hints.request.trim().replace(/\s+/g, " ")}`);
   lines.push("에이전트 name은 서로 겹치지 않는 고유한 이름이어야 하며, 팀원끼리 이 이름으로 서로를 부르며 소통합니다.");
   return lines.join("\n");
@@ -85,6 +85,7 @@ const SYSTEM_PROMPT = `당신은 실리콘밸리 최고 수준의 멀티 AI 개�
 사용자가 제공하는 프로젝트의 코드베이스 구조, README, 설정 파일 및 기술 스택 정보를 심층 분석하여,
 이 프로젝트의 개발 생산성을 극대화할 수 있는 전담 AI 에이전트 3~5인 팀을 기획해야 합니다.
 배열의 첫 번째 에이전트는 반드시 작업을 분해·배정하는 총괄 리더이며, name에 "PM"을 포함해야 합니다.
+[필수] PM을 제외한 팀원 중 최소 1명은 이 프로젝트의 주력 언어·스택(설정 파일과 파일 수 통계로 판단)으로 코드를 직접 구현·수정하는 개발 에이전트여야 합니다. 프로젝트가 여러 스택(예: 프론트엔드 + 백엔드/네이티브)으로 이루어져 있으면 각 스택을 맡을 개발자를 우선 배치하세요. 검토·기획·문서·테스트 전담 역할만으로 팀을 구성하지 마세요. 사용자가 다른 구성을 명시적으로 요청한 경우에만 예외입니다.
 
 반드시 오직 유효한 JSON 배열(Array) 형식으로만 응답해야 합니다. 마크다운 따옴표나 기타 설명 없이 순수 JSON만 반환하세요:
 [
@@ -95,6 +96,7 @@ const SYSTEM_PROMPT = `당신은 실리콘밸리 최고 수준의 멀티 AI 개�
     "model": "해당 CLI의 모델 (아래 목록의 값 중에서만 선택, 확신이 없으면 빈 문자열)",
     "avatarEmoji": "역할에 맞는 이모지 1개 (예: 👑, 🛠️, 🎨, 🔍, 🛡️, 📊)",
     "accentColor": "HEX 색상 코드 (예: #f97316, #10b981, #8b5cf6, #ef4444, #06b6d4)",
+    "writesCode": "이 에이전트가 코드를 직접 구현·수정하는 개발자면 true, 아니면 false (불리언)",
     "rolePrompt": "에이전트에게 주입할 상세한 페르소나, 목표, 행동 규칙 및 지침 (2~3문장)",
     "reason": "이 프로젝트에 이 에이전트가 특별히 필요한 심층 분석 이유"
   }
@@ -108,8 +110,11 @@ function buildUserPrompt(context: ProjectDeepContext, options?: TeamCliOption[],
 - 작업 경로: ${context.projectPath}
 - 감지된 주요 스택: ${context.detectedStacks.join(", ")}
 
-[디렉토리 및 파일 트리 (상위 50개)]
+[디렉토리 및 파일 트리 (최상위 + 하위 1단계)]
 ${context.fileTree.join("\n")}
+
+[확장자별 파일 수 (주력 언어 판단용)]
+${context.languageStats?.length ? context.languageStats.join(", ") : "통계 없음"}
 
 [README 요약]
 ${context.readmeSnippet || "README 파일 없음"}
@@ -121,7 +126,7 @@ ${context.manifestSnippet || "설정 파일 내용 없음"}
 응답은 오직 순수 JSON 배열만 반환해야 합니다.${buildTeamOptionsPrompt(options)}${buildHintsPrompt(hints)}`;
 }
 
-function parseAgentJson(rawText: string, context: ProjectDeepContext, options?: TeamCliOption[]): ProjectAgentInput[] {
+function parseAgentItems(rawText: string): any[] {
   // 마크다운 코드블록 제거
   let cleaned = rawText
     .replace(/^```json\s*/im, "")
@@ -150,6 +155,37 @@ function parseAgentJson(rawText: string, context: ProjectDeepContext, options?: 
   if (!Array.isArray(parsed) || parsed.length === 0) {
     throw new Error("AI가 유효한 에이전트 목록을 반환하지 않았습니다.");
   }
+  return parsed;
+}
+
+// writesCode 필드를 우선 보고, 없으면 직무명·이름으로 판단 (첫 번째 = PM 제외)
+const DEV_ROLE_RE = /개발|구현|developer|engineer|엔지니어|programmer|프로그래머|coder|backend|frontend|백엔드|프론트|풀스택|full.?stack|모바일|네이티브/i;
+const NON_DEV_ROLE_RE = /\bqa\b|테스트|tester|리뷰|review|문서|docs?\b|writer|기획|디자이너|designer/i;
+export function hasDeveloper(items: any[]): boolean {
+  return items.slice(1).some((a) => {
+    if (typeof a?.writesCode === "boolean") return a.writesCode;
+    const label = `${a?.roleTitle ?? ""} ${a?.name ?? ""}`;
+    return DEV_ROLE_RE.test(label) && !NON_DEV_ROLE_RE.test(label);
+  });
+}
+const DEV_RETRY_REQUEST = "직전 추천에 코드를 직접 구현하는 개발 에이전트가 없었습니다. 이 프로젝트의 주력 스택을 맡는 개발 에이전트(writesCode: true)를 반드시 포함해 다시 편성하세요.";
+
+// 개발자가 없는 팀이면 1회 다시 요청한다
+async function requestTeamWithDeveloper(
+  request: (hints?: TeamHints) => Promise<string>,
+  context: ProjectDeepContext,
+  options?: TeamCliOption[],
+  hints?: TeamHints
+): Promise<ProjectAgentInput[]> {
+  let items = parseAgentItems(await request(hints));
+  if (!hasDeveloper(items)) {
+    const retryHints = { ...hints, request: [hints?.request?.trim(), DEV_RETRY_REQUEST].filter(Boolean).join(" ") };
+    items = parseAgentItems(await request(retryHints));
+  }
+  return toAgentInputs(items, context, options);
+}
+
+function toAgentInputs(parsed: any[], context: ProjectDeepContext, options?: TeamCliOption[]): ProjectAgentInput[] {
 
   const slug = context.projectName.toLowerCase().replace(/[^a-z0-9]+/g, "-");
   const used = new Set<string>();
@@ -180,9 +216,12 @@ export async function generateDeepAiTeamWithCli(
   options?: TeamCliOption[],
   hints?: TeamHints
 ): Promise<ProjectAgentInput[]> {
-  const prompt = `${SYSTEM_PROMPT}\n\n${buildUserPrompt(context, options, hints)}`;
-  const resultText = await apiRunCliDeepAnalysis(cliId, context.projectPath, prompt);
-  return parseAgentJson(resultText, context, options);
+  return requestTeamWithDeveloper(
+    (h) => apiRunCliDeepAnalysis(cliId, context.projectPath, `${SYSTEM_PROMPT}\n\n${buildUserPrompt(context, options, h)}`),
+    context,
+    options,
+    hints
+  );
 }
 
 export async function testAiConnection(config: AiProviderConfig, credential: DetectedCliCredential | null = null): Promise<AiTestResult> {
@@ -291,6 +330,16 @@ export async function generateDeepAiTeam(
   hints?: TeamHints,
   credential: DetectedCliCredential | null = null
 ): Promise<ProjectAgentInput[]> {
+  return requestTeamWithDeveloper((h) => requestDeepAiTeamText(config, context, options, h, credential), context, options, hints);
+}
+
+async function requestDeepAiTeamText(
+  config: AiProviderConfig,
+  context: ProjectDeepContext,
+  options?: TeamCliOption[],
+  hints?: TeamHints,
+  credential: DetectedCliCredential | null = null
+): Promise<string> {
   const fetch = detectedFetch(credential, config.model);
   const userPrompt = buildUserPrompt(context, options, hints);
   let responseText = "";
@@ -381,5 +430,5 @@ export async function generateDeepAiTeam(
     responseText = data.message?.content || "";
   }
 
-  return parseAgentJson(responseText, context, options);
+  return responseText;
 }

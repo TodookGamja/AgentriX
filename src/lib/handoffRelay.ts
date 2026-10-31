@@ -32,11 +32,30 @@ export function markFirstInputPrefix(sessionId: string, text: string): void {
 export function markHandoffHint(sessionId: string): void {
   markFirstInputPrefix(sessionId, HANDOFF_HINT);
 }
+
+// 역할 지침 전달 상태(배지용): pending = 첫 지시에 붙여 보낼 예정, sent = 첫 지시와 함께 전달됨
+const roleState = new Map<string, "pending" | "sent">();
+export const ROLE_STATE_EVENT = "agentrix:role-state";
+function notifyRoleState(sessionId: string): void {
+  globalThis.dispatchEvent?.(new CustomEvent(ROLE_STATE_EVENT, { detail: sessionId }));
+}
+export function getRoleState(sessionId: string): "pending" | "sent" | undefined {
+  return roleState.get(sessionId);
+}
+export function markRolePrefix(sessionId: string, text: string): void {
+  markFirstInputPrefix(sessionId, text);
+  roleState.set(sessionId, "pending");
+  notifyRoleState(sessionId);
+}
 /** 제출형 입력(2자 이상, \r로 끝남, 슬래시 명령 아님)에만 안내를 1회 붙여 돌려준다. 키 입력·제어 키·/compact는 그대로 통과. */
 export function applyHandoffHint(sessionId: string, data: string): string {
   const prefix = pendingPrefix.get(sessionId);
   if (!prefix || data.length < 2 || !data.endsWith("\r") || data.startsWith("/") || data.startsWith("\x1b")) return data;
   pendingPrefix.delete(sessionId);
+  if (roleState.get(sessionId) === "pending") {
+    roleState.set(sessionId, "sent");
+    notifyRoleState(sessionId);
+  }
   return prefix + data;
 }
 

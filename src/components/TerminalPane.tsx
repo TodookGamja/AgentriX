@@ -26,6 +26,7 @@ import {
   apiWriteToSession,
 } from "../lib/tauriBridge";import { FilePickerModal } from "./FilePickerModal";
 import { isTerminalReport, shouldResizePty } from "../lib/terminalReplay";
+import { getRoleState, ROLE_STATE_EVENT } from "../lib/handoffRelay";
 
 // 한 번이라도 마운트된 세션 (재마운트 = 버퍼 재생 판정용)
 const mountedSessionIds = new Set<string>();
@@ -126,6 +127,15 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
   const [broadcastToProject, setBroadcastToProject] = useState(false);
   const [promptHistory, setPromptHistory] = useState<string[]>([]);
   const [historyIdx, setHistoryIdx] = useState<number>(-1);
+  const [roleState, setRoleState] = useState(() => getRoleState(session.id));
+  useEffect(() => {
+    setRoleState(getRoleState(session.id));
+    const onChange = (e: Event) => {
+      if ((e as CustomEvent<string>).detail === session.id) setRoleState(getRoleState(session.id));
+    };
+    window.addEventListener(ROLE_STATE_EVENT, onChange);
+    return () => window.removeEventListener(ROLE_STATE_EVENT, onChange);
+  }, [session.id]);
 
   // 실시간 폰트 크기 조절 (Ctrl + 휠 줌 및 Ctrl + +/- 지원)
   const [fontSize, setFontSize] = useState<number>(() => {
@@ -594,6 +604,24 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
         </div>
 
         <div className="flex items-center gap-1.5 shrink-0">
+          {session.rolePrompt && (session.roleInSystem || roleState) && (
+            <span
+              className={`px-2 py-1 rounded text-[11px] font-semibold whitespace-nowrap shrink-0 border ${
+                roleState === "pending"
+                  ? "border-amber-500/60 text-amber-300 bg-amber-500/10"
+                  : "border-emerald-500/60 text-emerald-300 bg-emerald-500/10"
+              }`}
+              title={
+                session.roleInSystem
+                  ? "역할 지침이 CLI 시스템 지시로 적용돼 있습니다 (대화 턴 사용 안 함)"
+                  : roleState === "pending"
+                    ? "역할 지침을 첫 지시 앞에 붙여 함께 보냅니다"
+                    : "역할 지침을 첫 지시와 함께 보냈습니다"
+              }
+            >
+              {roleState === "pending" ? "역할 대기" : "역할 적용됨"}
+            </span>
+          )}
           {session.rolePrompt && (
             <button
               onClick={handleInjectRoleBriefing}

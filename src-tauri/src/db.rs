@@ -638,6 +638,8 @@ pub struct ProjectDeepContext {
     pub manifest_snippet: Option<String>,
     pub file_tree: Vec<String>,
     pub detected_stacks: Vec<String>,
+    /// 확장자별 소스 파일 수 (많은 순, 예: "ts: 120")
+    pub language_stats: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -967,17 +969,65 @@ pub fn get_project_deep_context(project_path: &str) -> Result<ProjectDeepContext
         .unwrap_or("Project")
         .to_string();
 
+    // 최상위 + 하위 1단계 이름, 그리고 확장자별 파일 수(깊이 6까지)로 실제 코드 구성을 알려준다
+    const SKIP_DIRS: [&str; 12] = ["node_modules", "target", "dist", "build", "out", "vendor", "__pycache__", "venv", ".venv", "coverage", "bin", "obj"];
+    let skip = |name: &str| (name.starts_with('.') && name != ".ai-agents") || SKIP_DIRS.contains(&name);
+    let sorted_entries = |dir: &Path| -> Vec<std::fs::DirEntry> {
+        let mut v: Vec<_> = std::fs::read_dir(dir).map(|e| e.flatten().collect()).unwrap_or_default();
+        v.sort_by_key(|e| e.file_name());
+        v
+    };
     let mut file_tree: Vec<String> = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(root) {
-        for entry in entries.flatten().take(50) {
-            let fname = entry.file_name().to_string_lossy().to_string();
-            if fname.starts_with('.') && fname != ".ai-agents" {
-                continue;
+    for entry in sorted_entries(root) {
+        let fname = entry.file_name().to_string_lossy().to_string();
+        if skip(&fname) || file_tree.len() >= 200 {
+            continue;
+        }
+        if entry.path().is_dir() {
+            file_tree.push(format!("[DIR] {}/", fname));
+            for child in sorted_entries(&entry.path()).into_iter().take(25) {
+                let cname = child.file_name().to_string_lossy().to_string();
+                if skip(&cname) {
+                    continue;
+                }
+                let suffix = if child.path().is_dir() { "/" } else { "" };
+                file_tree.push(format!("  {}/{}{}", fname, cname, suffix));
             }
-            let is_dir = entry.path().is_dir();
-            file_tree.push(format!("{}{}", if is_dir { "[DIR] " } else { "[FILE] " }, fname));
+        } else {
+            file_tree.push(format!("[FILE] {}", fname));
         }
     }
+
+    // ponytail: 파일 2만 개에서 멈추는 단순 순회, 거대 모노레포에서 부정확하면 git ls-files로 교체
+    let mut ext_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut stack = vec![(root.to_path_buf(), 0usize)];
+    let mut seen = 0usize;
+    while let Some((dir, depth)) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).map(|e| e.flatten().collect::<Vec<_>>()).unwrap_or_default() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if skip(&name) {
+                continue;
+            }
+            let path = entry.path();
+            if path.is_dir() {
+                if depth < 6 {
+                    stack.push((path, depth + 1));
+                }
+            } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                *ext_counts.entry(ext.to_ascii_lowercase()).or_default() += 1;
+                seen += 1;
+            }
+            if seen >= 20_000 {
+                break;
+            }
+        }
+        if seen >= 20_000 {
+            break;
+        }
+    }
+    let mut ext_list: Vec<_> = ext_counts.into_iter().collect();
+    ext_list.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    let language_stats: Vec<String> = ext_list.into_iter().take(15).map(|(e, n)| format!("{}: {}", e, n)).collect();
 
     let readme_snippet = ["README.md", "readme.md", "README.txt"]
         .iter()
@@ -990,18 +1040,27 @@ pub fn get_project_deep_context(project_path: &str) -> Result<ProjectDeepContext
             }
         });
 
-    let manifest_snippet = ["package.json", "Cargo.toml", "pyproject.toml", "requirements.txt", "go.mod"]
+    // 설정 파일은 찾은 것 전부 (예: package.json + src-tauri/Cargo.toml 같은 혼합 프로젝트)
+    let manifests: Vec<String> = ["package.json", "Cargo.toml", "pyproject.toml", "requirements.txt", "go.mod", "pom.xml", "build.gradle", "build.gradle.kts", "composer.json", "Gemfile", "pubspec.yaml"]
         .iter()
-        .find_map(|f| {
-            let p = root.join(f);
-            if p.is_file() {
-                std::fs::read_to_string(&p).ok().map(|s| {
-                    format!("--- {} ---\n{}", f, truncate_utf8(s, 2000))
-                })
-            } else {
-                None
+        .flat_map(|f| {
+            let mut found = vec![(f.to_string(), root.join(f))];
+            for child in sorted_entries(root).into_iter().filter(|e| e.path().is_dir()).take(30) {
+                let cname = child.file_name().to_string_lossy().to_string();
+                if !skip(&cname) {
+                    found.push((format!("{}/{}", cname, f), child.path().join(f)));
+                }
             }
-        });
+            found
+        })
+        .filter(|(_, p)| p.is_file())
+        .take(6)
+        .filter_map(|(label, p)| std::fs::read_to_string(&p).ok().map(|s| format!("--- {} ---
+{}", label, truncate_utf8(s, 2000))))
+        .collect();
+    let manifest_snippet = if manifests.is_empty() { None } else { Some(manifests.join("
+
+")) };
 
     let analysis = analyze_project_workspace(project_path)?;
 
@@ -1012,6 +1071,7 @@ pub fn get_project_deep_context(project_path: &str) -> Result<ProjectDeepContext
         manifest_snippet,
         file_tree,
         detected_stacks: analysis.detected_stacks,
+        language_stats,
     })
 }
 
@@ -1980,6 +2040,28 @@ mod tests {
         let context = get_project_deep_context(dir.to_str().unwrap()).unwrap();
         assert_eq!(context.readme_snippet.unwrap().len(), 2999);
         assert!(context.manifest_snippet.unwrap().ends_with(&"a".repeat(1999)));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn deep_context_reads_nested_manifests_subdirs_and_language_stats() {
+        let dir = std::env::temp_dir().join(format!("acm_deep_context_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("src-tauri").join("src")).unwrap();
+        std::fs::create_dir_all(dir.join("node_modules").join("x")).unwrap();
+        std::fs::write(dir.join("package.json"), "{\"name\":\"web\"}").unwrap();
+        std::fs::write(dir.join("src-tauri").join("Cargo.toml"), "[package]
+name=\"core\"").unwrap();
+        std::fs::write(dir.join("src-tauri").join("src").join("main.rs"), "").unwrap();
+        std::fs::write(dir.join("src-tauri").join("src").join("pty.rs"), "").unwrap();
+        std::fs::write(dir.join("node_modules").join("x").join("a.js"), "").unwrap();
+        let context = get_project_deep_context(dir.to_str().unwrap()).unwrap();
+        let manifest = context.manifest_snippet.unwrap();
+        assert!(manifest.contains("--- package.json ---"));
+        assert!(manifest.contains("--- src-tauri/Cargo.toml ---"));
+        assert!(context.file_tree.iter().any(|l| l.contains("src-tauri/src/")));
+        assert!(!context.file_tree.iter().any(|l| l.contains("node_modules")));
+        assert_eq!(context.language_stats.first().map(String::as_str), Some("rs: 2"));
+        assert!(!context.language_stats.iter().any(|l| l.starts_with("js:")));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
