@@ -110,8 +110,9 @@ test("SEC: release assets include .sig; repo has no private minisign key", () =>
     assert.equal(hasExe, true, "release/ missing AgentriX.exe or setup");
     assert.equal(hasSig, true, "release/ missing AgentriX.exe.sig");
     const sigText = fs.readFileSync(path.join(releaseDir, "AgentriX.exe.sig"), "utf8");
-    assert.match(sigText, /untrusted comment: signature|RU[A-Za-z0-9+/=\s]+/);
-    assert.doesNotMatch(sigText, /private key|RWR[A-Za-z0-9+/=]{20,}/);
+    const signature = Buffer.from(sigText.trim(), "base64").toString("utf8");
+    assert.match(signature, /untrusted comment: signature/);
+    assert.doesNotMatch(signature, /private key|RWR[A-Za-z0-9+/=]{20,}/);
   }
   const walk = (dir, acc = []) => {
     if (!fs.existsSync(dir)) return acc;

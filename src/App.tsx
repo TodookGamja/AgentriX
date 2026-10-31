@@ -666,10 +666,16 @@ export const App: React.FC = () => {
   }, [themeMode, applyTheme]);
 
   // 2. 선택된 프로젝트 분석 결과(맞춤 추천 에이전트 포함) & 현재 영입된 에이전트 목록
-  const [projectAnalysis, setProjectAnalysis] = useState<ProjectAnalysisResult | null>(null);
-  const [projectAgents, setProjectAgents] = useState<ProjectAgentRecord[]>([]);
+  const [analysisState, setAnalysisState] = useState<{ path: string; result: ProjectAnalysisResult } | null>(null);
+  const projectAnalysis = analysisState?.path === selectedProjectPath ? analysisState.result : null;
   // 사이드바 트리용: 모든 프로젝트의 등록 에이전트 (재실행 후 세션이 없어도 표시)
   const [agentsByProject, setAgentsByProject] = useState<Record<string, ProjectAgentRecord[]>>({});
+  const agentVersionsRef = useRef<Record<string, number>>({});
+  const projectAgents = agentsByProject[selectedProjectPath] ?? [];
+  const updateProjectAgents = (path: string, agents: ProjectAgentRecord[]) => {
+    agentVersionsRef.current[path] = (agentVersionsRef.current[path] ?? 0) + 1;
+    setAgentsByProject((prev) => ({ ...prev, [path]: agents }));
+  };
 
   // 프로젝트 폴더 선택 모달 상태 (앱 테마와 100% 일치하는 Agentrix 커스텀 폴더 브라우저)
   const [isFolderPickerOpen, setIsFolderPickerOpen] = useState(false);
@@ -715,11 +721,11 @@ export const App: React.FC = () => {
 
   const handleApplyDeepAgents = (deepAgents: ProjectAgentInput[]) => {
     if (projectAnalysis) {
-      setProjectAnalysis({
+      setAnalysisState({ path: selectedProjectPath, result: {
         ...projectAnalysis,
         summaryDescription: `✨ AI 심층 팀빌딩 완료: 연결된 AI 모델이 프로젝트 소스코드와 아키텍처를 면밀히 분석하여 ${deepAgents.length}명의 맞춤형 전담 에이전트 팀을 기획했습니다.`,
         recommendedAgents: deepAgents,
-      });
+      } });
     }
     showToast(`✨ AI 심층 기획 완료! ${deepAgents.length}명의 전문 에이전트 팀이 추천 목록에 반영되었습니다.`, "success");
   };
@@ -802,27 +808,28 @@ export const App: React.FC = () => {
   }, [refreshAll]);
 
   useEffect(() => {
-    Promise.all(
-      projectFolders.map((f) =>
-        apiGetProjectAgents(f.path).then((list) => [f.path, list] as const).catch(() => [f.path, []] as const)
-      )
-    ).then((entries) => setAgentsByProject(Object.fromEntries(entries)));
+    let cancelled = false;
+    projectFolders.forEach((f) => {
+      const version = agentVersionsRef.current[f.path] ?? 0;
+      apiGetProjectAgents(f.path).then((list) => {
+        if (!cancelled && (agentVersionsRef.current[f.path] ?? 0) === version) {
+          setAgentsByProject((prev) => ({ ...prev, [f.path]: list }));
+        }
+      }).catch(() => {});
+    });
+    return () => { cancelled = true; };
   }, [projectFolders]);
 
   // 선택된 프로젝트가 바뀔 때마다 프로젝트 기술스택 분석(추천 에이전트 생성) 및 배정된 에이전트 목록 로드
   useEffect(() => {
+    let cancelled = false;
     if (!selectedProjectPath) {
-      setProjectAgents([]);
-      setProjectAnalysis(null);
       return;
     }
-    apiGetProjectAgents(selectedProjectPath)
-      .then(setProjectAgents)
-      .catch(() => setProjectAgents([]));
-
     apiAnalyzeProjectWorkspace(selectedProjectPath)
-      .then(setProjectAnalysis)
-      .catch(() => setProjectAnalysis(null));
+      .then((analysis) => { if (!cancelled && analysis) setAnalysisState({ path: selectedProjectPath, result: analysis }); })
+      .catch(() => { if (!cancelled) setAnalysisState(null); });
+    return () => { cancelled = true; };
   }, [selectedProjectPath]);
 
   // 현재 선택된 프로젝트의 세션들만 표시
@@ -864,7 +871,7 @@ export const App: React.FC = () => {
         ...rec,
         projectPath: selectedProjectPath,
       });
-      setProjectAgents(updated);
+      updateProjectAgents(selectedProjectPath, updated);
       showToast(
         `[${getShortFolderName(selectedProjectPath)}] 프로젝트에 ${rec.avatarEmoji} ${rec.name} (${rec.roleTitle}) 에이전트를 영입했습니다!`,
         "success"
@@ -885,7 +892,7 @@ export const App: React.FC = () => {
           projectPath: selectedProjectPath,
         });
       }
-      setProjectAgents(latest);
+      updateProjectAgents(selectedProjectPath, latest);
       showToast(
         `[${getShortFolderName(selectedProjectPath)}] 추천 에이전트 ${recs.length}명을 모두 프로젝트에 영입했습니다!`,
         "success"
@@ -1057,7 +1064,7 @@ export const App: React.FC = () => {
     };
     try {
       const updated = await apiUpsertProjectAgent(payload);
-      setProjectAgents(updated);
+      updateProjectAgents(agent.projectPath, updated);
       showToast(
         `'${agent.name}' 에이전트의 Headroom 래퍼가 ${!agent.useWrapper ? "활성화(ON)" : "해제(OFF)"}되었습니다. 새로 시작하는 세션에 적용됩니다.`,
         "info"
@@ -1352,7 +1359,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
         }
       }
       const refreshed = await apiGetProjectAgents(selectedProjectPath);
-      setProjectAgents(refreshed);
+      updateProjectAgents(selectedProjectPath, refreshed);
       showToast(
         `모든 에이전트의 Headroom 토큰 감싸기가 ${enable ? "일괄 활성화(ON)" : "일괄 해제(OFF)"}되었습니다. 새로 시작하는 세션에 적용됩니다.`,
         "success"
@@ -1496,7 +1503,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
     };
     try {
       const updated = await apiUpsertProjectAgent(payload);
-      setProjectAgents(updated);
+      updateProjectAgents(payload.projectPath, updated);
       setShowAgentModal(false);
       showToast(
         `[${getShortFolderName(selectedProjectPath)}] 프로젝트에 '${payload.name}' 에이전트가 저장되었습니다.`,
@@ -1511,7 +1518,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
     if (!selectedProjectPath) return;
     try {
       const updated = await apiDeleteProjectAgent(selectedProjectPath, agentId);
-      setProjectAgents(updated);
+      updateProjectAgents(selectedProjectPath, updated);
       showToast("해당 프로젝트에서 에이전트가 제외되었습니다.", "info");
     } catch (err) {
       showToast(`에이전트 삭제 오류: ${String(err)}`, "error");
