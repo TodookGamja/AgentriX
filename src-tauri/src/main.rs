@@ -953,6 +953,43 @@ fn find_detected_key<'a>(items: &'a [DetectedCliCredential], credential: &Detect
         .map(|item| item.raw_key.as_str())
 }
 
+fn output_with_prompt(mut cmd: std::process::Command, prompt: &str) -> Result<std::process::Output, String> {
+    use std::io::Write;
+    cmd.stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut child = cmd.spawn().map_err(|e| format!("CLI 실행 실패: {}", e))?;
+    if let Err(e) = child.stdin.take().unwrap().write_all(prompt.as_bytes()) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(format!("CLI 입력 실패: {}", e));
+    }
+    child.wait_with_output().map_err(|e| format!("CLI 실행 실패: {}", e))
+}
+
+#[cfg(test)]
+#[test]
+fn prompt_is_passed_through_stdin() {
+    let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
+    cmd.args(["--exact", "stdin_echo_child", "--nocapture"]);
+    cmd.env("AGENTRIX_STDIN_TEST", "1");
+    let prompt = "line one\n\"quoted\" & %PATH%";
+    let output = output_with_prompt(cmd, prompt).unwrap();
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains(prompt));
+}
+
+#[cfg(test)]
+#[test]
+fn stdin_echo_child() {
+    if std::env::var_os("AGENTRIX_STDIN_TEST").is_some() {
+        use std::io::Read;
+        let mut input = String::new();
+        std::io::stdin().read_to_string(&mut input).unwrap();
+        print!("{}", input);
+    }
+}
+
 #[tauri::command]
 async fn run_cli_deep_analysis(
     state: State<'_, AppState>,
@@ -1009,7 +1046,9 @@ async fn run_cli_deep_analysis(
         cmd.env(k, v);
     }
 
-    if cli_id == "claude" {
+    if cli_id == "codex" {
+        cmd.args(["exec", "--skip-git-repo-check", "-"]);
+    } else if cli_id == "claude" {
         cmd.arg("-p").arg(&prompt);
     } else if cli_id == "antigravity" {
         cmd.arg("-p").arg(&prompt);
@@ -1024,7 +1063,11 @@ async fn run_cli_deep_analysis(
     }
 
     let output = tauri::async_runtime::spawn_blocking(move || {
-        cmd.output().map_err(|e| format!("CLI 실행 실패: {}", e))
+        if cli_id == "codex" {
+            output_with_prompt(cmd, &prompt)
+        } else {
+            cmd.output().map_err(|e| format!("CLI 실행 실패: {}", e))
+        }
     }).await.map_err(|e| e.to_string())??;
 
     if !output.status.success() {
