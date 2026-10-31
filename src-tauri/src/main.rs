@@ -596,8 +596,12 @@ fn analyze_project_workspace(project_path: String) -> Result<ProjectAnalysisResu
 }
 
 #[tauri::command]
-fn get_project_deep_context(project_path: String) -> Result<db::ProjectDeepContext, String> {
-    db::get_project_deep_context(&project_path).map_err(|e| e.to_string())
+async fn get_project_deep_context(project_path: String) -> Result<db::ProjectDeepContext, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        db::get_project_deep_context(&project_path).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 fn run_quiet(prog: &str, args: &[&str], dir: Option<&std::path::Path>) -> Option<String> {

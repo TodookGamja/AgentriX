@@ -326,6 +326,7 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
 
         {/* 본문 스크롤 영역 */}
         <div className="p-6 overflow-y-auto space-y-5 flex-1">
+          {!projectContext && <p role="status" className="text-xs text-slate-400">프로젝트 정보를 불러오는 중...</p>}
           {/* TAB 1: 설치된 AI CLI 직접 연동 */}
           {activeTab === "cli" && (
             <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3.5">
@@ -719,7 +720,7 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
               <button
                 type="button"
                 onClick={handleRunDeepAnalysis}
-                disabled={isAnalyzing || (activeTab === "api" && !config.apiKey && config.provider !== "ollama")}
+                disabled={!projectContext || isAnalyzing || (activeTab === "api" && !config.apiKey && config.provider !== "ollama")}
                 className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 px-5 py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 via-fuchsia-600 to-pink-600 hover:from-indigo-500 hover:to-pink-500 disabled:opacity-50 text-white text-xs font-bold shadow-lg flex items-center gap-2 transition"
               >
                 {isAnalyzing ? (

@@ -704,17 +704,24 @@ export const App: React.FC = () => {
   // AI 심층 팀빌딩 모달 상태
   const [showAiDeepModal, setShowAiDeepModal] = useState(false);
   const [projectDeepContext, setProjectDeepContext] = useState<ProjectDeepContext | null>(null);
+  const deepContextRequestRef = useRef(0);
 
   const handleOpenAiDeepModal = async () => {
     if (!selectedProjectPath) {
       showToast("먼저 프로젝트 폴더를 선택해 주세요.", "error");
       return;
     }
+    const request = ++deepContextRequestRef.current;
+    setProjectDeepContext(null);
+    setShowAiDeepModal(true);
     try {
       const ctx = await apiGetProjectDeepContext(selectedProjectPath);
+      if (request !== deepContextRequestRef.current) return;
+      if (!ctx) throw new Error("프로젝트 정보를 불러올 수 없습니다.");
       setProjectDeepContext(ctx);
-      setShowAiDeepModal(true);
     } catch (e: any) {
+      if (request !== deepContextRequestRef.current) return;
+      setShowAiDeepModal(false);
       showToast(`프로젝트 정보 로드 실패: ${e?.message || String(e)}`, "error");
     }
   };
@@ -4276,7 +4283,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
       {/* 모달 6: AI 심층 팀빌딩 & AI 엔진 연동 설정 모달 */}
       <AiDeepTeamModal
         isOpen={showAiDeepModal}
-        onClose={() => setShowAiDeepModal(false)}
+        onClose={() => { deepContextRequestRef.current++; setShowAiDeepModal(false); }}
         projectPath={selectedProjectPath}
         projectName={getShortFolderName(selectedProjectPath)}
         projectContext={projectDeepContext}
