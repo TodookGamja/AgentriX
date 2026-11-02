@@ -1373,13 +1373,13 @@ fn rfc3339_expired(s: &str) -> bool {
         .unwrap_or(true)
 }
 
-fn fetch_antigravity_quota_worker() -> Option<(CliQuotaStatus, bool)> {
+fn fetch_antigravity_quota_worker() -> Result<(CliQuotaStatus, bool), String> {
     let res = crate::agy_quota::fetch()?;
     let cache_mutex = AGY_QUOTA_CACHE.get_or_init(|| Mutex::new(None));
     if let Ok(mut guard) = cache_mutex.lock() {
         *guard = Some((Instant::now(), res.clone()));
     }
-    Some((res, true))
+    Ok((res, true))
 }
 fn get_agy_cache_file() -> PathBuf {
     dirs::data_dir()
@@ -1416,7 +1416,7 @@ pub fn extract_antigravity_quota(force_refresh: bool) -> CliQuotaStatus {
     extract_antigravity_quota_with(force_refresh, fetch_antigravity_quota_worker)
 }
 
-fn extract_antigravity_quota_with(force_refresh: bool, fetch: impl FnOnce() -> Option<(CliQuotaStatus, bool)>) -> CliQuotaStatus {
+fn extract_antigravity_quota_with(force_refresh: bool, fetch: impl FnOnce() -> Result<(CliQuotaStatus, bool), String>) -> CliQuotaStatus {
     let cache_mutex = AGY_QUOTA_CACHE.get_or_init(|| Mutex::new(None));
     if let Ok(guard) = cache_mutex.lock() {
         if let Some((fetched_at, cached)) = guard.as_ref() {
@@ -1427,19 +1427,24 @@ fn extract_antigravity_quota_with(force_refresh: bool, fetch: impl FnOnce() -> O
     }
 
     // 공식 API 조회는 모델 토큰을 쓰지 않으므로 캐시가 지나면 항상 다시 조회 (예전엔 트레이 새로고침에서만 조회해 수치가 멈춤)
-    if let Some((res, complete)) = fetch() {
-        if complete { save_agy_cache_to_disk(&res); }
-        return res;
-    }
+    let error = match fetch() {
+        Ok((res, complete)) => {
+            if complete { save_agy_cache_to_disk(&res); }
+            return res;
+        }
+        Err(error) => error,
+    };
 
-    if let Ok(guard) = cache_mutex.lock() {
-        if let Some((fetched_at, cached)) = guard.as_ref() {
+    if let Ok(mut guard) = cache_mutex.lock() {
+        if let Some((fetched_at, cached)) = guard.as_mut() {
+            cached.status_message = Some(format!("조회 실패: {error} (이전 쿼터 표시)"));
             return normalize_memory_quota(cached, *fetched_at);
         }
     }
 
     // 디스크에 영구 저장된 직전 쿼터 즉시 복원 (앱 기동 시 0ms 지연 없음)
-    if let Some(disk_cached) = load_agy_cache_from_disk() {
+    if let Some(mut disk_cached) = load_agy_cache_from_disk() {
+        disk_cached.status_message = Some(format!("조회 실패: {error} (이전 쿼터 표시)"));
         if let Ok(mut guard) = cache_mutex.lock() {
             *guard = Some((Instant::now(), disk_cached.clone()));
         }
@@ -1447,7 +1452,7 @@ fn extract_antigravity_quota_with(force_refresh: bool, fetch: impl FnOnce() -> O
     }
 
     // 조회 실패(agy 미로그인·네트워크 오류) 시 가짜 수치 대신 조회 불가 상태 표시
-    unavailable_quota("antigravity", "Antigravity (agy)", "Google DeepMind", "Antigravity 쿼터 연동", "쿼터 조회 실패 (agy 로그인 상태 확인)")
+    unavailable_quota("antigravity", "Antigravity (agy)", "Google DeepMind", "Antigravity 쿼터 연동", &format!("쿼터 조회 실패: {error}"))
 }
 
 /// DB 잠금을 잡기 전에 호출: 각 공식 쿼터 API를 병렬로 조회해 60초 캐시를 채운다.
@@ -1799,9 +1804,10 @@ mod live_quota_tests {
         let mut quota = super::unavailable_quota("antigravity", "agy", "", "", "");
         quota.remaining_percent_5h = 80.0;
         let previous = cache.lock().unwrap().replace((std::time::Instant::now(), quota));
-        let result = super::extract_antigravity_quota_with(true, || None);
+        let result = super::extract_antigravity_quota_with(true, || Err("테스트 오류".into()));
         *cache.lock().unwrap() = previous;
         assert_eq!(result.remaining_percent_5h, 80.0);
+        assert!(result.status_message.unwrap().contains("테스트 오류"));
     }
 
     /// 실제 로그인 정보로 공식 쿼터 API 조회 확인: `cargo test live_quotas -- --ignored --nocapture`

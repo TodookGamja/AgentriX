@@ -528,7 +528,7 @@ export const UsageView: React.FC<UsageViewProps> = ({
                         <span className="text-slate-400">확인 불가</span>
                       </div>
                       <div className="w-full h-2 bg-slate-800/40 rounded-full overflow-hidden"><div className="h-full bg-slate-700/40 w-full" /></div>
-                    <p className="text-[11px] text-slate-500">{q.cliId === "cursor" ? "Cursor 로그인 정보를 읽지 못했습니다." : "Antigravity 잔량을 조회하지 못했습니다."}</p>
+                    <p className="text-[11px] text-slate-500">{q.cliId === "cursor" ? "Cursor 로그인 정보를 읽지 못했습니다." : q.statusMessage || "Antigravity 잔량을 조회하지 못했습니다."}</p>
                     </div>
                   ) : (<>
                   {/* 5시간 세션 한도 게이지 */}
@@ -596,6 +596,7 @@ export const UsageView: React.FC<UsageViewProps> = ({
                   </div>
 
                   </>)}
+                  {q.cliId === "antigravity" && q.hasOfficialQuota && q.statusMessage && <p className="text-[11px] text-amber-300">{q.statusMessage}</p>}
                   {/* 기타 모델 그룹별 개별 쿼터 (예: Antigravity의 Claude and GPT models, Gemini 4 Argon 등) */}
                   {q.cliId !== "cursor" && q.subGroups && q.subGroups.length > 0 && (
                     <div className="pt-2 border-t border-slate-800/80 space-y-2">

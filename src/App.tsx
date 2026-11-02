@@ -3055,8 +3055,9 @@ ${recentSnippet || "진행 내역 기록 없음"}
               </div>
             </div>
 
+                {focusedCliId === "antigravity" && isSidebarQuotaValid && sidebarQuota?.statusMessage && <p className="text-[11px] text-amber-300">{sidebarQuota.statusMessage}</p>}
                 {focusedCliId === "antigravity" && sidebarQuota && !isSidebarQuotaValid ? (
-                  <p className="text-[11px] text-slate-400">Antigravity 잔량을 조회하지 못했습니다.</p>
+                  <p className="text-[11px] text-slate-400">{sidebarQuota.statusMessage || "Antigravity 잔량을 조회하지 못했습니다."}</p>
                 ) : quotaPending ? (
                   <div className="space-y-2.5 animate-pulse motion-reduce:animate-none" aria-busy="true" aria-label="쿼터 조회 중">
                     <div className="space-y-1">

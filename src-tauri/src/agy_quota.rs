@@ -67,12 +67,18 @@ fn parse_screen(screen: &str, now: DateTime<Utc>) -> Option<CliQuotaStatus> {
         used_percent_5h: 100.0-five, remaining_percent_5h: five, resets_at_5h: main.resets_at_5h.clone(), used_percent_weekly: 100.0-weekly, remaining_percent_weekly: weekly, resets_at_weekly: main.resets_at_weekly.clone(), status_message: None, sub_groups: Some(groups) })
 }
 
-pub fn fetch() -> Option<CliQuotaStatus> {
+fn failure_reason(sent: bool, output: &[u8]) -> String {
+    if !sent { "agy 시작 화면을 확인하지 못했습니다" }
+    else if !String::from_utf8_lossy(output).contains("Models & Quota") { "agy /quota 화면이 열리지 않았습니다" }
+    else { "agy /quota 응답이 불완전하거나 형식이 다릅니다" }.to_string()
+}
+
+pub fn fetch() -> Result<CliQuotaStatus, String> {
     let bin = crate::cli::home_dir().join("AppData").join("Local").join("agy").join("bin").join("agy.exe");
-    let pair = portable_pty::native_pty_system().openpty(portable_pty::PtySize { rows: 100, cols: 120, pixel_width: 0, pixel_height: 0 }).ok()?;
-    let mut reader = pair.master.try_clone_reader().ok()?;
-    let mut writer = pair.master.take_writer().ok()?;
-    let mut child = pair.slave.spawn_command(portable_pty::CommandBuilder::new(bin)).ok()?;
+    let pair = portable_pty::native_pty_system().openpty(portable_pty::PtySize { rows: 100, cols: 120, pixel_width: 0, pixel_height: 0 }).map_err(|_| "PTY 생성 실패".to_string())?;
+    let mut reader = pair.master.try_clone_reader().map_err(|_| "PTY 출력 연결 실패".to_string())?;
+    let mut writer = pair.master.take_writer().map_err(|_| "PTY 입력 연결 실패".to_string())?;
+    let mut child = pair.slave.spawn_command(portable_pty::CommandBuilder::new(bin)).map_err(|_| "agy 실행 실패".to_string())?;
     drop(pair.slave);
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || { let mut buf = [0u8; 8192]; while let Ok(n) = reader.read(&mut buf) { if n == 0 || tx.send(buf[..n].to_vec()).is_err() { break; } } });
@@ -100,12 +106,18 @@ pub fn fetch() -> Option<CliQuotaStatus> {
     }
     let _ = child.kill();
     let _ = child.wait();
-    result
+    result.ok_or_else(|| failure_reason(sent, &output))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn failure_message_identifies_stage_without_echoing_output() {
+        assert!(failure_reason(false, b"").contains("시작 화면"));
+        assert!(failure_reason(true, b"private output").contains("열리지"));
+        assert!(failure_reason(true, b"Models & Quota").contains("형식"));
+    }
     #[test]
     fn parses_quota_groups() {
         let screen = "Models & Quota\nGEMINI MODELS\nModels within this group: Gemini Flash, Gemini Pro\nWeekly Limit Remaining\n[bar] 24.67%\nRefreshes in 2h 29m\nFive Hour Limit Remaining\n[bar] 94.71%\nRefreshes in 2h 47m\nCLAUDE AND GPT MODELS\nWeekly Limit Remaining\n49.26%\nRefreshes in 23h 40m\nFive Hour Limit Remaining\nQuota available\nGEMINI 4 ARGON\nWeekly Limit Remaining\n0.00%\nRefreshes in 2h 29m\n";
