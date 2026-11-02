@@ -17,10 +17,38 @@ pub struct ApplyResult {
     pub status: String,
 }
 
+fn expand_plugin_root(value: &mut Value, root: &str) {
+    match value {
+        Value::String(s) => *s = s.replace("${CLAUDE_PLUGIN_ROOT}", root),
+        Value::Array(items) => items.iter_mut().for_each(|item| expand_plugin_root(item, root)),
+        Value::Object(items) => items.values_mut().for_each(|item| expand_plugin_root(item, root)),
+        _ => {}
+    }
+}
+
+fn opencode_mcp_config(server: &Value) -> Option<Value> {
+    if server.get("enabled").and_then(Value::as_bool) == Some(false) {
+        return None;
+    }
+    if let Some(url) = server.get("url").and_then(Value::as_str) {
+        let mut config = json!({"url": url});
+        if let Some(headers) = server.get("headers") { config["headers"] = headers.clone(); }
+        return Some(config);
+    }
+    let command = server.get("command")?.as_array()?;
+    let mut config = json!({"command": command.first()?.as_str()?, "args": &command[1..]});
+    if let Some(env) = server.get("environment") { config["env"] = env.clone(); }
+    Some(config)
+}
+
 /// 로컬 PC의 ~/.claude.json, ~/.codex/config.toml, ~/.grok/config.toml, 각 CLI의 skills/ 및 plugins/ 폴더를 실측 스캔하여
 /// 이미 설치해 사용 중인 MCP 서버, 스킬, 플러그인을 자동으로 레지스트리에 등록합니다.
 pub fn discover_local_cli_extensions(conn: &Connection) -> Result<usize> {
     let home = crate::cli::home_dir();
+    discover_local_cli_extensions_at(conn, &home)
+}
+
+fn discover_local_cli_extensions_at(conn: &Connection, home: &Path) -> Result<usize> {
     let now = Utc::now().to_rfc3339();
     let mut discovered_count = 0usize;
 
@@ -64,10 +92,20 @@ pub fn discover_local_cli_extensions(conn: &Connection) -> Result<usize> {
         Ok(())
     };
 
-    // 1. ~/.claude.json 내 mcpServers 스캔
-    let claude_json_path = home.join(".claude.json");
-    if claude_json_path.is_file() {
-        if let Ok(raw) = std::fs::read_to_string(&claude_json_path) {
+    // Read each supported CLI's registered MCP servers.
+    let projects = crate::db::get_project_folders(conn).unwrap_or_default();
+    let mut json_configs = vec![
+        ("claude", home.join(".claude.json")),
+        ("cursor", home.join(".cursor").join("mcp.json")),
+        ("antigravity", home.join(".gemini").join("config").join("mcp_config.json")),
+        ("antigravity", home.join(".gemini").join("settings.json")),
+    ];
+    for project in &projects {
+        let path = Path::new(&project.path);
+        json_configs.extend([("", path.join(".mcp.json")), ("", path.join(".cursor").join("mcp.json")), ("", path.join(".gemini").join("settings.json"))]);
+    }
+    for (cli_id, config_path) in json_configs {
+        if let Ok(raw) = std::fs::read_to_string(&config_path) {
             if let Ok(val) = serde_json::from_str::<Value>(&raw) {
                 if let Some(mcp_map) = val.get("mcpServers").and_then(|m| m.as_object()) {
                     for (srv_key, srv_val) in mcp_map {
@@ -90,7 +128,7 @@ pub fn discover_local_cli_extensions(conn: &Connection) -> Result<usize> {
                         } else {
                             format!("{} (MCP)", srv_key)
                         };
-                        let _ = merge_item(&item_id, "mcp", &display_name, &desc, is_saver, &cfg_str, "claude");
+                        merge_item(&item_id, "mcp", &display_name, &desc, is_saver, &cfg_str, cli_id)?;
                         discovered_count += 1;
                     }
                 }
@@ -99,6 +137,7 @@ pub fn discover_local_cli_extensions(conn: &Connection) -> Result<usize> {
     }
 
     // 2. ~/.codex/config.toml 및 ~/.grok/config.toml 내 mcp_servers, plugins 스캔
+    let mut codex_plugins = Vec::new();
     for (cli_id, toml_path) in [
         ("codex", home.join(".codex").join("config.toml")),
         ("grok", home.join(".grok").join("config.toml")),
@@ -133,7 +172,10 @@ pub fn discover_local_cli_extensions(conn: &Connection) -> Result<usize> {
                                 .get("enabled")
                                 .and_then(|e| e.as_bool())
                                 .unwrap_or(true);
-                            if enabled {
+                        if enabled {
+                            if cli_id == "codex" {
+                                codex_plugins.push(plug_key.split('@').next().unwrap_or(plug_key).to_string());
+                            }
                                 let item_id = format!("plugin-{}", plug_key.replace('@', "-"));
                                 let cfg_str = serde_json::to_string_pretty(&json!({
                                     "pluginName": plug_key,
@@ -152,7 +194,29 @@ pub fn discover_local_cli_extensions(conn: &Connection) -> Result<usize> {
         }
     }
 
+    // OpenCode uses an array for the command and a separate environment field.
+    let mut opencode_configs = vec![("opencode", home.join(".config").join("opencode").join("opencode.json"))];
+    for project in &projects {
+        opencode_configs.push(("", Path::new(&project.path).join("opencode.json")));
+    }
+    for (cli_id, opencode_path) in opencode_configs {
+      if let Ok(text) = std::fs::read_to_string(opencode_path) {
+        if let Ok(value) = serde_json::from_str::<Value>(&text) {
+            if let Some(servers) = value.get("mcp").and_then(Value::as_object) {
+                for (name, server) in servers {
+                    if let Some(config) = opencode_mcp_config(server) {
+                        let id = if name.eq_ignore_ascii_case("headroom") { "headroom-mcp".to_string() } else { format!("mcp-{}", name) };
+                        merge_item(&id, "mcp", &format!("{} (MCP)", name), "OpenCode 설정에서 감지된 MCP 서버", i64::from(id == "headroom-mcp"), &config.to_string(), cli_id)?;
+                        discovered_count += 1;
+                    }
+                }
+            }
+        }
+      }
+    }
+
     // 3. ~/.claude/plugins/installed_plugins.json 스캔
+    let mut plugin_skill_roots = Vec::new();
     let claude_plugins_json = home
         .join(".claude")
         .join("plugins")
@@ -164,6 +228,27 @@ pub fn discover_local_cli_extensions(conn: &Connection) -> Result<usize> {
                     for (plug_key, plug_arr) in plug_map {
                         let item_id = format!("plugin-{}", plug_key.replace('@', "-"));
                         let first_entry = plug_arr.as_array().and_then(|a| a.first()).cloned().unwrap_or_else(|| json!({}));
+                    if let Some(entries) = plug_arr.as_array() {
+                        for entry in entries {
+                            if let Some(path) = entry.get("installPath").and_then(Value::as_str) {
+                                let root = PathBuf::from(path);
+                                plugin_skill_roots.push(root.join("skills"));
+                                if let Ok(raw) = std::fs::read_to_string(root.join(".mcp.json")) {
+                                    if let Ok(value) = serde_json::from_str::<Value>(&raw) {
+                                        if let Some(servers) = value.get("mcpServers").unwrap_or(&value).as_object() {
+                                            for (name, server) in servers {
+                                                let mut server = server.clone();
+                                                expand_plugin_root(&mut server, &root.to_string_lossy());
+                                                let id = format!("mcp-{}", name);
+                                                merge_item(&id, "mcp", &format!("{} (MCP)", name), &format!("{} 플러그인에 포함된 MCP 서버", plug_key), 0, &server.to_string(), "")?;
+                                                discovered_count += 1;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                         let ver = first_entry.get("version").and_then(|v| v.as_str()).unwrap_or("1.0.0");
                         let cfg_str = serde_json::to_string_pretty(&first_entry).unwrap_or_default();
                         let desc = format!("설치된 플러그인 v{} ({})", ver, plug_key);
@@ -176,14 +261,48 @@ pub fn discover_local_cli_extensions(conn: &Connection) -> Result<usize> {
     }
 
     // 4. 각 CLI의 skills 디렉터리 스캔 (~/.claude/skills, ~/.codex/skills, ~/.grok/skills, ~/.cursor/skills, ~/.gemini/config/skills)
-    let skill_roots = vec![
+    let codex_cache = home.join(".codex").join("plugins").join("cache");
+    if let Ok(publishers) = std::fs::read_dir(codex_cache) {
+        for publisher in publishers.flatten() {
+            for name in &codex_plugins {
+                if let Ok(versions) = std::fs::read_dir(publisher.path().join(name)) {
+                    for version in versions.flatten().filter(|entry| entry.path().is_dir()) {
+                        let root = version.path();
+                        plugin_skill_roots.push(root.join("skills"));
+                        if let Ok(raw) = std::fs::read_to_string(root.join(".mcp.json")) {
+                            if let Ok(value) = serde_json::from_str::<Value>(&raw) {
+                                if let Some(servers) = value.get("mcpServers").unwrap_or(&value).as_object() {
+                                    for (name, server) in servers {
+                                        let mut server = server.clone();
+                                        expand_plugin_root(&mut server, &root.to_string_lossy());
+                                        merge_item(&format!("mcp-{}", name), "mcp", &format!("{} (MCP)", name), "Codex 플러그인에 포함된 MCP 서버", 0, &server.to_string(), "")?;
+                                        discovered_count += 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut skill_roots = vec![
         ("claude", home.join(".claude").join("skills")),
         ("codex", home.join(".codex").join("skills")),
         ("grok", home.join(".grok").join("skills")),
         ("cursor", home.join(".cursor").join("skills")),
         ("antigravity", home.join(".gemini").join("config").join("skills")),
         ("opencode", home.join(".config").join("opencode").join("skills")),
+        ("codex", home.join(".agents").join("skills")),
+        ("codex", home.join(".codex").join("skills").join(".system")),
     ];
+    skill_roots.extend(plugin_skill_roots.into_iter().map(|path| ("", path)));
+    for project in &projects {
+        let path = Path::new(&project.path);
+        for dir in [".agents/skills", ".claude/skills", ".codex/skills", ".cursor/skills", ".gemini/skills", ".opencode/skills"] {
+            skill_roots.push(("", path.join(dir)));
+        }
+    }
 
     let mut skill_clis: BTreeMap<String, (Vec<String>, String, String)> = BTreeMap::new();
     for (cli_id, root) in skill_roots {
@@ -599,6 +718,50 @@ fn apply_mcp_to_toml(path: &Path, server_id: &str, cfg: &Value, enabled: bool) -
 mod tests {
     use super::*;
     use crate::db::{get_backups, setup_schema};
+
+    #[test]
+    fn discovers_supported_configs_and_plugin_contents() {
+        let home = std::env::temp_dir().join(format!("acm_discovery_{}", uuid::Uuid::new_v4()));
+        let write = |path: &str, content: &str| {
+            let path = home.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, content).unwrap();
+        };
+        write(".cursor/mcp.json", r#"{"mcpServers":{"cursor-server":{"command":"cursor-tool"}}}"#);
+        write(".gemini/config/mcp_config.json", r#"{"mcpServers":{"gemini-server":{"command":"gemini-tool"}}}"#);
+        write(".config/opencode/opencode.json", r#"{"mcp":{"serena":{"type":"local","command":["uvx","serena"]}}}"#);
+        write(".agents/skills/shared/SKILL.md", "---\nname: shared\ndescription: Shared skill\n---\n");
+        let plugin = home.join("plugin");
+        write("plugin/skills/example/SKILL.md", "---\nname: example\ndescription: Plugin skill\n---\n");
+        write("plugin/.mcp.json", r#"{"mcpServers":{"embedded":{"command":"${CLAUDE_PLUGIN_ROOT}/server"}}}"#);
+        write(".claude/plugins/installed_plugins.json", &json!({"plugins":{"example@market":[{"installPath":plugin}]}}).to_string());
+        write(".codex/config.toml", "[plugins.\"myplugin@market\"]\nenabled = true\n");
+        write(".codex/plugins/cache/market/myplugin/1.0/skills/codex-plugin/SKILL.md", "---\nname: codex-plugin\ndescription: Plugin skill\n---\n");
+        write(".codex/plugins/cache/market/myplugin/1.0/.mcp.json", r#"{"mcpServers":{"codex-plugin-server":{"command":"tool"}}}"#);
+        write("project/.mcp.json", r#"{"mcpServers":{"project-server":{"command":"project-tool"}}}"#);
+        write("project/.agents/skills/project-skill/SKILL.md", "---\nname: project-skill\ndescription: Project skill\n---\n");
+        write("plugin/.mcp.json", r#"{"embedded":{"command":"${CLAUDE_PLUGIN_ROOT}/server"}}"#);
+        let conn = Connection::open_in_memory().unwrap();
+        setup_schema(&conn).unwrap();
+        conn.execute("INSERT INTO user_projects(path, name, last_used_at) VALUES (?1, 'project', '2026')", params![home.join("project").to_string_lossy()]).unwrap();
+        discover_local_cli_extensions_at(&conn, &home).unwrap();
+        let items = get_registry_items(&conn).unwrap();
+        for id in ["mcp-cursor-server", "mcp-gemini-server", "mcp-serena", "skill-shared", "skill-example", "skill-codex-plugin", "plugin-example-market", "mcp-embedded", "mcp-project-server", "skill-project-skill", "mcp-codex-plugin-server"] {
+            assert!(items.iter().any(|item| item.id == id), "missing {id}");
+        }
+        let embedded = items.iter().find(|item| item.id == "mcp-embedded").unwrap();
+        assert!(embedded.applied_clis.is_empty());
+        assert!(embedded.config_json.contains("plugin/server" ) || embedded.config_json.contains("plugin\\\\server"));
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn discovers_opencode_mcp_configuration() {
+        let server = json!({"type":"local", "command":["uvx", "--from", "serena-agent", "serena"], "environment":{"A":"B"}, "enabled":true});
+        assert_eq!(opencode_mcp_config(&server), Some(json!({"command":"uvx", "args":["--from", "serena-agent", "serena"], "env":{"A":"B"}})));
+        assert!(opencode_mcp_config(&json!({"enabled":false, "command":["uvx"]})).is_none());
+        assert_eq!(opencode_mcp_config(&json!({"url":"https://example.com", "headers":{"A":"B"}})), Some(json!({"url":"https://example.com", "headers":{"A":"B"}})));
+    }
 
     #[test]
     fn opencode_mcp_uses_native_format_and_preserves_other_settings() {

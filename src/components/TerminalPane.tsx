@@ -564,6 +564,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
   const ARROW_CODE: Record<string, string> = { ArrowUp: "A", ArrowDown: "B", ArrowRight: "C", ArrowLeft: "D" };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
     // 입력창이 비어 있으면 방향키/Tab/Esc는 CLI 화면(질문 선택 등)으로 그대로 전달.
     // 메시지 기록 넘기기는 Ctrl+↑/↓로 이동.
     const emptyInput = promptText === "" && attachments.length === 0;

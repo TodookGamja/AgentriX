@@ -203,7 +203,7 @@ export const McpSkillView: React.FC<McpSkillViewProps> = ({
             플러그인 · 스킬 · MCP 중앙 레지스트리 & 로컬 환경 자동 연동
           </h2>
           <p className="text-xs text-slate-400 mt-0.5">
-            현재 PC의 `~/.claude.json`, `~/.codex/config.toml`, `~/.grok/config.toml`, 각 CLI의 `skills/` 및 `plugins/`를 자동 감지했으며, 다른 CLI에도 원클릭으로 복제·배포할 수 있습니다 (수정 전 `.bak` 백업 필수 생성).
+          지원 CLI의 설정, 등록된 프로젝트 및 설치된 플러그인에서 MCP 서버와 스킬을 감지합니다. 다른 CLI에 적용할 때 기존 설정 파일은 백업합니다.
           </p>
         </div>
 
