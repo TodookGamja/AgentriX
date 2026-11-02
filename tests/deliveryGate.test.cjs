@@ -8,6 +8,13 @@ const js = ts.transpileModule(fs.readFileSync("src/lib/deliveryGate.ts", "utf8")
 const api = {};
 vm.runInNewContext(js, { exports: api });
 
+test("a running or ambiguous Codex turn cannot be treated as idle on silence", () => {
+  assert.equal(api.logTurnStillBusy("codex", { startedAt: 100, completedAt: null }), true);
+  assert.equal(api.logTurnStillBusy("codex", { startedAt: 100, completedAt: 200 }), false);
+  assert.equal(api.logTurnStillBusy("codex", { startedAt: null, completedAt: null }), true);
+  assert.equal(api.logTurnStillBusy("codex", null), false);
+});
+
 test("no previous delivery or turn-start evidence proceeds", () => {
   assert.equal(api.deliveryGate(undefined, false, 0, 0), "proceed");
   assert.equal(api.deliveryGate({ at: 1 }, true, 0, 0), "proceed");

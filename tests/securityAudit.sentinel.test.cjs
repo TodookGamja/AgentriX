@@ -165,3 +165,23 @@ test("SEC: CSP baseline keeps default-src self; img-src http: tracked as V104_SE
     "expected img-src http: until V104_SEC5; flip assertion when fixed"
   );
 });
+
+test("SEC: helper/PTY/agy processes pin safe_helper_cwd; System32 startup is guarded", () => {
+  const cli = read("src-tauri/src/cli.rs");
+  const main = read("src-tauri/src/main.rs");
+  const pty = read("src-tauri/src/pty.rs");
+  const agy = read("src-tauri/src/agy_quota.rs");
+  const tools = read("src-tauri/src/tools.rs");
+  const usage = read("src-tauri/src/usage.rs");
+  assert.match(cli, /pub fn safe_helper_cwd/);
+  assert.match(cli, /pub fn guard_startup_cwd/);
+  assert.match(cli, /system32_startup_and_helper_use_safe_directory/);
+  assert.match(main, /cli::guard_startup_cwd\(\)/);
+  assert.match(main, /cli::safe_helper_cwd\(\)/);
+  assert.match(pty, /crate::cli::safe_helper_cwd\(\)/);
+  assert.match(tools, /crate::cli::safe_helper_cwd\(\)/);
+  assert.match(usage, /crate::cli::safe_helper_cwd\(\)/);
+  assert.match(agy, /command\.cwd\(cwd\)/);
+  assert.match(agy, /crate::cli::safe_helper_cwd\(\)/);
+  assert.doesNotMatch(agy, /println!\([^)]*access_token|eprintln!\([^)]*Bearer|eprintln!\([^)]*access_token/);
+});

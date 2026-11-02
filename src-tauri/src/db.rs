@@ -140,6 +140,8 @@ pub fn setup_schema(conn: &Connection) -> Result<()> {
     )?;
     // v1.0.5: 에이전트별 실행 모델 (이미 있으면 오류 무시)
     let _ = conn.execute("ALTER TABLE project_agents ADD COLUMN model TEXT NOT NULL DEFAULT ''", []);
+    let has_effort: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('project_agents') WHERE name = 'effort')", [], |row| row.get(0))?;
+    if !has_effort { conn.execute("ALTER TABLE project_agents ADD COLUMN effort TEXT NOT NULL DEFAULT ''", [])?; }
     Ok(())
 }
 
@@ -346,6 +348,8 @@ pub struct ProjectAgentRecord {
     /// 실행 모델 (빈 문자열 = CLI 기본 모델)
     #[serde(default)]
     pub model: String,
+    #[serde(default)]
+    pub effort: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -363,6 +367,8 @@ pub struct ProjectAgentInput {
     pub auto_brief: bool,
     #[serde(default)]
     pub model: String,
+    #[serde(default)]
+    pub effort: Option<String>,
 }
 
 pub fn normalize_project_path(raw: &str) -> String {
@@ -426,7 +432,7 @@ pub fn get_project_agents(conn: &Connection, project_path: &str) -> Result<Vec<P
     let norm = normalize_project_path(project_path);
     let norm_lower = norm.to_lowercase();
     let mut stmt = conn.prepare(
-        "SELECT id, project_path, name, role_title, cli_id, use_wrapper, avatar_emoji, accent_color, role_prompt, auto_brief, created_at, model
+        "SELECT id, project_path, name, role_title, cli_id, use_wrapper, avatar_emoji, accent_color, role_prompt, auto_brief, created_at, model, effort
          FROM project_agents
          WHERE LOWER(REPLACE(project_path, '/', '\\')) = ?1
          ORDER BY created_at ASC",
@@ -445,6 +451,7 @@ pub fn get_project_agents(conn: &Connection, project_path: &str) -> Result<Vec<P
             auto_brief: row.get::<_, i64>(9)? != 0,
             created_at: row.get(10)?,
             model: row.get(11)?,
+            effort: row.get(12)?,
         })
     })?;
     Ok(rows.flatten().collect())
@@ -461,6 +468,9 @@ pub fn upsert_project_agent(
     if input.name.trim().is_empty() || input.role_title.trim().is_empty() {
         anyhow::bail!("에이전트 이름과 역할을 입력해 주세요.");
     }
+    if let Some(effort) = &input.effort {
+        crate::cli::effort_args(input.cli_id.trim(), effort.trim()).map_err(anyhow::Error::msg)?;
+    }
 
     let id = input
         .id
@@ -471,8 +481,8 @@ pub fn upsert_project_agent(
 
     conn.execute(
         "INSERT INTO project_agents
-         (id, project_path, name, role_title, cli_id, use_wrapper, avatar_emoji, accent_color, role_prompt, auto_brief, created_at, model)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+         (id, project_path, name, role_title, cli_id, use_wrapper, avatar_emoji, accent_color, role_prompt, auto_brief, created_at, model, effort)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, COALESCE(?13, ''))
          ON CONFLICT(id) DO UPDATE SET
             project_path = excluded.project_path,
             name = excluded.name,
@@ -483,7 +493,8 @@ pub fn upsert_project_agent(
             accent_color = excluded.accent_color,
             role_prompt = excluded.role_prompt,
             auto_brief = excluded.auto_brief,
-            model = excluded.model",
+            model = excluded.model,
+            effort = CASE WHEN project_agents.cli_id <> excluded.cli_id AND ?13 IS NULL THEN '' ELSE COALESCE(?13, project_agents.effort) END",
         params![
             id,
             norm_path,
@@ -496,7 +507,8 @@ pub fn upsert_project_agent(
             input.role_prompt.trim(),
             if input.auto_brief { 1 } else { 0 },
             now,
-            input.model.trim()
+            input.model.trim(),
+            input.effort.as_deref().map(str::trim)
         ],
     )?;
 
@@ -566,6 +578,7 @@ pub fn seed_project_agents_preset(
             ),
             auto_brief: true,
             model: String::new(),
+            effort: None,
         },
         ProjectAgentInput {
             id: Some(format!("role-backend-{}", proj_name.to_lowercase().replace(' ', "-"))),
@@ -582,6 +595,7 @@ pub fn seed_project_agents_preset(
             ),
             auto_brief: true,
             model: String::new(),
+            effort: None,
         },
         ProjectAgentInput {
             id: Some(format!("role-frontend-{}", proj_name.to_lowercase().replace(' ', "-"))),
@@ -598,6 +612,7 @@ pub fn seed_project_agents_preset(
             ),
             auto_brief: true,
             model: String::new(),
+            effort: None,
         },
         ProjectAgentInput {
             id: Some(format!("role-qa-{}", proj_name.to_lowercase().replace(' ', "-"))),
@@ -614,6 +629,7 @@ pub fn seed_project_agents_preset(
             ),
             auto_brief: true,
             model: String::new(),
+            effort: None,
         },
     ];
 
@@ -815,6 +831,7 @@ pub fn analyze_project_workspace(project_path: &str) -> Result<ProjectAnalysisRe
         ),
         auto_brief: true,
         model: String::new(),
+        effort: None,
     });
 
     // 2. 스택 맞춤형 백엔드/코어 에이전트 추천
@@ -834,6 +851,7 @@ pub fn analyze_project_workspace(project_path: &str) -> Result<ProjectAnalysisRe
             ),
             auto_brief: true,
             model: String::new(),
+            effort: None,
         });
     } else if has_rust {
         recommended.push(ProjectAgentInput {
@@ -851,6 +869,7 @@ pub fn analyze_project_workspace(project_path: &str) -> Result<ProjectAnalysisRe
             ),
             auto_brief: true,
             model: String::new(),
+            effort: None,
         });
     } else {
         recommended.push(ProjectAgentInput {
@@ -869,6 +888,7 @@ pub fn analyze_project_workspace(project_path: &str) -> Result<ProjectAnalysisRe
             ),
             auto_brief: true,
             model: String::new(),
+            effort: None,
         });
     }
 
@@ -889,6 +909,7 @@ pub fn analyze_project_workspace(project_path: &str) -> Result<ProjectAnalysisRe
             ),
             auto_brief: true,
             model: String::new(),
+            effort: None,
         });
     } else {
         recommended.push(ProjectAgentInput {
@@ -906,6 +927,7 @@ pub fn analyze_project_workspace(project_path: &str) -> Result<ProjectAnalysisRe
             ),
             auto_brief: true,
             model: String::new(),
+            effort: None,
         });
     }
 
@@ -925,6 +947,7 @@ pub fn analyze_project_workspace(project_path: &str) -> Result<ProjectAnalysisRe
         ),
         auto_brief: true,
         model: String::new(),
+        effort: None,
     });
 
     // 5. DB / 성능 / 보안 스페셜리스트 (추가 선택용)
@@ -944,6 +967,7 @@ pub fn analyze_project_workspace(project_path: &str) -> Result<ProjectAnalysisRe
             ),
             auto_brief: true,
             model: String::new(),
+            effort: None,
         });
     } else {
         recommended.push(ProjectAgentInput {
@@ -961,6 +985,7 @@ pub fn analyze_project_workspace(project_path: &str) -> Result<ProjectAnalysisRe
             ),
             auto_brief: true,
             model: String::new(),
+            effort: None,
         });
     }
 
@@ -2010,6 +2035,30 @@ pub fn reset_all_user_data(conn: &Connection) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn effort_migration_preserves_agents_and_legacy_updates() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE project_agents (id TEXT PRIMARY KEY, project_path TEXT NOT NULL, name TEXT NOT NULL, role_title TEXT NOT NULL, cli_id TEXT NOT NULL, use_wrapper INTEGER NOT NULL DEFAULT 1, avatar_emoji TEXT NOT NULL, accent_color TEXT NOT NULL, role_prompt TEXT NOT NULL, auto_brief INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL);").unwrap();
+        let project = std::env::temp_dir().join(format!("agentrix-effort-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&project).unwrap();
+        let path = project.to_string_lossy().to_string();
+        conn.execute("INSERT INTO project_agents VALUES ('test-agent', ?1, 'Test', 'Developer', 'codex', 1, '', '', '', 1, '2026-01-01')", [&path]).unwrap();
+        super::setup_schema(&conn).unwrap();
+        super::setup_schema(&conn).unwrap();
+        let agent = super::get_project_agents(&conn, &path).unwrap().remove(0);
+        assert_eq!(agent.effort, "");
+        let mut input = super::ProjectAgentInput { id: Some(agent.id), project_path: path.clone(), name: agent.name, role_title: agent.role_title, cli_id: agent.cli_id, use_wrapper: agent.use_wrapper, avatar_emoji: agent.avatar_emoji, accent_color: agent.accent_color, role_prompt: agent.role_prompt, auto_brief: agent.auto_brief, model: agent.model, effort: Some("high".into()) };
+        assert_eq!(super::upsert_project_agent(&conn, &input).unwrap()[0].effort, "high");
+        input.effort = None;
+        assert_eq!(super::upsert_project_agent(&conn, &input).unwrap()[0].effort, "high");
+        input.effort = Some("high;calc".into());
+        assert!(super::upsert_project_agent(&conn, &input).is_err());
+        assert_eq!(super::get_project_agents(&conn, &path).unwrap()[0].effort, "high");
+        input.cli_id = "antigravity".into(); input.effort = None;
+        assert_eq!(super::upsert_project_agent(&conn, &input).unwrap()[0].effort, "");
+        assert!(project.starts_with(std::env::temp_dir()));
+        std::fs::remove_dir_all(project).unwrap();
+    }
     #[test]
     fn agent_cli_session_survives_schema_upgrade_and_is_isolated() {
         let conn = create_memory_db();

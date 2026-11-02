@@ -13,5 +13,5 @@ export const fitAgentsToInstalled = <T extends ProjectAgentInput>(agents: T[], c
   const ids = installedAgentClis(clis).map((c) => c.id);
   if (ids.length === 0) return agents;
   const fallback = FALLBACK_ORDER.find((id) => ids.includes(id)) ?? ids[0];
-  return agents.map((a) => (ids.includes(a.cliId) ? a : { ...a, cliId: fallback, model: "" }));
+  return agents.map((a) => (ids.includes(a.cliId) ? a : { ...a, cliId: fallback, model: "", effort: "" }));
 };

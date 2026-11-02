@@ -27,6 +27,48 @@ pub fn home_dir() -> PathBuf {
     dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
 }
 
+pub fn effort_options(cli_id: &str) -> &'static [&'static str] {
+    match cli_id {
+        "codex" => &["low", "medium", "high", "xhigh", "max", "ultra"],
+        "claude" => &["low", "medium", "high", "xhigh", "max"],
+        _ => &[],
+    }
+}
+
+pub fn effort_args(cli_id: &str, effort: &str) -> Result<Vec<String>, String> {
+    if effort.is_empty() { return Ok(Vec::new()); }
+    if !effort_options(cli_id).contains(&effort) { return Err("지원하지 않는 추론 강도입니다".into()); }
+    Ok(if cli_id == "codex" { vec!["-c".into(), format!("model_reasoning_effort={effort}")] } else { vec!["--effort".into(), effort.into()] })
+}
+
+pub fn safe_helper_cwd() -> PathBuf {
+    let home = home_dir();
+    if home.is_absolute() && home.is_dir() && !crate::db::is_forbidden_system_dir(&home.to_string_lossy()) {
+        home
+    } else {
+        let temp = std::env::temp_dir();
+        if temp.is_absolute() && temp.is_dir() && !crate::db::is_forbidden_system_dir(&temp.to_string_lossy()) { temp } else { PathBuf::new() }
+    }
+}
+
+pub fn log_auxiliary(caller: &str, binary: &Path, cwd: &Path) {
+    use std::io::Write;
+    let Some(root) = dirs::data_dir() else { return };
+    let dir = root.join("AI_CLI_Manager");
+    if std::fs::create_dir_all(&dir).is_err() { return; }
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("helper-process.log")) {
+        let clean = |s: &str| s.replace(['\r', '\n'], " ");
+        let _ = writeln!(file, "{} caller={} binary={} cwd={}", chrono::Utc::now().to_rfc3339(), clean(caller), clean(&binary.to_string_lossy()), clean(&cwd.to_string_lossy()));
+    }
+}
+
+pub fn guard_startup_cwd() -> std::io::Result<()> {
+    if std::env::current_dir().is_ok_and(|p| crate::db::is_forbidden_system_dir(&p.to_string_lossy())) {
+        std::env::set_current_dir(safe_helper_cwd())?;
+    }
+    Ok(())
+}
+
 pub fn builtin_clis() -> Vec<CliDefinition> {
     let home = home_dir();
     vec![
@@ -396,6 +438,41 @@ fn is_grok_bin(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn effort_flags_are_validated_per_cli() {
+        assert_eq!(super::effort_args("codex", "high").unwrap(), ["-c", "model_reasoning_effort=high"]);
+        assert_eq!(super::effort_args("claude", "medium").unwrap(), ["--effort", "medium"]);
+        assert!(super::effort_args("antigravity", "").unwrap().is_empty());
+        assert!(super::effort_args("codex", "high;calc").is_err());
+        assert!(super::effort_args("claude", "ultra").is_err());
+        assert!(super::effort_args("antigravity", "high").is_err());
+    }
+    #[cfg(windows)]
+    #[test]
+    fn system32_startup_and_helper_use_safe_directory() {
+        use std::os::windows::process::CommandExt;
+        const MARKER: &str = "AGENTRIX_SAFE_CWD_TEST_CHILD";
+        if std::env::var_os(MARKER).is_some() {
+            assert!(crate::db::is_forbidden_system_dir(&std::env::current_dir().unwrap().to_string_lossy()));
+            super::guard_startup_cwd().unwrap();
+            let safe = super::safe_helper_cwd();
+            assert!(!crate::db::is_forbidden_system_dir(&safe.to_string_lossy()));
+            let mut cmd = std::process::Command::new("cmd.exe");
+            cmd.args(["/D", "/C", "cd"]).current_dir(&safe);
+            cmd.creation_flags(0x08000000);
+            let output = cmd.output().unwrap();
+            assert!(output.status.success());
+            assert_eq!(std::fs::canonicalize(String::from_utf8_lossy(&output.stdout).trim()).unwrap(), std::fs::canonicalize(safe).unwrap());
+        } else {
+            let system = std::env::var_os("SystemRoot").map(PathBuf::from).unwrap().join("System32");
+            let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
+            cmd.args(["--exact", "cli::tests::system32_startup_and_helper_use_safe_directory", "--nocapture"])
+                .current_dir(system).env(MARKER, "1");
+            cmd.creation_flags(0x08000000);
+            let output = cmd.output().unwrap();
+            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        }
+    }
     use super::*;
 
     #[test]

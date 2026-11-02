@@ -694,10 +694,10 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
                       </div>
                     </div>
                     <span
-                      title={`${ag.cliId}${ag.model ? ` · ${ag.model}` : ""}`}
+                      title={`${ag.cliId}${ag.model ? ` · ${ag.model}` : ""}${ag.effort ? ` · ${ag.effort}` : ""}`}
                       className="block max-w-full truncate px-1.5 py-0.5 rounded text-[10px] font-mono bg-slate-950 border border-slate-800 text-indigo-400 font-semibold uppercase"
                     >
-                      {ag.cliId}{ag.model ? ` · ${ag.model}` : ""}
+                      {ag.cliId}{ag.model ? ` · ${ag.model}` : ""}{ag.effort ? ` · ${ag.effort}` : ""}
                     </span>
                     <p className="text-[11px] text-slate-300 line-clamp-2 leading-relaxed">
                       {ag.rolePrompt}

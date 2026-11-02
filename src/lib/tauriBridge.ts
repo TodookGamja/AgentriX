@@ -9,7 +9,9 @@ export async function apiInstallNpmCliUpdate(packageName: string): Promise<void>
 }
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { getUserInputVersion, recordSessionInput } from "./inputHistory";
-import { applyHandoffHint } from "./handoffRelay";
+import { applyHandoffHint, getRoleState, markRolePrefix, restoreHandoffHint } from "./handoffRelay";
+import { collabProtocol } from "./blackboardDispatch";
+import { useAppStore } from "./store";
 import { enterReady, needsEnterRetry, pasteWrap, queueSessionWrite, submissionStarted } from "./sessionWriteQueue";
 import type {
   ApiKeyStatus,
@@ -128,6 +130,10 @@ export async function apiGetProjectAgents(
     return invoke<ProjectAgentRecord[]>("get_project_agents", { projectPath });
   }
   return [];
+}
+
+export async function apiGetCliEffortOptions(): Promise<Record<string, string[]>> {
+  return isTauriRuntime() ? invoke("get_cli_effort_options") : {};
 }
 
 export async function apiUpsertProjectAgent(
@@ -296,17 +302,57 @@ export async function apiStartSession(
   };
 }
 
-export async function apiWriteToSession(sessionId: string, data: string, injected = false, verify?: { hasStarted: () => Promise<boolean | null>; onResult: (confirmed: boolean) => void }): Promise<void> {
-  const inputVersion = getUserInputVersion(sessionId);
+export async function apiWriteToSession(sessionId: string, data: string, injected = false, verify?: { hasStarted: () => Promise<boolean | null>; onResult: (confirmed: boolean) => void; onlyPendingRole?: boolean; onSkip?: () => void }, roleBriefing = false): Promise<void> {
   recordSessionInput(sessionId, data, injected);
-  data = applyHandoffHint(sessionId, data);
+  const inputVersion = getUserInputVersion(sessionId);
   return queueSessionWrite(sessionId, async () => {
+    const session = useAppStore.getState().sessions.find((s) => s.id === sessionId);
+    if (verify?.onlyPendingRole && getRoleState(sessionId) !== "pending") {
+      verify.onSkip?.();
+      return;
+    }
+    const submission = data.length > 1 && /\r\n?$/.test(data) && !data.startsWith("/") && !data.startsWith("\x1b");
+    if (submission && session?.agentId && session.rolePrompt && !session.roleInSystem && !getRoleState(sessionId)) {
+      const agents = await apiGetProjectAgents(session.cwd);
+      const agent = agents.find((a) => a.id === session.agentId);
+      if (agent?.autoBrief && agent.rolePrompt.trim()) {
+        markRolePrefix(sessionId, `${agent.rolePrompt.replace(/[\r\n]+/g, " ").trim()} ${collabProtocol(agent.id, agents)} `);
+      }
+    }
+    const original = data;
+    const roleWasPending = getRoleState(sessionId) === "pending";
+    data = applyHandoffHint(sessionId, data);
+    const prefix = data !== original ? data.slice(0, data.length - original.length) : "";
+    const roleText = session?.rolePrompt?.replace(/[\r\n]+/g, " ").trim();
+    if (roleBriefing && roleWasPending && roleText && prefix.includes(roleText)) data = prefix.replace(roleText, "") + original;
+    let restored = false;
+    const restore = () => { if (!restored && prefix) { restoreHandoffHint(sessionId, prefix, roleWasPending); restored = true; } };
+    try {
   if (isTauriRuntime()) {
     // TUI(Claude/Codex 등)는 "텍스트+\r" 한 덩어리를 붙여넣기로 인식해 Enter를 줄바꿈으로 삼킨다.
     // 텍스트를 먼저 쓰고 붙여넣기 처리가 끝난 뒤 Enter를 별도 키 입력으로 보낸다. (단일 키 입력은 그대로 통과)
     // 긴 글·여러 줄(Shift+Enter)일수록 TUI가 붙여넣기를 소화하는 시간이 길어 대기도 늘린다.
     const body = data.replace(/\r\n?$/, "");
     if (body !== data && body.length > 0) {
+        const internalVerify = submission && !verify;
+        if (submission && !verify) {
+          const baselineAt = Date.now();
+          const initial = session ? await apiGetSessionContext(session, []).catch(() => null) : null;
+          verify = {
+            hasStarted: async () => {
+              if (!session) return null;
+              const current = await apiGetSessionContext(session, []).catch(() => null);
+              if (!current?.startedAt || (initial && current.source !== initial.source)) return null;
+              return current.startedAt > (initial?.startedAt ?? baselineAt);
+            },
+            onResult: () => {},
+          };
+        }
+        if (verify && getUserInputVersion(sessionId) !== inputVersion) {
+          restore(); verify.onResult(false);
+          if (internalVerify) throw new Error("사용자 입력으로 전달이 중단되었습니다.");
+          return;
+        }
       const sentAt = Date.now();
         const pasteMode = await invoke<boolean | null>("get_session_paste_mode", { sessionId }).catch(() => null);
         const wrapped = pasteWrap(body, pasteMode === true);
@@ -323,7 +369,9 @@ export async function apiWriteToSession(sessionId: string, data: string, injecte
       const endCursor = await invoke<PtyOutputChunk>("read_session_output", { sessionId, cursor: Number.MAX_SAFE_INTEGER }).then((c) => c.nextCursor).catch(() => null);
       if (verify && getUserInputVersion(sessionId) !== inputVersion) {
         console.info(`[team-delivery] session=${sessionId} paste_mode=${pasteMode} write_at=${sentAt} enter_at=none output_bytes_2s=0 confirmed=false retries=0`);
-        verify.onResult(false); return;
+        restore(); verify.onResult(false);
+        if (internalVerify) throw new Error("사용자 입력으로 전달이 중단되었습니다.");
+        return;
       }
       const enterAt = Date.now();
       await invoke("write_to_session", { sessionId, data: "\r" });
@@ -343,7 +391,9 @@ export async function apiWriteToSession(sessionId: string, data: string, injecte
           retries++;
         }
         console.info(`[team-delivery] session=${sessionId} paste_mode=${pasteMode} write_at=${sentAt} enter_at=${enterAt} output_bytes_2s=${outputBytes} confirmed=${confirmed} retries=${retries}`);
+        if (!confirmed) restore();
         verify.onResult(confirmed);
+        if (!confirmed && internalVerify) throw new Error("제출 확인 실패: 입력창을 확인해 주세요.");
       }
       return;
     }
@@ -352,6 +402,7 @@ export async function apiWriteToSession(sessionId: string, data: string, injecte
   const prev = fallbackBuffers.get(sessionId) ?? "";
   fallbackBuffers.set(sessionId, prev + data);
   fallbackListeners.forEach((cb) => cb({ sessionId, data }));
+    } catch (error) { restore(); throw error; }
   });
 }
 

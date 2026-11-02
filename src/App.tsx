@@ -52,6 +52,7 @@ import {
   apiDeleteProjectFolder,
   apiDeleteTeamMember,
   apiDetectClis,
+  apiGetCliEffortOptions,
   apiGetApiKeys,
   apiGetConfigBackups,
   apiGetProjectAgents,
@@ -112,9 +113,9 @@ import { boardProtocol, collabProtocol, forgetEndedStarts, mailProtocol, parseBo
 import { getTeamMailDeliveries, pruneStaleDeliveries, pruneStaleMailDeliveries, removeTeamMailDelivery, saveTeamMailDelivery, shouldRedeliver } from "./lib/teamMailDelivery";
 import { findApproval, getApprovalMode, setDispatchNote, upsertApproval } from "./lib/taskApproval";
 import { countNewChars } from "./lib/tokenEstimate";
-import { deliveryGate, type PendingDelivery } from "./lib/deliveryGate";
+import { deliveryGate, logTurnStillBusy, type PendingDelivery } from "./lib/deliveryGate";
 import { useSessionQueue, queueKey } from "./lib/sessionQueueStore";
-import { nextUserItem, type QueueSource } from "./lib/sessionQueue";
+import { nextUserItem, previewOf, type QueueSource } from "./lib/sessionQueue";
 import { forgetSessionInput, getLastSubmission, getSubmissionVersion, getSessionInputHistory, hasPendingSessionInput, setInstructionKeyResolver } from "./lib/inputHistory";
 import { permissionLaunch } from "./lib/permissionSettings";
 import {
@@ -126,6 +127,7 @@ import {
 import {
   handoffContinuePrompt,
   markHandoffHint,
+  getRoleState,
   markRolePrefix,
   nextRelaySessionName,
   remapSplitSlotsAfterRelay,
@@ -694,6 +696,11 @@ export const App: React.FC = () => {
   const [agentRolePrompt, setAgentRolePrompt] = useState("");
   const [agentAutoBrief, setAgentAutoBrief] = useState(true);
   const [agentModel, setAgentModel] = useState("");
+  const [agentEffort, setAgentEffort] = useState("");
+  const [cliEffortOptions, setCliEffortOptions] = useState<Record<string, string[]>>({});
+  useEffect(() => {
+    apiGetCliEffortOptions().then(setCliEffortOptions).catch((error) => console.error("Failed to load CLI effort options", error));
+  }, []);
 
   // 프로젝트 공유 블랙보드(BLACKBOARD.md) 모달 상태
   const [showBlackboardModal, setShowBlackboardModal] = useState(false);
@@ -986,8 +993,7 @@ export const App: React.FC = () => {
         "success"
       );
 
-      // 시스템 지시로 역할을 전달한 CLI(roleInSystem)는 아무것도 보내지 않는다.
-      // 그 외 CLI는 출근 시 역할만 보내면 "구체적인 작업이 없다"는 턴을 소모하므로, 첫 배정·메일 앞에 붙여 한 번에 보낸다.
+      // 시스템 지시를 지원하지 않는 CLI는 준비 후 역할을 제출한다.
       if (agent.autoBrief && agent.rolePrompt.trim() && !session.roleInSystem) {
         markRolePrefix(session.id, `${agent.rolePrompt.replace(/[\r\n]+/g, " ").trim()} ${collabProtocol(agent.id, projectAgents)} `);
       }
@@ -1175,9 +1181,10 @@ ${recentSnippet || "진행 내역 기록 없음"}
     // 4. 신규 세션 생성 및 슬롯 배치 교체
     try {
       const cliDef = clis.find((c) => c.id === targetSession.cliId);
-      const relayAgent = targetSession.agentId && targetSession.cwd
-        ? (await apiGetProjectAgents(targetSession.cwd)).find((a) => a.id === targetSession.agentId)
-        : undefined;
+      const relayAgents = targetSession.agentId && targetSession.cwd
+        ? await apiGetProjectAgents(targetSession.cwd)
+        : [];
+      const relayAgent = relayAgents.find((a) => a.id === targetSession.agentId);
       const useWrapper = relayAgent?.useWrapper ?? targetSession.binaryPath.includes("Headroom Wrapper");
       const initialCmd =
         headroomEnabled && useWrapper && cliDef?.wrapperBinary && headroomAppliedClis.includes(targetSession.cliId)
@@ -1194,8 +1201,8 @@ ${recentSnippet || "진행 내역 기록 없음"}
         undefined,
         perm.args,
         perm.auto,
-        !isManual,
-        undefined,
+        false,
+        relayAgent ? collabProtocol(relayAgent.id, relayAgents) : undefined,
         true // 릴레이는 인수인계 문서로 잇는 새 대화
       );
       if (workRestarted()) {
@@ -1205,6 +1212,9 @@ ${recentSnippet || "진행 내역 기록 없음"}
       }
 
       newSession.name = newSessionName;
+      if (relayAgent?.autoBrief && relayAgent.rolePrompt.trim() && !newSession.roleInSystem) {
+        markRolePrefix(newSession.id, `${relayAgent.rolePrompt.replace(/[\r\n]+/g, " ").trim()} ${collabProtocol(relayAgent.id, relayAgents)} `);
+      }
       if (tokenOptConfig.preserveRolePrompt && targetSession.rolePrompt) {
         newSession.rolePrompt = targetSession.rolePrompt;
         newSession.agentRole = targetSession.agentRole;
@@ -1381,14 +1391,21 @@ ${recentSnippet || "진행 내역 기록 없음"}
     }
   };
 
+  const queueOrSendPrompt = async (session: typeof sessions[number], prompt: string) => {
+    if (!session.agentId) return apiWriteToSession(session.id, prompt);
+    useSessionQueue.getState().upsert(queueKey(session), {
+      id: crypto.randomUUID(), source: "user", preview: previewOf(prompt), payload: prompt, createdAt: Date.now(),
+    });
+  };
+
   const handleSendPromptToAgent = async (agentId: string, prompt: string) => {
     const session = sessions.find((s) => s.agentId === agentId);
     if (!session) {
       showToast("해당 에이전트의 실행 중인 세션을 찾을 수 없습니다. 먼저 실행해 주세요.", "error");
       return;
     }
-    await apiWriteToSession(session.id, prompt);
-    showToast("에이전트에게 지시를 전달했습니다.", "success");
+    await queueOrSendPrompt(session, prompt);
+    showToast("에이전트 지시를 대기열에 추가했습니다.", "success");
   };
 
   const handleStartAutonomousRelayWithGoal = async (goal: string) => {
@@ -1480,6 +1497,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
     );
     setAgentAutoBrief(true);
     setAgentModel("");
+    setAgentEffort("");
     setShowAgentModal(true);
   };
 
@@ -1494,6 +1512,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
     setAgentRolePrompt(agent.rolePrompt);
     setAgentAutoBrief(agent.autoBrief);
     setAgentModel(agent.model ?? "");
+    setAgentEffort(agent.effort ?? "");
     setShowAgentModal(true);
   };
 
@@ -1512,6 +1531,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
       rolePrompt: agentRolePrompt.trim(),
       autoBrief: agentAutoBrief,
       model: agentModel.trim(),
+      effort: agentEffort,
     };
     try {
       const updated = await apiUpsertProjectAgent(payload);
@@ -1640,7 +1660,10 @@ ${recentSnippet || "진행 내역 기록 없음"}
         : resolvedPaneSessions.slice(0, visibleSlotCount).map((s) => s?.id)
     ).filter((id): id is string => Boolean(id));
 
-    await Promise.all(targets.map((id) => apiWriteToSession(id, text)));
+    await Promise.all(targets.map((id) => {
+      const target = sessions.find((session) => session.id === id);
+      return target ? queueOrSendPrompt(target, text) : Promise.resolve();
+    }));
   };
 
   const handleBroadcastToProject = async (projectPath: string, text: string) => {
@@ -1649,9 +1672,9 @@ ${recentSnippet || "진행 내역 기록 없음"}
       showToast("현재 이 프로젝트에 실행 중인 에이전트 세션이 없습니다.", "error");
       return;
     }
-    await Promise.all(targets.map((s) => apiWriteToSession(s.id, text)));
+    await Promise.all(targets.map((s) => queueOrSendPrompt(s, text)));
     showToast(
-      `[${getShortFolderName(projectPath)}] 프로젝트의 ${targets.length}개 에이전트에게 동시 지시를 전달했습니다.`,
+      `[${getShortFolderName(projectPath)}] ${targets.length}개 세션의 전달을 준비했습니다.`,
       "success"
     );
   };
@@ -2015,6 +2038,8 @@ ${recentSnippet || "진행 내역 기록 없음"}
     const ctx = await apiGetSessionContext(session, claimed).catch(() => null);
     const lastSubmit = getLastSubmission(session.id);
     if (ctx?.completedAt && ctx.completedAt > lastSubmit) return ctx;
+    // A running or ambiguous log takes precedence over terminal silence.
+    if (logTurnStillBusy(session.cliId, ctx)) return ctx;
     const quiet = await apiGetSessionQuietSince(session.id).catch(() => null);
     if (!quiet || quiet <= lastSubmit || (session.cliId === "claude" && lastSubmit > 0 && Date.now() - quiet < 30_000)) return ctx;
     return { tokens: ctx?.tokens ?? 0, window: ctx?.window ?? null, source: ctx?.source ?? `pty:${session.id}`, completedAt: quiet };
@@ -2047,7 +2072,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
     }
     return ok;
   };
-  const sendToIdleTeamSessionRaw = async (session: typeof currentProjectSessions[number], prompt: string): Promise<boolean> => {
+  const sendToIdleTeamSessionRaw = async (session: typeof currentProjectSessions[number], prompt: string, onlyPendingRole = false): Promise<boolean> => {
     if (teamDeliveryLocksRef.current.has(session.id)) { sendBlockReasonRef.current[session.id] = "앞 전달 처리 중"; return false; }
     teamDeliveryLocksRef.current.add(session.id);
     try {
@@ -2073,6 +2098,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
       delete pendingDeliveryRef.current[session.id];
       contextSourceRef.current[session.id] = ctx.source;
       let confirmed = false;
+      let skipped = false;
       const baseline = "startedAt" in ctx ? ctx.startedAt ?? 0 : 0;
       await apiWriteToSession(session.id, prompt, true, {
         hasStarted: async () => {
@@ -2081,13 +2107,38 @@ ${recentSnippet || "진행 내역 기록 없음"}
           return Boolean(current && current.source === ctx.source && (current.startedAt ?? 0) > baseline);
         },
         onResult: (result) => { confirmed = result; },
+        onlyPendingRole,
+        onSkip: () => { skipped = true; },
       });
+      if (skipped) return true;
       pendingDeliveryRef.current[session.id] = { at: getLastSubmission(session.id), started: confirmed, retriedAt: Date.now(), unconfirmed: !confirmed };
       return confirmed || blocked("입력창에 멈춤: 전달의 제출을 확인하지 못했습니다");
     } finally {
       teamDeliveryLocksRef.current.delete(session.id);
     }
   };
+  useEffect(() => {
+    let running = false;
+    const tick = async () => {
+      if (running) return;
+      running = true;
+      try {
+        for (const session of useAppStore.getState().sessions) {
+          if (session.status !== "running") continue;
+          if (getRoleState(session.id) !== "pending") continue;
+          if (!await apiGetSessionQuietSince(session.id).catch(() => null)) continue;
+          await sendToIdleTeamSessionRaw(session, "역할 지침을 확인하고 다음 지시를 기다리세요.\r", true);
+        }
+      } catch (err) {
+        console.error("Role briefing failed", err);
+      } finally {
+        running = false;
+      }
+    };
+    const id = window.setInterval(tick, 3000);
+    return () => window.clearInterval(id);
+  }, []);
+
   const sendTeamGoalWhenReady = async (session: typeof currentProjectSessions[number], prompt: string) => {
     try {
       if (!session.agentId) throw new Error("총괄 에이전트가 지정되지 않았습니다.");
@@ -3442,6 +3493,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
             Boolean(selectedProjectPath) &&
             (projectSubView === "overview" || sessions.length === 0) && (
               <ProjectWorkspaceView
+                cliEffortOptions={cliEffortOptions}
                 projectPath={selectedProjectPath}
                 analysis={projectAnalysis}
                 agents={projectAgents}
@@ -3798,6 +3850,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
                     onChange={(v) => {
                       setAgentCliId(v);
                       setAgentModel("");
+                      setAgentEffort("");
                     }}
                     options={clis.map((c) => ({ value: c.id, label: `${c.name} (${c.provider})` }))}
                     className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-slate-100"
@@ -3809,6 +3862,18 @@ ${recentSnippet || "진행 내역 기록 없음"}
                     onChange={setAgentModel}
                     className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-slate-100 font-mono text-xs"
                   />
+                  {(cliEffortOptions[agentCliId]?.length ?? 0) > 0 && (
+                    <>
+                      <label className="block text-slate-400 mt-2 mb-1">추론 강도</label>
+                      <Select
+                        ariaLabel="추론 강도"
+                        value={agentEffort}
+                        onChange={setAgentEffort}
+                        options={[{ value: "", label: "CLI 기본" }, ...cliEffortOptions[agentCliId].map((value) => ({ value, label: value }))]}
+                        className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-slate-100 text-xs"
+                      />
+                    </>
+                  )}
                 </div>
                 <div>
                   <label className="block text-slate-400 mb-1">

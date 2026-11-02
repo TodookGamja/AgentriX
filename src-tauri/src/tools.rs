@@ -45,6 +45,9 @@ fn find_tool(name: &str) -> Option<PathBuf> {
 
 fn run(bin: &std::path::Path, args: &[&str]) -> (bool, String) {
     let mut cmd = std::process::Command::new(bin);
+    let cwd = crate::cli::safe_helper_cwd();
+    crate::cli::log_auxiliary("tools::run", bin, &cwd);
+    cmd.current_dir(cwd);
     cmd.args(args).stdin(std::process::Stdio::null());
     #[cfg(target_os = "windows")]
     {

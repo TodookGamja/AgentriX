@@ -8,6 +8,7 @@ export interface SelectOption {
 }
 
 interface SelectProps {
+  ariaLabel?: string;
   value: string;
   onChange: (value: string) => void;
   options: SelectOption[];
@@ -19,6 +20,7 @@ interface SelectProps {
 
 /** 네이티브 <select> 대체: OS 팝업 대신 앱 테마에 맞춘 드롭다운 */
 export const Select: React.FC<SelectProps> = ({
+  ariaLabel,
   value,
   onChange,
   options,
@@ -108,11 +110,12 @@ export const Select: React.FC<SelectProps> = ({
       <div
         ref={triggerRef}
         role="combobox"
+        aria-label={ariaLabel}
         aria-expanded={open}
         tabIndex={editable ? -1 : 0}
         onClick={() => (open && !editable ? setOpen(false) : openList())}
         onKeyDown={editable ? undefined : onKeyDown}
-        className={`flex items-center gap-2 cursor-pointer select-none focus:outline-none focus:border-indigo-500 ${className}`}
+        className={`flex items-center gap-2 cursor-pointer select-none focus:outline-none focus:border-indigo-500 focus-visible:ring-1 focus-visible:ring-indigo-500 focus-within:border-indigo-500 ${className}`}
       >
         {editable ? (
           <input

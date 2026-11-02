@@ -30,6 +30,7 @@ import {
 import { isTerminalReport, shouldResizePty } from "../lib/terminalReplay";
 import { getRoleState, ROLE_STATE_EVENT } from "../lib/handoffRelay";
 import { useSessionQueue, queueKey } from "../lib/sessionQueueStore";
+import { useAppStore } from "../lib/store";
 import { hasPendingSessionInput } from "../lib/inputHistory";
 import { previewOf, type QueueSource } from "../lib/sessionQueue";
 
@@ -502,7 +503,11 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     const fName =
       session.cwd?.split(/[/\\]/).filter(Boolean).pop() || session.cwd;
     const briefing = `[프로젝트 '${fName}' 에이전트 역할 부여] 당신은 '${session.agentName ?? session.name}' (${session.agentRole ?? "전담 에이전트"})입니다. 지침: ${session.rolePrompt} (.ai-agents/agents/${session.agentId}/ROLE.md 및 .ai-agents/BLACKBOARD.md 파일을 함께 참고하여 이 프로젝트 범위 내에서만 임무를 수행하세요.) ${collabRules}\r`;
-    await apiWriteToSession(session.id, briefing, true);
+    try {
+      await apiWriteToSession(session.id, briefing, true, undefined, true);
+    } catch (error) {
+      useAppStore.getState().showToast(String(error), "error");
+    }
     termRef.current?.scrollToBottom();
     termRef.current?.focus();
     if (onActivity) onActivity();
@@ -532,7 +537,11 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       } else if (broadcastToSplit && splitActive && onBroadcastPrompt) {
         await onBroadcastPrompt(`${message}\r`);
       } else {
-        await apiWriteToSession(session.id, `${message}\r`);
+        if (session.agentId) {
+          useSessionQueue.getState().upsert(qKey, { id: crypto.randomUUID(), source: "user", preview: previewOf(message), payload: `${message}\r`, createdAt: Date.now() });
+        } else {
+          await apiWriteToSession(session.id, `${message}\r`);
+        }
       }
     } catch (error) {
       setPromptText((current) => [promptText, current].filter(Boolean).join("\n"));
@@ -555,8 +564,15 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
   const sendQueuedNow = async (id: string, payload: string, auto = false) => {
     // 자동 항목은 입력창·턴 관문을 건너뛰므로 쓰다 만 글이 있으면 먼저 확인
     if (auto && hasPendingSessionInput(session.id) && !window.confirm("입력창에 쓰던 글이 있습니다. 그 뒤에 붙어 전달될 수 있어요. 그래도 지금 보낼까요?")) return;
+    try {
+      await apiWriteToSession(session.id, payload, true);
+    } catch (error) {
+      const item = useSessionQueue.getState().queues[qKey]?.find((entry) => entry.id === id);
+      if (item) useSessionQueue.getState().upsert(qKey, { ...item, stuck: true, reason: "제출 확인 실패" });
+      useAppStore.getState().showToast(String(error), "error");
+      return;
+    }
     if (auto) useSessionQueue.getState().resolve(qKey, id); else useSessionQueue.getState().remove(qKey, id);
-    await apiWriteToSession(session.id, payload, true);
     if (onActivity) onActivity();
   };
 

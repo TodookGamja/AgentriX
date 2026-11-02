@@ -153,3 +153,51 @@ test("T15: role prefix attaches once to the first submitted input, whichever pat
   assert.equal(api.applyHandoffHint("b1", "작업\r"), api.HANDOFF_HINT + role + "작업\r");
   assert.equal(api.applyHandoffHint("b1", "다음\r"), "다음\r");
 });
+
+test("regression: restoreHandoffHint requeues consumed prefix and pending role after failed submit", () => {
+  api.markHandoffHint("fail1");
+  api.markRolePrefix("fail1", "ROLE ");
+  const consumed = api.HANDOFF_HINT + "ROLE ";
+  assert.equal(api.applyHandoffHint("fail1", "작업\r"), consumed + "작업\r");
+  assert.equal(api.getRoleState("fail1"), "sent");
+  api.restoreHandoffHint("fail1", consumed, true);
+  assert.equal(api.getRoleState("fail1"), "pending");
+  assert.equal(api.applyHandoffHint("fail1", "재시도\r"), consumed + "재시도\r");
+  assert.equal(api.getRoleState("fail1"), "sent");
+});
+
+test("regression: bridge restores prefix on unconfirmed submit; roleBriefing strips duplicate role", () => {
+  const bridge = fs.readFileSync("src/lib/tauriBridge.ts", "utf8");
+  const pane = fs.readFileSync("src/components/TerminalPane.tsx", "utf8");
+  assert.match(bridge, /restoreHandoffHint\(sessionId, prefix, roleWasPending\)/);
+  assert.match(bridge, /if \(!confirmed\) restore\(\)/);
+  assert.match(bridge, /roleBriefing && roleWasPending/);
+  assert.match(pane, /apiWriteToSession\(session\.id, briefing, true, undefined, true\)/);
+});
+
+test("T23: Codex launch encodes developer_instructions; Claude-only prompt-file; long roles fall back", () => {
+  const pty = fs.readFileSync("src-tauri/src/pty.rs", "utf8");
+  assert.match(pty, /fn codex_role_config\(role: &str\) -> Option<String>/);
+  assert.match(pty, /developer_instructions=/);
+  assert.match(pty, /value\.len\(\) > 16_000/);
+  assert.match(pty, /cli_def\.id == "codex"/);
+  assert.match(pty, /Some\(a\) if role_in_system && cli_def\.id == "claude"/);
+  assert.match(pty, /codex_and_opencode_do_not_receive_role_at_launch/);
+  assert.match(pty, /codex_role_config_escapes_shell_sensitive_text_and_limits_length/);
+  assert.doesNotMatch(pty, /Some\(a\) if role_in_system => \{/);
+});
+
+test("T23: restart/relay race keeps prior session pending; new session sends ROLE+hint once", () => {
+  api.markRolePrefix("old", "ROLE ");
+  assert.equal(api.getRoleState("old"), "pending");
+  // 릴레이 신규 세션: 역할 먼저, 이어서 핸드오프 안내
+  api.markRolePrefix("relay", "ROLE ");
+  api.markHandoffHint("relay");
+  assert.equal(api.getRoleState("relay"), "pending");
+  assert.equal(api.applyHandoffHint("relay", "작업\r"), "ROLE " + api.HANDOFF_HINT + "작업\r");
+  assert.equal(api.getRoleState("relay"), "sent");
+  assert.equal(api.applyHandoffHint("relay", "다음\r"), "다음\r");
+  // 교체된 이전 세션 id의 pending은 맵에 남아도 슬롯 remap만 새 id를 가리킨다
+  assert.equal(api.getRoleState("old"), "pending");
+  assert.deepEqual(api.remapSplitSlotsAfterRelay(["old", "peer"], "old", "relay"), ["relay", "peer"]);
+});

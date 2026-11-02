@@ -149,7 +149,7 @@ test("regression: agy Gemini-main snap round-trips; weekly 100+null reset is For
     planLabel: "Google DeepMind",
     remainPct5h: 80,
     remainPctWeekly: 100,
-    resetsAt5h: "15:00",
+    resetsAt5h: null,
     resetsAtWeekly: null,
     savedAt: Date.now(),
   };

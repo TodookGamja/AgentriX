@@ -52,6 +52,7 @@ const CliModelField: React.FC<{ cliId: string }> = ({ cliId }) => {
 };
 
 interface ProjectWorkspaceViewProps {
+  cliEffortOptions: Record<string, string[]>;
   projectPath: string;
   analysis: ProjectAnalysisResult | null;
   agents: ProjectAgentRecord[];
@@ -80,6 +81,7 @@ interface ProjectWorkspaceViewProps {
 }
 
 export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
+  cliEffortOptions,
   projectPath,
   analysis,
   agents,
@@ -110,6 +112,7 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
   const [recCliOverrides, setRecCliOverrides] = useState<Record<string, string>>({});
   const [recWrapperOverrides, setRecWrapperOverrides] = useState<Record<string, boolean>>({});
   const [recModelOverrides, setRecModelOverrides] = useState<Record<string, string>>({});
+  const [recEffortOverrides, setRecEffortOverrides] = useState<Record<string, string>>({});
   const [showAutoRelayModal, setShowAutoRelayModal] = useState(false);
   const [relayGoalInput, setRelayGoalInput] = useState("");
   const [showPermissionSettings, setShowPermissionSettings] = useState(false);
@@ -622,7 +625,7 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
 
                     <div className="flex items-center gap-1.5 flex-wrap">
                       <span className="px-2 py-0.5 rounded bg-slate-900 text-indigo-300 border border-slate-800 text-[10px] font-mono font-semibold uppercase">
-                        {cliDef?.name ?? agent.cliId}
+                        {cliDef?.name ?? agent.cliId}{agent.effort ? ` · ${agent.effort}` : ""}
                       </span>
 
                       {/* Headroom 감싸기 토글 버튼 */}
@@ -741,6 +744,7 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
                         cliId: recCliOverrides[key] ?? r.cliId,
                         useWrapper: recWrapperOverrides[key] ?? r.useWrapper,
                         model: (recModelOverrides[key] ?? r.model ?? "").trim(),
+                        effort: recEffortOverrides[key] ?? (recCliOverrides[key] && recCliOverrides[key] !== r.cliId ? "" : r.effort ?? ""),
                       }];
                     })
                   )
@@ -762,6 +766,7 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
             const selectedWrapper =
               recWrapperOverrides[key] ?? rec.useWrapper;
             const selectedModel = recModelOverrides[key] ?? rec.model ?? "";
+            const selectedEffort = recEffortOverrides[key] ?? (selectedCliId === rec.cliId ? rec.effort ?? "" : "");
             const cliObj = clis.find((c) => c.id === selectedCliId);
 
             return (
@@ -795,6 +800,12 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
                     )}
                   </div>
 
+                  <div className="min-w-0">
+                    <span className="inline-block max-w-full truncate rounded-full border border-slate-800 bg-slate-900 px-2 py-0.5 font-mono text-[10px] text-indigo-300" title={`${selectedCliId}${selectedModel ? ` · ${selectedModel}` : ""}${selectedEffort ? ` · ${selectedEffort}` : ""}`}>
+                      {selectedCliId}{selectedModel ? ` · ${selectedModel}` : ""}{selectedEffort ? ` · ${selectedEffort}` : ""}
+                    </span>
+                  </div>
+
                   <div className="text-xs text-slate-300 bg-slate-900/80 p-2.5 rounded-lg border border-slate-800 space-y-1 max-h-32 overflow-y-auto">
                     {rec.rolePrompt
                       .split(/(?<=[.!?])\s+/)
@@ -817,6 +828,7 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
                           onChange={(v) => {
                             setRecCliOverrides((prev) => ({ ...prev, [key]: v }));
                             setRecModelOverrides((prev) => ({ ...prev, [key]: "" }));
+                            setRecEffortOverrides((prev) => ({ ...prev, [key]: "" }));
                           }}
                           options={clis.map((c) => ({ value: c.id, label: `${c.name} (${c.provider})` }))}
                           className="px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-xs font-medium w-[62%]"
@@ -833,6 +845,18 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
                           className="px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-xs font-mono w-[62%]"
                         />
                       </div>
+                      {(cliEffortOptions[selectedCliId]?.length ?? 0) > 0 && (
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[11px] text-slate-400 shrink-0">추론 강도:</span>
+                          <Select
+                            ariaLabel={`${rec.name} 추론 강도`}
+                            value={selectedEffort}
+                            onChange={(value) => setRecEffortOverrides((prev) => ({ ...prev, [key]: value }))}
+                            options={[{ value: "", label: "CLI 기본" }, ...cliEffortOptions[selectedCliId].map((value) => ({ value, label: value }))]}
+                            className="px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-xs w-[62%]"
+                          />
+                        </div>
+                      )}
 
                       {cliObj?.wrapperBinary && (
                         <label className="flex items-center gap-2 text-[11px] text-slate-300 cursor-pointer pt-0.5">
@@ -869,6 +893,7 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
                           cliId: selectedCliId,
                           useWrapper: selectedWrapper,
                           model: selectedModel.trim(),
+                          effort: selectedEffort,
                         })
                       }
                       className="w-full inline-flex items-center justify-center gap-1.5 py-2 rounded-lg bg-fuchsia-600 hover:bg-fuchsia-500 text-white text-xs font-bold transition shadow"

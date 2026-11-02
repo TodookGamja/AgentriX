@@ -390,6 +390,11 @@ fn get_project_agents(
 }
 
 #[tauri::command]
+fn get_cli_effort_options() -> std::collections::BTreeMap<String, Vec<String>> {
+    ["claude", "codex"].into_iter().map(|id| (id.to_string(), cli::effort_options(id).iter().map(|v| (*v).to_string()).collect())).collect()
+}
+
+#[tauri::command]
 fn upsert_project_agent(
     state: State<'_, AppState>,
     input: ProjectAgentInput,
@@ -620,7 +625,14 @@ fn run_quiet(prog: &str, args: &[&str], dir: Option<&std::path::Path>) -> Option
     #[cfg(not(windows))]
     let mut cmd = std::process::Command::new(prog);
     cmd.args(args);
-    if let Some(d) = dir { cmd.current_dir(d); }
+    let safe_dir = if let Some(dir) = dir {
+        let path = dir.canonicalize().ok()?;
+        let path_text = path.to_string_lossy();
+        if db::is_forbidden_system_dir(path_text.strip_prefix(r"\\?\").unwrap_or(&path_text)) { return None; }
+        path
+    } else { cli::safe_helper_cwd() };
+    cli::log_auxiliary("run_quiet", std::path::Path::new(prog), &safe_dir);
+    cmd.current_dir(safe_dir);
     let out = cmd.output().ok()?;
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).to_string())
 }
@@ -704,7 +716,9 @@ async fn check_npm_cli_updates() -> Result<serde_json::Value, String> {
         };
         #[cfg(not(windows))]
         let mut cmd = std::process::Command::new("npm");
-        let output = cmd.args(["outdated", "-g", "--json"]).output().map_err(|e| format!("npm 실행 실패: {e}"))?;
+        let cwd = cli::safe_helper_cwd();
+        cli::log_auxiliary("check_npm_cli_updates", std::path::Path::new("npm"), &cwd);
+        let output = cmd.current_dir(cwd).args(["outdated", "-g", "--json"]).output().map_err(|e| format!("npm 실행 실패: {e}"))?;
         if !output.status.success() && output.status.code() != Some(1) {
             return Err(format!("업데이트 확인 실패: {}", String::from_utf8_lossy(&output.stderr)));
         }
@@ -739,7 +753,9 @@ async fn install_npm_cli_update(package: String) -> Result<(), String> {
         };
         #[cfg(not(windows))]
         let mut cmd = std::process::Command::new("npm");
-        let output = cmd.args(["install", "-g", &format!("{package}@latest")]).output()
+        let cwd = cli::safe_helper_cwd();
+        cli::log_auxiliary("install_npm_cli_update", std::path::Path::new("npm"), &cwd);
+        let output = cmd.current_dir(cwd).args(["install", "-g", &format!("{package}@latest")]).output()
             .map_err(|e| format!("npm 실행 실패: {e}"))?;
         if !output.status.success() {
             return Err(format!("설치 실패: {}", String::from_utf8_lossy(&output.stderr)));
@@ -1216,6 +1232,9 @@ async fn start_session(
     if let Some(m) = model {
         cli_def.args.extend(["--model".to_string(), m.trim().to_string()]);
     }
+    if let Some(agent) = &agent_meta {
+        cli_def.args.extend(cli::effort_args(&cli_id, agent.effort.trim())?);
+    }
     cli_def.args.extend(permission_args.unwrap_or_default());
     if cli_id == "opencode" && permission_auto.unwrap_or(false) {
         injected_env.insert("OPENCODE_PERMISSION".into(), r#"{"*":"allow"}"#.into());
@@ -1667,17 +1686,18 @@ fn open_external_url(url: String) -> Result<(), String> {
     {
         use std::os::windows::process::CommandExt;
         let mut cmd = std::process::Command::new("rundll32");
+        cmd.current_dir(cli::safe_helper_cwd());
         cmd.args(["url.dll,FileProtocolHandler", &url]);
         cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
         cmd.spawn().map_err(|e| e.to_string())?;
     }
     #[cfg(target_os = "macos")]
     {
-        std::process::Command::new("open").arg(&url).spawn().map_err(|e| e.to_string())?;
+        std::process::Command::new("open").current_dir(cli::safe_helper_cwd()).arg(&url).spawn().map_err(|e| e.to_string())?;
     }
     #[cfg(target_os = "linux")]
     {
-        std::process::Command::new("xdg-open").arg(&url).spawn().map_err(|e| e.to_string())?;
+        std::process::Command::new("xdg-open").current_dir(cli::safe_helper_cwd()).arg(&url).spawn().map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -1933,12 +1953,13 @@ fn do_perform_in_app_update(app: tauri::AppHandle, download_url: String) -> Resu
         {
             use std::os::windows::process::CommandExt;
             let mut cmd = std::process::Command::new(&current_exe);
+                            cmd.current_dir(cli::safe_helper_cwd());
             cmd.creation_flags(0x00000200 | 0x00000008);
             let _ = cmd.spawn();
         }
         #[cfg(not(target_os = "windows"))]
         {
-            let _ = std::process::Command::new(&current_exe).spawn();
+                            let _ = std::process::Command::new(&current_exe).current_dir(cli::safe_helper_cwd()).spawn();
         }
 
         std::process::exit(0);
@@ -1969,6 +1990,7 @@ fn do_perform_in_app_update(app: tauri::AppHandle, download_url: String) -> Resu
         {
             use std::os::windows::process::CommandExt;
             let mut cmd = std::process::Command::new("cmd.exe");
+                            cmd.current_dir(cli::safe_helper_cwd());
             cmd.args(["/c", &script_path.to_string_lossy()]);
             cmd.creation_flags(0x08000000); // DETACHED_PROCESS와 조합하면 NO_WINDOW가 무시되어 콘솔이 뜸
             let _ = cmd.spawn();
@@ -1979,6 +2001,7 @@ fn do_perform_in_app_update(app: tauri::AppHandle, download_url: String) -> Resu
 }
 
 fn main() {
+    if let Err(error) = cli::guard_startup_cwd() { eprintln!("작업 폴더 초기화 실패: {error}"); }
     std::panic::set_hook(Box::new(|info| {
         let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
             s.to_string()
@@ -2131,6 +2154,7 @@ fn main() {
             pick_project_folder,
             list_directory_entries,
             get_project_agents,
+            get_cli_effort_options,
             list_cli_models,
             upsert_project_agent,
             delete_project_agent,

@@ -59,6 +59,11 @@ export function applyHandoffHint(sessionId: string, data: string): string {
   return prefix + data;
 }
 
+export function restoreHandoffHint(sessionId: string, prefix: string, roleWasPending: boolean): void {
+  pendingPrefix.set(sessionId, prefix + (pendingPrefix.get(sessionId) ?? ""));
+  if (roleWasPending) { roleState.set(sessionId, "pending"); notifyRoleState(sessionId); }
+}
+
 export function handoffContinuePrompt(isManual: boolean): string {
   return isManual
     ? `.ai-agents/SESSION_HANDOFF.md를 읽으세요. 거기 적힌 '직전 세션이 받은 지시' 중 아직 끝나지 않은 것을 지금 이어서 끝까지 수행하세요. 확인·요약만 하고 멈추지 마세요.\r`

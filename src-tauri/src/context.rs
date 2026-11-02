@@ -146,8 +146,8 @@ fn codex(sessions: &Path, cwd: &str, started: DateTime<Utc>, claimed: &[String])
         if !same_dir(meta_cwd, cwd) || ts < started - chrono::Duration::seconds(10) {
             continue;
         }
-        matches += 1;
         if claimed.contains(&src) { continue; }
+        matches += 1;
         if best.as_ref().map(|b| ts < b.0).unwrap_or(true) {
             best = Some((ts, path, content));
         }
@@ -298,6 +298,27 @@ mod tests {
         assert!(super::turn_started(sidechain, "claude").is_none());
     }
     use super::*;
+
+    #[test]
+    fn codex_busy_state_is_available_after_other_log_is_claimed() {
+        let root = std::env::temp_dir().join(format!("agentrix-context-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let now = Utc::now();
+        let timestamp = now.to_rfc3339();
+        let log = format!("{}\n{}\n{}\n",
+            serde_json::json!({"type":"session_meta", "payload":{"cwd":"C:/project","timestamp":timestamp}}),
+            serde_json::json!({"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":42}}}}),
+            serde_json::json!({"timestamp":timestamp,"type":"event_msg","payload":{"type":"task_started"}}));
+        let first = root.join("first.jsonl");
+        let second = root.join("second.jsonl");
+        std::fs::write(&first, &log).unwrap();
+        std::fs::write(&second, &log).unwrap();
+        assert!(codex(&root, "C:/project", now, &[]).unwrap().started_at.is_none());
+        let result = codex(&root, "C:/project", now, &[first.to_string_lossy().into_owned()]).unwrap();
+        assert!(result.started_at.is_some());
+        assert!(result.completed_at.is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn codex_resume_only_saves_unambiguous_session() {

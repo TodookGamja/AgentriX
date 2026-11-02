@@ -1358,6 +1358,9 @@ static AGY_QUOTA_CACHE: OnceLock<Mutex<Option<(Instant, CliQuotaStatus)>>> = Onc
 /// CLI 바이너리를 콘솔 창 없이 실행 (토큰 갱신 트리거용, 모델 호출 없음)
 fn run_cli_silently(bin: &Path, args: &[&str]) {
     let mut cmd = std::process::Command::new(bin);
+    let cwd = crate::cli::safe_helper_cwd();
+    crate::cli::log_auxiliary("run_cli_silently", bin, &cwd);
+    cmd.current_dir(cwd);
     cmd.args(args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -1681,6 +1684,9 @@ mod tests {
 
 fn cli_stdout(bin: &Path, args: &[&str]) -> String {
     let mut cmd = std::process::Command::new(bin);
+    let cwd = crate::cli::safe_helper_cwd();
+    crate::cli::log_auxiliary("cli_stdout", bin, &cwd);
+    cmd.current_dir(cwd);
     cmd.args(args).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null());
     #[cfg(target_os = "windows")]
     cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
@@ -1690,6 +1696,9 @@ fn cli_stdout(bin: &Path, args: &[&str]) -> String {
 /// PATH 상의 .cmd 셸 스크립트(npm 전역 CLI 등)도 실행되도록 cmd.exe 경유
 fn cli_stdout_shell(program: &str, args: &[&str]) -> String {
     let mut cmd = std::process::Command::new("cmd.exe");
+    let cwd = crate::cli::safe_helper_cwd();
+    crate::cli::log_auxiliary("cli_stdout_shell", Path::new(program), &cwd);
+    cmd.current_dir(cwd);
     cmd.args(["/D", "/C", program]).args(args).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null());
     #[cfg(target_os = "windows")]
     cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW

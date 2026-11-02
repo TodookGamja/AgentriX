@@ -10,6 +10,12 @@ export interface PendingDelivery {
   unconfirmed?: boolean;
 }
 export type GateAction = "proceed" | "resend" | "wait" | "stuck";
+
+export function logTurnStillBusy(cliId: string, ctx: { startedAt?: number | null; completedAt?: number | null } | null): boolean {
+  if (!ctx) return false;
+  if (ctx.startedAt && !ctx.completedAt) return true;
+  return cliId === "codex" && !ctx.startedAt && !ctx.completedAt;
+}
 export const STUCK_AFTER_MS = 15_000;
 export const ECHO_WINDOW_MS = 1_500;
 

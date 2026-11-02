@@ -234,7 +234,12 @@ pub fn fetch() -> Result<CliQuotaStatus, String> {
     let pair = portable_pty::native_pty_system().openpty(portable_pty::PtySize { rows: 100, cols: 120, pixel_width: 0, pixel_height: 0 }).map_err(|_| "PTY 생성 실패".to_string())?;
     let mut reader = pair.master.try_clone_reader().map_err(|_| "PTY 출력 연결 실패".to_string())?;
     let mut writer = pair.master.take_writer().map_err(|_| "PTY 입력 연결 실패".to_string())?;
-    let mut child = pair.slave.spawn_command(portable_pty::CommandBuilder::new(bin)).map_err(|_| "agy 실행 실패".to_string())?;
+    let cwd = crate::cli::safe_helper_cwd();
+    if cwd.as_os_str().is_empty() { return Err("안전한 작업 폴더를 찾지 못했습니다".into()); }
+    crate::cli::log_auxiliary("agy_quota::fetch", &bin, &cwd);
+    let mut command = portable_pty::CommandBuilder::new(bin);
+    command.cwd(cwd);
+    let mut child = pair.slave.spawn_command(command).map_err(|_| "agy 실행 실패".to_string())?;
     drop(pair.slave);
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || { let mut buf = [0u8; 8192]; while let Ok(n) = reader.read(&mut buf) { if n == 0 || tx.send(buf[..n].to_vec()).is_err() { break; } } });
