@@ -35,16 +35,19 @@ test("enterReady waits for the CLI to echo the body before sending Enter", () =>
   assert.equal(enterReady(1000, 2490, 2500, 1500), true); // 계속 출력 중이면 기존 대기 후
 });
 
-test("pasteWrap brackets long/multi-line bodies only when the backend reports 2004h; Enter retry only when no output after Enter", () => {
-  const { pasteWrap, needsEnterRetry } = moduleExports;
+test("paste wrapping and submission evidence", () => {
+  const { pasteWrap, needsEnterRetry, submissionStarted } = moduleExports;
   const long = "가".repeat(650);
-  assert.equal(pasteWrap(long, false), long); // 미수신·끔 = 현행
+  assert.equal(pasteWrap(long, false), long);
   assert.equal(pasteWrap(long, true), `\x1b[200~${long}\x1b[201~`);
   assert.equal(pasteWrap("a\nb", true), "\x1b[200~a\nb\x1b[201~");
-  assert.equal(pasteWrap("짧은 한 줄", true), "짧은 한 줄");
-  assert.equal(needsEnterRetry(1000, null), true);
-  assert.equal(needsEnterRetry(1000, 900), true);
-  assert.equal(needsEnterRetry(1000, 1200), false);
+  assert.equal(pasteWrap("short", true), "short");
+  assert.equal(needsEnterRetry(submissionStarted("redrawn input", false), false), true);
+  assert.equal(needsEnterRetry(submissionStarted("redrawn input", true), false), false);
+  assert.equal(needsEnterRetry(submissionStarted("redrawn input", false), true), false);
+  assert.equal(submissionStarted("\x1b]7501;state=working:app=codex", null), true);
+  assert.equal(submissionStarted("esc\x1b[1Cto\x1b[1Cinterrupt", null), true);
+  assert.equal(submissionStarted("redrawn input", null), false);
 });
 
 test("apiWriteToSession asks the backend for paste mode, writes the body, then Enter separately; no frontend tracker left", () => {
@@ -57,3 +60,12 @@ test("apiWriteToSession asks the backend for paste mode, writes the body, then E
   assert.ok(!fs.readFileSync("src/components/TerminalPane.tsx", "utf8").includes("trackPasteMode"));
 });
 
+
+test("team delivery verifies turn start and stops when user types", () => {
+  const bridge = fs.readFileSync("src/lib/tauriBridge.ts", "utf8");
+  const block = bridge.slice(bridge.indexOf("export async function apiWriteToSession"), bridge.indexOf("export interface TeamMail"));
+  assert.match(block, /get_session_paste_mode/);
+  assert.match(block, /submissionStarted\(output,/);
+  assert.match(block, /getUserInputVersion\(sessionId\) !== inputVersion/);
+  assert.match(block, /attempt < 3/);
+});

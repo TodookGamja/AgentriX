@@ -9,6 +9,73 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Instant, SystemTime};
 use walkdir::WalkDir;
 
+fn normalize_cached_quota(mut quota: CliQuotaStatus, saved: DateTime<Utc>, now: DateTime<Utc>) -> CliQuotaStatus {
+    use chrono::{Datelike, NaiveDate, NaiveTime, TimeZone};
+    let offset = FixedOffset::east_opt(9 * 3600).unwrap();
+    let saved = saved.with_timezone(&offset);
+    let expired = |reset: &Option<String>| {
+        let Some(reset) = reset.as_deref() else { return false };
+        let (date, time) = if let Some((date, time)) = reset.split_once(' ') {
+            let Some((month, day)) = date.split_once('/') else { return false };
+            let (Ok(month), Ok(day)) = (month.parse(), day.parse()) else { return false };
+            let Some(mut date) = NaiveDate::from_ymd_opt(saved.year(), month, day) else { return false };
+            if date < saved.date_naive() {
+                let Some(next) = NaiveDate::from_ymd_opt(saved.year() + 1, month, day) else { return false };
+                date = next;
+            }
+            (date, time)
+        } else {
+            (saved.date_naive(), reset)
+        };
+        NaiveTime::parse_from_str(time, "%H:%M").ok()
+            .and_then(|time| offset.from_local_datetime(&date.and_time(time)).single())
+            .is_some_and(|reset| now >= reset.with_timezone(&Utc))
+    };
+    if expired(&quota.resets_at_5h) {
+        quota.used_percent_5h = 0.0;
+        quota.remaining_percent_5h = 100.0;
+        quota.resets_at_5h = None;
+    }
+    if expired(&quota.resets_at_weekly) {
+        quota.used_percent_weekly = 0.0;
+        quota.remaining_percent_weekly = 100.0;
+        quota.resets_at_weekly = None;
+    }
+    if let Some(groups) = &mut quota.sub_groups {
+        for group in groups {
+            if expired(&group.resets_at_5h) {
+                group.remaining_5h = Some(100.0);
+                group.resets_at_5h = None;
+            }
+            if expired(&group.resets_at_weekly) {
+                group.remaining_weekly = Some(100.0);
+                group.resets_at_weekly = None;
+            }
+        }
+    }
+    if quota.cli_id == "antigravity" {
+        if let Some(group) = quota.sub_groups.as_ref().into_iter().flatten().find(|g| g.name.contains("GEMINI MODELS")) {
+            if let Some(remaining) = group.remaining_5h {
+                quota.remaining_percent_5h = remaining;
+                quota.used_percent_5h = 100.0 - remaining;
+                quota.resets_at_5h = group.resets_at_5h.clone();
+            }
+            if let Some(remaining) = group.remaining_weekly {
+                quota.remaining_percent_weekly = remaining;
+                quota.used_percent_weekly = 100.0 - remaining;
+                quota.resets_at_weekly = group.resets_at_weekly.clone();
+            }
+        }
+    }
+    quota
+}
+
+fn normalize_memory_quota(quota: &CliQuotaStatus, fetched_at: Instant) -> CliQuotaStatus {
+    let now = Utc::now();
+    let saved = now - chrono::Duration::from_std(fetched_at.elapsed()).unwrap_or_default();
+    normalize_cached_quota(quota.clone(), saved, now)
+}
+
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
@@ -1057,20 +1124,11 @@ fn save_claude_cache_to_disk(quota: &CliQuotaStatus) {
 fn load_claude_cache_from_disk() -> Option<CliQuotaStatus> {
     let p = get_claude_cache_file();
     if p.is_file() {
-        if let Ok(metadata) = p.metadata() {
-            if let Ok(modified) = metadata.modified() {
-                if let Ok(elapsed) = modified.elapsed() {
-                    if elapsed.as_secs() > 300 {
-                        let _ = std::fs::remove_file(&p);
-                        return None;
-                    }
-                }
-            }
-        }
         if let Ok(content) = std::fs::read_to_string(&p) {
             if let Ok(quota) = serde_json::from_str::<CliQuotaStatus>(&content) {
                 if quota.has_official_quota && quota.resets_at_5h.is_some() {
-                    return Some(quota);
+                    let saved = p.metadata().ok()?.modified().ok()?;
+                return Some(normalize_cached_quota(quota, saved.into(), Utc::now()));
                 }
             }
         }
@@ -1085,7 +1143,7 @@ pub fn extract_claude_quota(force_refresh: bool) -> CliQuotaStatus {
     if let Ok(guard) = cache_mutex.lock() {
         if let Some((fetched_at, cached)) = guard.as_ref() {
             if !force_refresh && fetched_at.elapsed().as_secs() < 60 {
-                return cached.clone();
+                return normalize_memory_quota(cached, *fetched_at);
             }
         }
     }
@@ -1110,8 +1168,8 @@ pub fn extract_claude_quota(force_refresh: bool) -> CliQuotaStatus {
     }
 
     if let Ok(guard) = cache_mutex.lock() {
-        if let Some((_, cached)) = guard.as_ref() {
-            return cached.clone();
+        if let Some((fetched_at, cached)) = guard.as_ref() {
+            return normalize_memory_quota(cached, *fetched_at);
         }
     }
 
@@ -1315,142 +1373,14 @@ fn rfc3339_expired(s: &str) -> bool {
         .unwrap_or(true)
 }
 
-/// Windows 자격 증명 관리자에서 agy가 저장한 OAuth 토큰(`gemini:antigravity`)을 읽는다.
-#[cfg(target_os = "windows")]
-fn read_agy_keyring_token() -> Option<(String, String)> {
-    #[repr(C)]
-    struct Credential {
-        flags: u32,
-        kind: u32,
-        target_name: *mut u16,
-        comment: *mut u16,
-        last_written: [u32; 2],
-        blob_size: u32,
-        blob: *mut u8,
-        persist: u32,
-        attribute_count: u32,
-        attributes: *mut std::ffi::c_void,
-        target_alias: *mut u16,
-        user_name: *mut u16,
-    }
-    #[link(name = "advapi32")]
-    extern "system" {
-        fn CredReadW(target: *const u16, kind: u32, flags: u32, cred: *mut *mut Credential) -> i32;
-        fn CredFree(buf: *mut std::ffi::c_void);
-    }
-    let target: Vec<u16> = "gemini:antigravity".encode_utf16().chain(std::iter::once(0)).collect();
-    let mut p: *mut Credential = std::ptr::null_mut();
-    // SAFETY: 표준 Win32 호출, 성공 시 반환 버퍼를 복사한 뒤 CredFree로 해제
-    let raw = unsafe {
-        if CredReadW(target.as_ptr(), 1 /* CRED_TYPE_GENERIC */, 0, &mut p) == 0 || p.is_null() {
-            return None;
-        }
-        let c = &*p;
-        let bytes = std::slice::from_raw_parts(c.blob, c.blob_size as usize).to_vec();
-        CredFree(p as *mut _);
-        bytes
-    };
-    let v: Value = serde_json::from_slice(&raw).ok()?;
-    let tok = v.get("token")?;
-    Some((
-        tok.get("access_token")?.as_str()?.to_string(),
-        tok.get("expiry")?.as_str()?.to_string(),
-    ))
-}
-
-#[cfg(not(target_os = "windows"))]
-fn read_agy_keyring_token() -> Option<(String, String)> {
-    None
-}
-
-/// Antigravity 공식 쿼터 API(cloudcode-pa `retrieveUserQuotaSummary` + `retrieveUserQuota`) 실시간 조회.
-/// (agy 업데이트 후 `--print /quota`는 모델 프롬프트로 처리되어 토큰만 소모하고 빈 응답을 줌)
-fn fetch_antigravity_quota_worker() -> Option<CliQuotaStatus> {
-    let agy_bin = crate::cli::home_dir().join("AppData").join("Local").join("agy").join("bin").join("agy.exe");
-    let (mut token, expiry) = read_agy_keyring_token()?;
-    if rfc3339_expired(&expiry) {
-        // 만료 시 agy 자체 갱신 로직을 태운다 (`agy models`: 모델 호출 없이 인증만 갱신, 약 3초)
-        run_cli_silently(&agy_bin, &["models"]);
-        token = read_agy_keyring_token()?.0;
-    }
-    let post = |method: &str, body: Value| -> Option<Value> {
-        ureq::post(&format!("https://cloudcode-pa.googleapis.com/v1internal:{}", method))
-            .set("Authorization", &format!("Bearer {}", token))
-            .set("User-Agent", "antigravity")
-            .timeout(std::time::Duration::from_secs(6))
-            .send_json(body)
-            .ok()?
-            .into_json()
-            .ok()
-    };
-    let project = post("loadCodeAssist", serde_json::json!({ "metadata": { "ideType": "ANTIGRAVITY" } }))
-        .and_then(|v| v.get("cloudaicompanionProject").and_then(|p| p.as_str()).map(|s| s.to_string()))
-        .unwrap_or_default();
-    let body = serde_json::json!({ "project": project });
-
-    let mut sub_groups: Vec<crate::db::SubQuotaGroup> = Vec::new();
-    // 1) 그룹 요약 (Claude/GPT 등 5시간·주간 버킷)
-    if let Some(summary) = post("retrieveUserQuotaSummary", body.clone()) {
-        for g in summary.get("groups").and_then(|g| g.as_array()).into_iter().flatten() {
-            let mut grp = crate::db::SubQuotaGroup {
-                name: g.get("displayName").and_then(|n| n.as_str()).unwrap_or("").to_string(),
-                description: g.get("description").and_then(|d| d.as_str()).map(|s| s.to_string()),
-                remaining_5h: None,
-                resets_at_5h: None,
-                remaining_weekly: None,
-                resets_at_weekly: None,
-            };
-            for b in g.get("buckets").and_then(|b| b.as_array()).into_iter().flatten() {
-                let pct = (b.get("remainingFraction").and_then(|f| f.as_f64()).unwrap_or(1.0) * 100.0).clamp(0.0, 100.0).round();
-                let reset = b.get("resetTime").and_then(|r| r.as_str()).and_then(format_iso_kst);
-                match b.get("window").and_then(|w| w.as_str()) {
-                    Some("5h") => (grp.remaining_5h, grp.resets_at_5h) = (Some(pct), reset),
-                    Some("weekly") => (grp.remaining_weekly, grp.resets_at_weekly) = (Some(pct), reset),
-                    _ => {}
-                }
-            }
-            sub_groups.push(grp);
-        }
-    }
-
-    // 2) 모델별 버킷: 메인 Gemini 쿼터 = gemini-* 모델 중 가장 적게 남은 값
-    let quota = post("retrieveUserQuota", body)?;
-    let mut gemini: Option<(f64, Option<String>)> = None;
-    for b in quota.get("buckets").and_then(|b| b.as_array()).into_iter().flatten() {
-        let model = b.get("modelId").and_then(|m| m.as_str()).unwrap_or("");
-        if !model.starts_with("gemini") {
-            continue;
-        }
-        let pct = (b.get("remainingFraction").and_then(|f| f.as_f64()).unwrap_or(1.0) * 100.0).clamp(0.0, 100.0).round();
-        if gemini.as_ref().map_or(true, |(p, _)| pct < *p) {
-            gemini = Some((pct, b.get("resetTime").and_then(|r| r.as_str()).and_then(format_iso_kst)));
-        }
-    }
-    let (gem_pct, gem_reset) = gemini.unwrap_or((100.0, None));
-    let weekly = sub_groups.iter().filter_map(|g| g.remaining_weekly.map(|w| (w, g.resets_at_weekly.clone()))).next();
-
-    let res = CliQuotaStatus {
-        cli_id: "antigravity".into(),
-        cli_name: "Antigravity (agy)".into(),
-        plan_label: "Google DeepMind".into(),
-        source_label: "Antigravity 쿼터 연동".into(),
-        has_official_quota: true,
-        used_percent_5h: 100.0 - gem_pct,
-        remaining_percent_5h: gem_pct,
-        resets_at_5h: gem_reset,
-        used_percent_weekly: weekly.as_ref().map_or(0.0, |w| 100.0 - w.0),
-        remaining_percent_weekly: weekly.as_ref().map_or(100.0, |w| w.0),
-        resets_at_weekly: weekly.and_then(|w| w.1),
-        status_message: None,
-        sub_groups: if sub_groups.is_empty() { None } else { Some(sub_groups) },
-    };
+fn fetch_antigravity_quota_worker() -> Option<(CliQuotaStatus, bool)> {
+    let res = crate::agy_quota::fetch()?;
     let cache_mutex = AGY_QUOTA_CACHE.get_or_init(|| Mutex::new(None));
     if let Ok(mut guard) = cache_mutex.lock() {
         *guard = Some((Instant::now(), res.clone()));
     }
-    Some(res)
+    Some((res, true))
 }
-
 fn get_agy_cache_file() -> PathBuf {
     dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -1471,19 +1401,11 @@ fn save_agy_cache_to_disk(quota: &CliQuotaStatus) {
 fn load_agy_cache_from_disk() -> Option<CliQuotaStatus> {
     let p = get_agy_cache_file();
     if p.is_file() {
-        if let Ok(metadata) = p.metadata() {
-            if let Ok(modified) = metadata.modified() {
-                if let Ok(elapsed) = modified.elapsed() {
-                    if elapsed.as_secs() > 300 {
-                        let _ = std::fs::remove_file(&p);
-                        return None;
-                    }
-                }
-            }
-        }
         if let Ok(content) = std::fs::read_to_string(&p) {
             if let Ok(quota) = serde_json::from_str::<CliQuotaStatus>(&content) {
-                return Some(quota);
+                if quota.source_label != "agy /quota" { return None; }
+                let saved = p.metadata().ok()?.modified().ok()?;
+                return Some(normalize_cached_quota(quota, saved.into(), Utc::now()));
             }
         }
     }
@@ -1491,24 +1413,28 @@ fn load_agy_cache_from_disk() -> Option<CliQuotaStatus> {
 }
 
 pub fn extract_antigravity_quota(force_refresh: bool) -> CliQuotaStatus {
+    extract_antigravity_quota_with(force_refresh, fetch_antigravity_quota_worker)
+}
+
+fn extract_antigravity_quota_with(force_refresh: bool, fetch: impl FnOnce() -> Option<(CliQuotaStatus, bool)>) -> CliQuotaStatus {
     let cache_mutex = AGY_QUOTA_CACHE.get_or_init(|| Mutex::new(None));
     if let Ok(guard) = cache_mutex.lock() {
         if let Some((fetched_at, cached)) = guard.as_ref() {
-            if !force_refresh && fetched_at.elapsed().as_secs() < 60 {
-                return cached.clone();
+            if !force_refresh && fetched_at.elapsed().as_secs() < 300 {
+                return normalize_memory_quota(cached, *fetched_at);
             }
         }
     }
 
     // 공식 API 조회는 모델 토큰을 쓰지 않으므로 캐시가 지나면 항상 다시 조회 (예전엔 트레이 새로고침에서만 조회해 수치가 멈춤)
-    if let Some(res) = fetch_antigravity_quota_worker() {
-        save_agy_cache_to_disk(&res);
+    if let Some((res, complete)) = fetch() {
+        if complete { save_agy_cache_to_disk(&res); }
         return res;
     }
 
     if let Ok(guard) = cache_mutex.lock() {
-        if let Some((_, cached)) = guard.as_ref() {
-            return cached.clone();
+        if let Some((fetched_at, cached)) = guard.as_ref() {
+            return normalize_memory_quota(cached, *fetched_at);
         }
     }
 
@@ -1526,19 +1452,21 @@ pub fn extract_antigravity_quota(force_refresh: bool) -> CliQuotaStatus {
 
 /// DB 잠금을 잡기 전에 호출: 각 공식 쿼터 API를 병렬로 조회해 60초 캐시를 채운다.
 /// (잠금 안에서 네트워크를 기다리면 다른 명령이 멈추므로, 이후 collect_all_cli_quotas는 캐시만 읽게 됨)
-pub fn prefetch_live_quotas() {
+pub fn prefetch_live_quotas() -> Vec<CliQuotaStatus> {
     let claude_stale = CLAUDE_QUOTA_CACHE
         .get()
         .and_then(|m| m.lock().ok().and_then(|g| g.as_ref().map(|(at, _)| at.elapsed().as_secs() >= 60)))
         .unwrap_or(true);
     std::thread::scope(|s| {
-        if claude_stale {
-            s.spawn(|| fetch_claude_quota_worker());
-        }
-        s.spawn(|| extract_codex_quota());
-        s.spawn(|| extract_grok_quota());
-        s.spawn(|| extract_antigravity_quota(false));
-    });
+        let claude = s.spawn(|| { if claude_stale { fetch_claude_quota_worker(); } extract_claude_quota(false) });
+        let codex = s.spawn(extract_codex_quota);
+        let grok = s.spawn(extract_grok_quota);
+        let agy = s.spawn(|| extract_antigravity_quota(false));
+        let cursor = s.spawn(extract_cursor_quota);
+        let mut quotas = vec![claude.join().unwrap(), codex.join().unwrap(), grok.join().unwrap(), agy.join().unwrap()];
+        quotas.extend(cursor.join().unwrap());
+        quotas
+    })
 }
 
 static CURSOR_QUOTA_CACHE: OnceLock<Mutex<Option<(Instant, CliQuotaStatus)>>> = OnceLock::new();
@@ -1591,7 +1519,7 @@ pub fn extract_cursor_quota() -> Option<CliQuotaStatus> {
     if let Ok(guard) = cache.lock() {
         if let Some((at, cached)) = guard.as_ref() {
             if at.elapsed().as_secs() < 60 {
-                return Some(cached.clone());
+                return Some(normalize_memory_quota(cached, *at));
             }
         }
     }
@@ -1811,6 +1739,71 @@ pub fn list_cli_models(cli_id: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod live_quota_tests {
+    #[test]
+    fn cached_quota_resets_each_expired_window() {
+        let saved = chrono::DateTime::parse_from_rfc3339("2026-12-31T14:00:00Z").unwrap().to_utc();
+        let now = chrono::DateTime::parse_from_rfc3339("2026-12-31T15:10:00Z").unwrap().to_utc();
+        let mut quota = super::unavailable_quota("agy", "agy", "", "", "");
+        quota.used_percent_5h = 60.0;
+        quota.remaining_percent_5h = 40.0;
+        quota.resets_at_5h = Some("01/01 00:05".into());
+        quota.used_percent_weekly = 20.0;
+        quota.remaining_percent_weekly = 80.0;
+        quota.resets_at_weekly = Some("01/02 00:00".into());
+        let quota = super::normalize_cached_quota(quota, saved, now);
+        assert_eq!((quota.used_percent_5h, quota.remaining_percent_5h), (0.0, 100.0));
+        assert_eq!((quota.used_percent_weekly, quota.remaining_percent_weekly), (20.0, 80.0));
+    }
+
+    #[test]
+    fn antigravity_main_5h_tracks_gemini_after_reset() {
+        let saved = chrono::DateTime::parse_from_rfc3339("2026-11-02T00:00:00Z").unwrap().to_utc();
+        // saved 09:00 KST(00:00Z), now 14:00 KST(05:00Z): "09:00" expired, "15:00" still valid
+        let now = chrono::DateTime::parse_from_rfc3339("2026-11-02T05:00:00Z").unwrap().to_utc();
+        let mut quota = super::unavailable_quota("antigravity", "agy", "", "", "");
+        quota.remaining_percent_5h = 10.0;
+        quota.used_percent_5h = 90.0;
+        quota.resets_at_5h = Some("09:00".into());
+        quota.sub_groups = Some(vec![
+            crate::db::SubQuotaGroup {
+                name: "Claude/GPT".into(),
+                description: None,
+                remaining_5h: Some(20.0),
+                resets_at_5h: Some("09:00".into()),
+                remaining_weekly: None,
+                resets_at_weekly: None,
+            },
+            crate::db::SubQuotaGroup {
+                name: "GEMINI MODELS".into(),
+                description: None,
+                remaining_5h: Some(80.0),
+                resets_at_5h: Some("15:00".into()), // still valid
+                remaining_weekly: None,
+                resets_at_weekly: None,
+            },
+        ]);
+        let before_reset = super::normalize_cached_quota(quota.clone(), saved, saved);
+        assert_eq!(before_reset.remaining_percent_5h, 80.0);
+        let quota = super::normalize_cached_quota(quota, saved, now);
+        assert_eq!(quota.remaining_percent_5h, 80.0);
+        assert_eq!(quota.resets_at_5h.as_deref(), Some("15:00"));
+        let groups = quota.sub_groups.as_ref().unwrap();
+        assert_eq!(groups[0].remaining_5h, Some(100.0));
+        assert_eq!(groups[0].resets_at_5h, None);
+        assert_eq!(groups[1].remaining_5h, Some(80.0));
+    }
+
+    #[test]
+    fn antigravity_missing_gemini_preserves_memory_cache() {
+        let cache = super::AGY_QUOTA_CACHE.get_or_init(|| std::sync::Mutex::new(None));
+        let mut quota = super::unavailable_quota("antigravity", "agy", "", "", "");
+        quota.remaining_percent_5h = 80.0;
+        let previous = cache.lock().unwrap().replace((std::time::Instant::now(), quota));
+        let result = super::extract_antigravity_quota_with(true, || None);
+        *cache.lock().unwrap() = previous;
+        assert_eq!(result.remaining_percent_5h, 80.0);
+    }
+
     /// 실제 로그인 정보로 공식 쿼터 API 조회 확인: `cargo test live_quotas -- --ignored --nocapture`
     #[test]
     #[ignore]

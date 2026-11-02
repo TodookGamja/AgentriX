@@ -1,4 +1,4 @@
-import type { AiProviderConfig, DetectedCliCredential, ProjectAgentInput, ProjectDeepContext } from "../types/types";
+import type { AiProviderConfig, CliQuotaStatus, DetectedCliCredential, ProjectAgentInput, ProjectDeepContext } from "../types/types";
 import { apiRequestWithDetectedCredential, apiRunCliDeepAnalysis } from "./tauriBridge";
 
 function detectedFetch(credential: DetectedCliCredential | null, model: string): typeof fetch {
@@ -19,6 +19,7 @@ export interface TeamCliOption {
   id: string;
   name: string;
   models: string[];
+  excludedModels?: string[];
 }
 
 const DEFAULT_CLIS = ["claude", "codex", "antigravity", "grok"];
@@ -30,9 +31,29 @@ function pickCli(cliId: unknown, options?: TeamCliOption[]): string {
 }
 
 // 목록에 없는 모델명(환각)은 버리고 CLI 기본 모델 사용
-function pickModel(cliId: unknown, model: unknown, options?: TeamCliOption[]): string {
+export function pickModel(cliId: unknown, model: unknown, options?: TeamCliOption[]): string {
   const opt = options?.find((o) => o.id === cliId);
-  return opt && typeof model === "string" && opt.models.includes(model) ? model : "";
+  if (opt && typeof model === "string" && opt.models.includes(model)) return model;
+  return typeof model === "string" && opt?.excludedModels?.includes(model) ? opt.models[0] ?? "" : "";
+}
+
+export function filterExhaustedModels(options: TeamCliOption[], quotas: CliQuotaStatus[]): TeamCliOption[] {
+  const tokens = (value: string): string[] => value.toLowerCase().match(/[a-z]+|\d+/g) ?? [];
+  return options.map((option) => {
+    const quota = quotas.find((q) => q.cliId === option.id && q.hasOfficialQuota);
+    if (!quota) return option;
+    const models = option.models.filter((model) => {
+      if (option.id !== "antigravity" && (quota.remainingPercent5h === 0 || quota.remainingPercentWeekly === 0)) return false;
+      const modelTokens = tokens(model);
+      const matches = (quota.subGroups ?? []).flatMap((group) => {
+        const names = group.description?.split(",") ?? (/\bmodels\b/i.test(group.name) ? [] : [group.name]);
+        return names.map((name) => tokens(name)).filter((words) => words.length > 0 && words.every((word) => modelTokens.includes(word))).map((words) => ({ group, length: words.length }));
+      });
+      const best = Math.max(0, ...matches.map((match) => match.length));
+      return !matches.some(({ group, length }) => length === best && (group.remaining5h === 0 || group.remainingWeekly === 0));
+    });
+    return { ...option, models, excludedModels: option.models.filter((model) => !models.includes(model)) };
+  });
 }
 
 /** 사용자 요청과 재추천 시 변주를 위한 힌트 */
@@ -201,7 +222,7 @@ function toAgentInputs(parsed: any[], context: ProjectDeepContext, options?: Tea
     name: uniqueName(item.name || `AI 에이전트 ${idx + 1}`),
     roleTitle: item.roleTitle || "전담 엔지니어",
     cliId: pickCli(item.cliId, options),
-    model: pickModel(item.cliId, item.model, options),
+    model: pickModel(pickCli(item.cliId, options), item.model, options),
     useWrapper: true,
     avatarEmoji: item.avatarEmoji || "🤖",
     accentColor: item.accentColor || "#6366f1",

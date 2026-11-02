@@ -5,10 +5,35 @@ use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize}
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
+use std::net::{SocketAddr, TcpStream};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
+
+// ponytail: Headroom 0.38.0의 동시 잠금 파일 접근 충돌을 피하기 위한 최소 기동 간격.
+const HEADROOM_LAUNCH_INTERVAL: Duration = Duration::from_secs(2);
+const HEADROOM_PROXY_PORT: u16 = 8788;
+static LAST_HEADROOM_LAUNCH: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
+
+fn headroom_launch_delay(last: Option<Instant>, now: Instant) -> Duration {
+    last.map_or(Duration::ZERO, |last| HEADROOM_LAUNCH_INTERVAL.saturating_sub(now.saturating_duration_since(last)))
+}
+
+fn wait_for_headroom_proxy(address: SocketAddr, timeout: Duration) -> bool {
+    let started = Instant::now();
+    loop {
+        let remaining = timeout.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            return false;
+        }
+        if TcpStream::connect_timeout(&address, remaining.min(Duration::from_millis(200))).is_ok() {
+            return true;
+        }
+        std::thread::sleep(timeout.saturating_sub(started.elapsed()).min(Duration::from_millis(200)));
+    }
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -39,6 +64,7 @@ pub struct PtyOutputChunk {
 
 pub struct PtySession {
     pub info: SessionInfo,
+    pub resumed_cli_id: Option<String>,
     pub master: Box<dyn MasterPty + Send>,
     pub writer: Box<dyn Write + Send>,
     pub child: Box<dyn Child + Send + Sync>,
@@ -149,6 +175,7 @@ impl PtyManager {
         initial_command: Option<String>,
         agent_meta: Option<ProjectAgentRecord>,
         collab_protocol: Option<String>,
+        resume_session_id: Option<String>,
         app_handle: Option<AppHandle>,
     ) -> Result<SessionInfo, String> {
         let pty_system = native_pty_system();
@@ -181,12 +208,11 @@ impl PtyManager {
             role_in_system && saved
         } else { false };
 
-        let session_id = Uuid::new_v4().to_string();
+        let resumed_cli_id = resume_session_id.clone();
+        configure_codex_resume(&mut cli_def, resume_session_id.as_deref());
+        let claude_resume = if cli_def.id == "claude" { resume_session_id } else { None };
+        let session_id = configure_claude_session(&mut cli_def, claude_resume);
         // Claude 로그 파일명(<id>.jsonl)을 PTY 세션 ID로 고정 → 실제 컨텍스트 토큰을 이 세션의 로그에서 정확히 읽음 (context.rs)
-        let resumes = cli_def.args.iter().any(|a| matches!(a.as_str(), "--resume" | "-r" | "--continue" | "-c" | "--session-id"));
-        if cli_def.id == "claude" && !resumes {
-            cli_def.args.extend(["--session-id".to_string(), session_id.clone()]);
-        }
 
         let (mut cmd, binary_label) = build_platform_command(
             &cli_def,
@@ -197,6 +223,11 @@ impl PtyManager {
         );
 
         cmd.cwd(&safe_cwd);
+        for (key, _) in std::env::vars_os() {
+            if is_claude_session_marker(&key.to_string_lossy()) {
+                cmd.env_remove(key);
+            }
+        }
         // OpenCode는 실제 cwd보다 상속된 PWD를 작업 폴더로 우선 사용함 → 앱을 다른 폴더의 셸에서 띄우면 엉뚱한 폴더에서 작업하므로 맞춰줌
         cmd.env("PWD", &safe_cwd);
         cmd.env("TERM", "xterm-256color");
@@ -235,7 +266,21 @@ impl PtyManager {
         }
         env_injected_keys.sort();
 
+        let mut launch_guard = if initial_command.as_deref() == Some("__WRAPPER__") {
+            let guard = LAST_HEADROOM_LAUNCH.get_or_init(|| Mutex::new(None)).lock().map_err(|e| e.to_string())?;
+            if guard.is_some() && !wait_for_headroom_proxy(([127, 0, 0, 1], HEADROOM_PROXY_PORT).into(), Duration::from_secs(60)) {
+                return Err("Headroom 프록시가 60초 안에 준비되지 않아 세션을 시작하지 못했습니다.".into());
+            }
+            std::thread::sleep(headroom_launch_delay(*guard, Instant::now()));
+            Some(guard)
+        } else {
+            None
+        };
         let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
+        if let Some(guard) = &mut launch_guard {
+            **guard = Some(Instant::now());
+        }
+        drop(launch_guard);
         drop(pair.slave);
 
         let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
@@ -302,6 +347,7 @@ impl PtyManager {
 
         let session = PtySession {
             info: info.clone(),
+            resumed_cli_id,
             master: pair.master,
             writer,
             child,
@@ -329,7 +375,7 @@ impl PtyManager {
             .into_iter()
             .find(|c| c.id == cli_id)
             .ok_or_else(|| format!("지원하지 않는 CLI ID입니다: {}", cli_id))?;
-        self.start_session_with_def(cli_def, cwd, injected_env, initial_command, None, None, app_handle)
+        self.start_session_with_def(cli_def, cwd, injected_env, initial_command, None, None, None, app_handle)
     }
 
     pub fn write_to_session(&self, session_id: &str, data: &[u8]) -> Result<String, String> {
@@ -432,6 +478,39 @@ impl PtyManager {
         list.sort_by(|a, b| a.started_at.cmp(&b.started_at));
         list
     }
+
+    pub fn resumed_cli_id(&self, session_id: &str) -> Option<String> {
+        self.sessions.lock().ok()?.get(session_id)?.resumed_cli_id.clone()
+    }
+}
+
+fn is_claude_session_marker(key: &str) -> bool {
+    [
+        "CLAUDECODE",
+        "CLAUDE_CODE_CHILD_SESSION",
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_CODE_SESSION_ATTENDED",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "CLAUDE_CODE_EXECPATH",
+        "CLAUDE_CODE_MESSAGING_SOCKET",
+        "CLAUDE_CODE_MESSAGING_TOKEN",
+        "CLAUDE_PID",
+    ].iter().any(|marker| key.eq_ignore_ascii_case(marker))
+}
+
+fn configure_codex_resume(cli: &mut CliDefinition, resume_id: Option<&str>) {
+    if let ("codex", Some(id)) = (cli.id.as_str(), resume_id) {
+        cli.args.splice(0..0, ["resume".to_string(), id.to_string()]);
+    }
+}
+
+fn configure_claude_session(cli: &mut CliDefinition, resume_id: Option<String>) -> String {
+    let session_id = resume_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
+    let explicit = cli.args.iter().any(|a| matches!(a.as_str(), "--resume" | "-r" | "--continue" | "-c" | "--session-id"));
+    if cli.id == "claude" && !explicit {
+        cli.args.extend([if resume_id.is_some() { "--resume" } else { "--session-id" }.to_string(), session_id.clone()]);
+    }
+    session_id
 }
 
 fn ps_escape_single_quoted(input: &str) -> String {
@@ -502,19 +581,19 @@ fn build_platform_command(
             let (exec_cmd, label) = if let Some(ref wrapper) = cli_def.wrapper_binary {
                 let is_headroom = Path::new(wrapper).file_stem().and_then(|s| s.to_str()).map(|s| s.eq_ignore_ascii_case("headroom")).unwrap_or(false);
                 let command = if is_headroom {
-                    format!("& '{}' wrap '{}' --port 8788 --", ps_escape_single_quoted(wrapper), ps_escape_single_quoted(&cli_def.id))
+                    format!("& '{}' wrap '{}' --port {} --", ps_escape_single_quoted(wrapper), ps_escape_single_quoted(&cli_def.id), HEADROOM_PROXY_PORT)
                 } else {
                     format!("& '{}'", ps_escape_single_quoted(wrapper))
                 };
                 (command, format!("{} (Headroom Wrapper)", wrapper))
             } else if cli_def.resolved_binary.is_some() {
                 (
-                    format!("headroom wrap '{}' --port 8788 --", ps_escape_single_quoted(&cli_def.id)),
+                    format!("headroom wrap '{}' --port {} --", ps_escape_single_quoted(&cli_def.id), HEADROOM_PROXY_PORT),
                     format!("headroom wrap {}", cli_def.name),
                 )
             } else {
                 (
-                    format!("headroom wrap '{}' --port 8788 --", ps_escape_single_quoted(&cli_def.id)),
+                    format!("headroom wrap '{}' --port {} --", ps_escape_single_quoted(&cli_def.id), HEADROOM_PROXY_PORT),
                     format!("headroom wrap {}", cli_def.id),
                 )
             };
@@ -598,6 +677,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn claude_session_arguments_select_new_or_resume() {
+        let cli = crate::cli::builtin_clis().into_iter().find(|c| c.id == "claude").unwrap();
+        let mut fresh = cli.clone();
+        let fresh_id = configure_claude_session(&mut fresh, None);
+        assert!(fresh.args.windows(2).any(|pair| pair == ["--session-id", &fresh_id]));
+        assert!(!fresh.args.iter().any(|arg| arg == "--resume"));
+        let mut resumed = cli;
+        let id = Uuid::new_v4().to_string();
+        assert_eq!(configure_claude_session(&mut resumed, Some(id.clone())), id);
+        assert!(resumed.args.windows(2).any(|pair| pair == ["--resume", &id]));
+        assert!(!resumed.args.iter().any(|arg| arg == "--session-id"));
+    }
+
+    #[test]
+    fn codex_resume_adds_subcommand_before_options() {
+        let mut cli = crate::cli::builtin_clis().into_iter().find(|c| c.id == "codex").unwrap();
+        cli.args = vec!["--model".into(), "model".into()];
+        configure_codex_resume(&mut cli, Some("session-id"));
+        assert_eq!(cli.args, ["resume", "session-id", "--model", "model"]);
+    }
+
+    #[test]
+    fn claude_session_marker_matches_inherited_keys() {
+        for key in ["CLAUDECODE", "claude_code_child_session", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_SESSION_ATTENDED", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_EXECPATH", "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_PID"] {
+            assert!(is_claude_session_marker(key), "{key}");
+        }
+        for key in ["CLAUDE_CODE", "CLAUDE_API_KEY", "OTHER_CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_GIT_BASH_PATH", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_MAX_OUTPUT_TOKENS"] {
+            assert!(!is_claude_session_marker(key), "{key}");
+        }
+    }
+
+    #[test]
     fn paste_mode_tracks_split_sequences_and_latest_state() {
         let mut buffer = OutputBuffer::default();
         track_paste_mode(&mut buffer, b"noise\x1b[?20");
@@ -608,6 +719,22 @@ mod tests {
         assert!(!buffer.paste_mode);
         track_paste_mode(&mut buffer, b"\x1b[?2004h\x1b[?2004l\x1b[?2004h");
         assert!(buffer.paste_mode);
+    }
+
+    #[test]
+    fn headroom_launch_delay_enforces_interval() {
+        let now = Instant::now();
+        assert_eq!(headroom_launch_delay(None, now), Duration::ZERO);
+        assert_eq!(headroom_launch_delay(Some(now), now), HEADROOM_LAUNCH_INTERVAL);
+        assert_eq!(headroom_launch_delay(Some(now), now + Duration::from_millis(750)), Duration::from_millis(1250));
+        assert_eq!(headroom_launch_delay(Some(now), now + HEADROOM_LAUNCH_INTERVAL), Duration::ZERO);
+    }
+
+    #[test]
+    fn headroom_proxy_wait_accepts_connections_and_times_out() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        assert!(wait_for_headroom_proxy(listener.local_addr().unwrap(), Duration::from_secs(1)));
+        assert!(!wait_for_headroom_proxy(([127, 0, 0, 1], 0).into(), Duration::from_millis(20)));
     }
 
     #[test]

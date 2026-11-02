@@ -16,8 +16,9 @@ const sample = {
   accentColor: "#f97316",
   remainPct5h: 46,
   remainPctWeekly: 74,
-  resetsAt5h: "18:00",
-  resetsAtWeekly: "03/01 09:00",
+  resetsAt5h: null, // 리셋 경과 보정과 무관한 픽스처
+  savedAt: 1700000000000,
+  resetsAtWeekly: null,
 };
 
 test("restores per-cli cache before global cache; rejects stale 13:50 dummy", () => {
@@ -33,10 +34,10 @@ test("restores per-cli cache before global cache; rejects stale 13:50 dummy", ()
   );
 
   const getItem = (key) => store.get(key) ?? null;
-  assert.deepEqual(api.restoreMiniQuotaCache(getItem, "claude"), sample);
+  assert.deepEqual(JSON.parse(JSON.stringify(api.restoreMiniQuotaCache(getItem, "claude"))), sample);
 
   const stale = api.restoreMiniQuotaCache(getItem, "antigravity");
-  assert.equal(stale.cliId, "global");
+  assert.equal(stale, null);
   assert.equal(api.parseMiniQuotaCache('{"cliId":"x","resetsAt5h":"13:50"}'), null);
   assert.equal(api.parseMiniQuotaCache("not-json"), null);
 });
@@ -65,7 +66,7 @@ test("regression: persist → restore round-trip for focused cli", () => {
   const store = new Map();
   api.persistMiniQuotaCache((k, v) => store.set(k, v), sample);
   const restored = api.restoreMiniQuotaCache((k) => store.get(k) ?? null, "claude");
-  assert.deepEqual(restored, sample);
+  assert.deepEqual(JSON.parse(JSON.stringify(restored)), sample);
   assert.equal(api.restoreMiniQuotaCache(() => null, "claude"), null);
 });
 
@@ -76,8 +77,9 @@ test("regression: missing per-cli falls back to global; empty store yields null"
     JSON.stringify({ ...sample, cliId: "global", remainPct5h: 33 })
   );
   const fallback = api.restoreMiniQuotaCache((k) => store.get(k) ?? null, "codex");
-  assert.equal(fallback.cliId, "global");
-  assert.equal(fallback.remainPct5h, 33);
+  assert.equal(fallback, null);
+  store.set("agentrix_mini_quota_cached", JSON.stringify({ ...sample, cliId: "codex", remainPct5h: 33 }));
+  assert.equal(api.restoreMiniQuotaCache((k) => store.get(k) ?? null, "codex").remainPct5h, 33);
   assert.equal(api.restoreMiniQuotaCache(() => null, "codex"), null);
 });
 
@@ -102,7 +104,7 @@ test("regression: focus switch restores matching per-cli snapshot after persist"
     cliId: "codex",
     cliName: "Codex",
     remainPct5h: 88,
-    resetsAt5h: "21:00",
+    resetsAt5h: null,
   };
   api.persistMiniQuotaCache((k, v) => store.set(k, v), claude);
   api.persistMiniQuotaCache((k, v) => store.set(k, v), codex);
@@ -120,9 +122,41 @@ test("regression: corrupt per-cli JSON falls through to global when global is cl
   store.set("agentrix_mini_quota_claude", "{not-json");
   store.set(
     "agentrix_mini_quota_cached",
-    JSON.stringify({ ...sample, cliId: "global", remainPct5h: 12 })
+    JSON.stringify({ ...sample, remainPct5h: 12 })
   );
   const restored = api.restoreMiniQuotaCache((k) => store.get(k) ?? null, "claude");
-  assert.equal(restored.cliId, "global");
+  assert.equal(restored.cliId, "claude");
   assert.equal(restored.remainPct5h, 12);
+});
+
+test("normalizeMiniQuota resets only the expired window; legacy cache without savedAt is dropped", () => {
+  const savedAt = Date.parse("2026-11-02T12:00:00+09:00");
+  const s = { ...sample, remainPct5h: 10, remainPctWeekly: 20, resetsAt5h: "15:00", resetsAtWeekly: "11/05 09:00", savedAt };
+  const mid = api.normalizeMiniQuota(s, Date.parse("2026-11-02T15:01:00+09:00"));
+  assert.deepEqual([mid.remainPct5h, mid.resetsAt5h, mid.remainPctWeekly], [100, null, 20]);
+  const late = api.normalizeMiniQuota(s, Date.parse("2026-11-05T09:01:00+09:00"));
+  assert.deepEqual([late.remainPctWeekly, late.resetsAtWeekly], [100, null]);
+  assert.equal(api.normalizeMiniQuota({ ...s, savedAt: undefined }), null);
+});
+
+test("regression: agy Gemini-main snap round-trips; weekly 100+null reset is Forge unknown sentinel", () => {
+  // 백엔드: 메인 5h=Gemini, 주간=정보없음 센티널(100, resetsAtWeekly null). 캐시는 값을 바꾸지 않음.
+  const store = new Map();
+  const agy = {
+    ...sample,
+    cliId: "antigravity",
+    cliName: "Antigravity (agy)",
+    planLabel: "Google DeepMind",
+    remainPct5h: 80,
+    remainPctWeekly: 100,
+    resetsAt5h: "15:00",
+    resetsAtWeekly: null,
+    savedAt: Date.now(),
+  };
+  api.persistMiniQuotaCache((k, v) => store.set(k, v), agy);
+  const restored = api.restoreMiniQuotaCache((k) => store.get(k) ?? null, "antigravity");
+  assert.equal(restored.remainPct5h, 80);
+  assert.equal(restored.remainPctWeekly, 100);
+  assert.equal(restored.resetsAtWeekly, null);
+  assert.equal(api.normalizeMiniQuota(agy, Date.now()).remainPctWeekly, 100);
 });

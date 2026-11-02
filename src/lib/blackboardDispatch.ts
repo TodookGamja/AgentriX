@@ -79,6 +79,31 @@ export function parseBoardTasks(board: string, agentIds: string[], names?: Recor
   return tasks;
 }
 
+// 전달 기록 정리: 🔥가 아니게 된(✅/⏳) 작업의 start 기록과, 다시 🔥가 된 작업의 done 기록을 지워 재착수 시 1회 재전달
+// ponytail: 표에서 행이 사라진 경우도 비-착수로 봄(빈 보드는 호출부에서 건너뜀)
+export function forgetEndedStarts(sent: Set<string>, tasks: BoardTask[]): boolean {
+  const live = new Set(tasks.filter((t) => t.status === "start").map((t) => `${t.taskId}:${t.agentId}`));
+  let changed = false;
+  for (const k of Array.from(sent)) {
+    const m = k.match(/^(.+):(start|done):(.+)$/);
+    if (!m) continue;
+    const isLive = live.has(`${m[1]}:${m[3]}`);
+    if ((m[2] === "start" && !isLive) || (m[2] === "done" && isLive)) { sent.delete(k); changed = true; }
+  }
+  return changed;
+}
+
+// 카드 1행용 짧은 제목: 마크다운 기호 제거 → 첫 문장 → max자 이내(넘으면 …)
+export function shortTaskTitle(raw: string, max = 40): string {
+  const t = raw
+    .replace(/`+|\*+|_{2,}|~~|^#+\s*/g, "")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+  const first = t.match(/^.+?(?:[.!?。]\s|[.!?。]$|$)/)?.[0].trim() ?? t;
+  return first.length > max ? first.slice(0, max - 1).trimEnd() + "…" : first;
+}
+
 // 작업 ID의 제목(표의 작업 칸 또는 체크리스트 항목 나머지) — 승인 보드 표시용
 export function boardTaskTitle(board: string, taskId: string): string {
   for (const line of board.split(/\r?\n/)) {

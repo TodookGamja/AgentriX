@@ -7,6 +7,7 @@ export interface PendingDelivery {
   at: number; // 전달 직후 lastSubmission
   retriedAt?: number;
   started?: boolean; // 에코 이후 출력을 본 적 있음
+  unconfirmed?: boolean;
 }
 export type GateAction = "proceed" | "resend" | "wait" | "stuck";
 export const STUCK_AFTER_MS = 15_000;
@@ -15,6 +16,7 @@ export const ECHO_WINDOW_MS = 1_500;
 // quiet = apiGetSessionQuietSince: null이면 출력이 10초 안에 있는 작업 중, 숫자면 출력이 멈춘 시각(= 마지막 출력 시각).
 export function deliveryGate(p: PendingDelivery | undefined, evidence: boolean, quiet: number | null, now: number): GateAction {
   if (!p || evidence) return "proceed";
+  if (p.unconfirmed) return "stuck";
   const since = (p.retriedAt ?? p.at) + ECHO_WINDOW_MS;
   if (quiet === null ? now > since : quiet > since) p.started = true;
   if (quiet === null) return "wait"; // 작업 중: 재전송·멈춤 표시 없이 대기

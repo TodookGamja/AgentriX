@@ -8,9 +8,9 @@ export async function apiInstallNpmCliUpdate(packageName: string): Promise<void>
   return invoke("install_npm_cli_update", { package: packageName });
 }
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
-import { recordSessionInput } from "./inputHistory";
+import { getUserInputVersion, recordSessionInput } from "./inputHistory";
 import { applyHandoffHint } from "./handoffRelay";
-import { enterReady, needsEnterRetry, pasteWrap, queueSessionWrite } from "./sessionWriteQueue";
+import { enterReady, needsEnterRetry, pasteWrap, queueSessionWrite, submissionStarted } from "./sessionWriteQueue";
 import type {
   ApiKeyStatus,
   ApplyResult,
@@ -264,7 +264,8 @@ export async function apiStartSession(
   permissionArgs?: string[],
   permissionAuto?: boolean,
   suppressBrief?: boolean,
-  collabProtocol?: string
+  collabProtocol?: string,
+  startFresh?: boolean
 ): Promise<SessionInfo> {
   if (isTauriRuntime()) {
     return invoke<SessionInfo>("start_session", {
@@ -277,6 +278,7 @@ export async function apiStartSession(
       permissionAuto: permissionAuto ?? false,
       suppressBrief: suppressBrief ?? false,
       collabProtocol: collabProtocol ?? null,
+      startFresh: startFresh ?? false,
     });
   }
   const id = `sess-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -294,7 +296,8 @@ export async function apiStartSession(
   };
 }
 
-export async function apiWriteToSession(sessionId: string, data: string, injected = false): Promise<void> {
+export async function apiWriteToSession(sessionId: string, data: string, injected = false, verify?: { hasStarted: () => Promise<boolean | null>; onResult: (confirmed: boolean) => void }): Promise<void> {
+  const inputVersion = getUserInputVersion(sessionId);
   recordSessionInput(sessionId, data, injected);
   data = applyHandoffHint(sessionId, data);
   return queueSessionWrite(sessionId, async () => {
@@ -305,7 +308,8 @@ export async function apiWriteToSession(sessionId: string, data: string, injecte
     const body = data.replace(/\r\n?$/, "");
     if (body !== data && body.length > 0) {
       const sentAt = Date.now();
-      const wrapped = pasteWrap(body, (await invoke<boolean | null>("get_session_paste_mode", { sessionId }).catch(() => null)) === true);
+        const pasteMode = await invoke<boolean | null>("get_session_paste_mode", { sessionId }).catch(() => null);
+        const wrapped = pasteWrap(body, pasteMode === true);
       await invoke("write_to_session", { sessionId, data: wrapped });
       const lines = body.split("\n").length;
       const minWait = Math.min(1500, 200 + body.length + (lines > 1 ? 300 : 0));
@@ -315,13 +319,31 @@ export async function apiWriteToSession(sessionId: string, data: string, injecte
         const last = await invoke<number | null>("get_session_quiet_since", { sessionId, quietMs: 0 }).catch(() => null);
         if (enterReady(sentAt, last, Date.now(), minWait)) break;
       }
+      // Enter 직전 출력 끝 위치: 이후 출력만 보고 삼켜짐을 판정 (커서가 끝을 넘으면 nextCursor = 현재 끝)
+      const endCursor = await invoke<PtyOutputChunk>("read_session_output", { sessionId, cursor: Number.MAX_SAFE_INTEGER }).then((c) => c.nextCursor).catch(() => null);
+      if (verify && getUserInputVersion(sessionId) !== inputVersion) {
+        console.info(`[team-delivery] session=${sessionId} paste_mode=${pasteMode} write_at=${sentAt} enter_at=none output_bytes_2s=0 confirmed=false retries=0`);
+        verify.onResult(false); return;
+      }
+      const enterAt = Date.now();
       await invoke("write_to_session", { sessionId, data: "\r" });
-      // codex가 \r을 입력창 줄바꿈으로 삼켰을 때의 안전장치: 2초 안에 출력이 없으면 1회 재전송
-      if (wrapped !== body) {
-        const enterAt = Date.now();
-        await new Promise((r) => setTimeout(r, 2000));
-        const out = await invoke<number | null>("get_session_quiet_since", { sessionId, quietMs: 0 }).catch(() => null);
-        if (needsEnterRetry(enterAt, out)) await invoke("write_to_session", { sessionId, data: "\r" });
+      if (verify) {
+        let confirmed = false;
+        let retries = 0;
+        let outputBytes = 0;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          await new Promise((r) => setTimeout(r, attempt === 0 ? 2000 : 1000));
+          const chunk = endCursor === null ? null : await invoke<PtyOutputChunk>("read_session_output", { sessionId, cursor: endCursor }).catch(() => null);
+          const output = chunk?.data ?? "";
+          if (attempt === 0 && chunk && endCursor !== null) outputBytes = Math.max(0, chunk.nextCursor - endCursor);
+          confirmed = submissionStarted(output, await verify.hasStarted().catch(() => false));
+          if (!needsEnterRetry(confirmed, getUserInputVersion(sessionId) !== inputVersion) || attempt === 2) break;
+          if (getUserInputVersion(sessionId) !== inputVersion) break;
+          await invoke("write_to_session", { sessionId, data: "\r" });
+          retries++;
+        }
+        console.info(`[team-delivery] session=${sessionId} paste_mode=${pasteMode} write_at=${sentAt} enter_at=${enterAt} output_bytes_2s=${outputBytes} confirmed=${confirmed} retries=${retries}`);
+        verify.onResult(confirmed);
       }
       return;
     }
@@ -353,7 +375,7 @@ export async function apiAcknowledgeTeamMail(projectPath: string, agentId: strin
 export async function apiGetSessionContext(
   session: SessionInfo,
   claimed: string[]
-): Promise<{ tokens: number; window: number | null; source: string; completedAt: number | null } | null> {
+): Promise<{ tokens: number; window: number | null; source: string; completedAt: number | null; startedAt: number | null } | null> {
   if (!isTauriRuntime()) return null;
   return invoke("get_session_context", {
     cliId: session.cliId,

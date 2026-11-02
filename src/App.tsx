@@ -108,11 +108,13 @@ import { AiDeepTeamModal } from "./components/AiDeepTeamModal";
 import { MarkdownLite } from "./components/MarkdownLite";
 import { FolderPickerModal } from "./components/FolderPickerModal";
 import { AgentrixLogo } from "./components/AgentrixLogo";
-import { boardProtocol, collabProtocol, mailProtocol, parseBoardTasks } from "./lib/blackboardDispatch";
+import { boardProtocol, collabProtocol, forgetEndedStarts, mailProtocol, parseBoardTasks } from "./lib/blackboardDispatch";
 import { getTeamMailDeliveries, pruneStaleDeliveries, pruneStaleMailDeliveries, removeTeamMailDelivery, saveTeamMailDelivery, shouldRedeliver } from "./lib/teamMailDelivery";
 import { findApproval, getApprovalMode, setDispatchNote, upsertApproval } from "./lib/taskApproval";
 import { countNewChars } from "./lib/tokenEstimate";
 import { deliveryGate, type PendingDelivery } from "./lib/deliveryGate";
+import { useSessionQueue, queueKey } from "./lib/sessionQueueStore";
+import { nextUserItem, type QueueSource } from "./lib/sessionQueue";
 import { forgetSessionInput, getLastSubmission, getSubmissionVersion, getSessionInputHistory, hasPendingSessionInput, setInstructionKeyResolver } from "./lib/inputHistory";
 import { permissionLaunch } from "./lib/permissionSettings";
 import {
@@ -947,7 +949,7 @@ export const App: React.FC = () => {
   };
 
   // 프로젝트 전담 에이전트 출근(실행) -> 터미널 뷰로 전환
-  const handleSpawnAgentSession = async (agent: ProjectAgentRecord) => {
+  const handleSpawnAgentSession = async (agent: ProjectAgentRecord, startFresh = false) => {
     const cliDef = clis.find((c) => c.id === agent.cliId);
     if (cliDef && !cliDef.installed) {
       showToast(
@@ -971,7 +973,8 @@ export const App: React.FC = () => {
         perm.args,
         perm.auto,
         undefined,
-        collabProtocol(agent.id, projectAgents)
+        collabProtocol(agent.id, projectAgents),
+        startFresh
       );
       addSession(session);
       setActiveNav("terminal");
@@ -1191,7 +1194,9 @@ ${recentSnippet || "진행 내역 기록 없음"}
         undefined,
         perm.args,
         perm.auto,
-        !isManual
+        !isManual,
+        undefined,
+        true // 릴레이는 인수인계 문서로 잇는 새 대화
       );
       if (workRestarted()) {
         await apiStopSession(newSession.id);
@@ -1892,62 +1897,13 @@ ${recentSnippet || "진행 내역 기록 없음"}
   const sidebarQuota =
     usageDashboard?.cliQuotas?.find((q) => q.cliId === focusedCliId) ?? null;
 
-  // KST 한국 시간 기준 동적 리셋 시간 계산 헬퍼
-  const getDynamicKstReset = (hours: number): string => {
-    const d = new Date(Date.now() + hours * 3600 * 1000);
-    const now = new Date();
-    const pad = (n: number) => String(n).padStart(2, "0");
-    const timeStr = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-    if (d.getDate() === now.getDate()) {
-      return `오늘 ${timeStr} 리셋`;
-    }
-    return `내일 ${timeStr} 리셋`;
-  };
-
-  const getDynamicKstWeeklyReset = (days: number): string => {
-    const d = new Date(Date.now() + days * 24 * 3600 * 1000);
-    const pad = (n: number) => String(n).padStart(2, "0");
-    return `${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())} 리셋`;
-  };
-
-  // 0ms 즉각 렌더링을 위한 직전 쿼터 로컬 스냅샷 복원 (CLI별로 분리 저장하여 즉각 복원)
-  const defaultMiniQuota = (cliId: string): MiniQuotaSnapshot =>
-    cliId === "antigravity"
-      ? {
-          cliId: "antigravity",
-          cliName: "Antigravity (agy)",
-          planLabel: "Google DeepMind",
-          accentColor: "#a855f7",
-          remainPct5h: 90,
-          remainPctWeekly: 70,
-          resetsAt5h: getDynamicKstReset(4),
-          resetsAtWeekly: getDynamicKstWeeklyReset(6),
-        }
-      : {
-          cliId: "claude",
-          cliName: "Claude Code",
-          planLabel: "Claude Pro",
-          accentColor: "#f97316",
-          remainPct5h: 46,
-          remainPctWeekly: 74,
-          resetsAt5h: getDynamicKstReset(5),
-          resetsAtWeekly: getDynamicKstWeeklyReset(5),
-        };
-
-  const [cachedMiniQuota, setCachedMiniQuota] = useState<MiniQuotaSnapshot>(() => {
-    return restoreMiniQuotaCache((k) => localStorage.getItem(k), focusedCliId) ?? defaultMiniQuota(focusedCliId);
-  });
+  const [cachedMiniQuota, setCachedMiniQuota] = useState<MiniQuotaSnapshot | null>(() =>
+    restoreMiniQuotaCache((k) => localStorage.getItem(k), focusedCliId)
+  );
 
   // focusedCliId 변경 시 해당 CLI의 캐시로 즉시 전환 (0ms 지연 없음)
   useEffect(() => {
-    const restored = restoreMiniQuotaCache((k) => localStorage.getItem(k), focusedCliId);
-    if (restored) {
-      setCachedMiniQuota(restored);
-      return;
-    }
-    if (focusedCliId === "antigravity" || focusedCliId === "claude") {
-      setCachedMiniQuota(defaultMiniQuota(focusedCliId));
-    }
+    setCachedMiniQuota(restoreMiniQuotaCache((k) => localStorage.getItem(k), focusedCliId));
   }, [focusedCliId]);
 
   // 유효한 실시간 쿼터가 들어왔을 때만 캐시 갱신 (더미 100% 빈 껍데기는 이전 캐시를 덮어쓰지 못하도록 방어)
@@ -1973,13 +1929,15 @@ ${recentSnippet || "진행 내역 기록 없음"}
   // 실시간 쿼터가 유효한지 검증 (공식 연동이거나 리셋 시간이 존재하는 경우에만 사용, 더미 100% 배제)
   const isSidebarQuotaValid = isLiveQuotaUsable(sidebarQuota);
 
-  const activeCliName = focusedCliId === "cursor" ? (focusedCliDef?.name ?? "Cursor Agent CLI") : (isSidebarQuotaValid ? sidebarQuota?.cliName : null) ?? focusedCliDef?.name ?? cachedMiniQuota.cliName;
-  const activePlanLabel = focusedCliId === "cursor" ? (sidebarQuota?.hasOfficialQuota ? sidebarQuota.planLabel : "") : (isSidebarQuotaValid ? sidebarQuota?.planLabel : null) ?? cachedMiniQuota.planLabel;
-  const activeAccentColor = focusedCliDef?.accentColor ?? cachedMiniQuota.accentColor;
-  const activeRemainPct5h = isSidebarQuotaValid ? Math.round(sidebarQuota!.remainingPercent5h) : cachedMiniQuota.remainPct5h;
-  const activeRemainPctWk = isSidebarQuotaValid ? Math.round(sidebarQuota!.remainingPercentWeekly) : cachedMiniQuota.remainPctWeekly;
-  const activeReset5h = isSidebarQuotaValid ? sidebarQuota!.resetsAt5h : cachedMiniQuota.resetsAt5h;
-  const activeResetWk = isSidebarQuotaValid ? sidebarQuota!.resetsAtWeekly : cachedMiniQuota.resetsAtWeekly;
+  // 라이브 값도 캐시도 없으면 더미 대신 '조회 중'
+  const quotaPending = !isSidebarQuotaValid && cachedMiniQuota?.cliId !== focusedCliId && focusedCliId !== "cursor";
+  const activeCliName = focusedCliId === "cursor" ? (focusedCliDef?.name ?? "Cursor Agent CLI") : (isSidebarQuotaValid ? sidebarQuota?.cliName : null) ?? focusedCliDef?.name ?? cachedMiniQuota?.cliName;
+  const activePlanLabel = focusedCliId === "cursor" ? (sidebarQuota?.hasOfficialQuota ? sidebarQuota.planLabel : "") : (isSidebarQuotaValid ? sidebarQuota?.planLabel : null) ?? cachedMiniQuota?.planLabel;
+  const activeAccentColor = focusedCliDef?.accentColor ?? cachedMiniQuota?.accentColor;
+  const activeRemainPct5h = isSidebarQuotaValid ? Math.round(sidebarQuota!.remainingPercent5h) : (cachedMiniQuota?.remainPct5h ?? 100);
+  const activeRemainPctWk = isSidebarQuotaValid ? Math.round(sidebarQuota!.remainingPercentWeekly) : (cachedMiniQuota?.remainPctWeekly ?? 100);
+  const activeReset5h = isSidebarQuotaValid ? sidebarQuota!.resetsAt5h : cachedMiniQuota?.resetsAt5h;
+  const activeResetWk = isSidebarQuotaValid ? sidebarQuota!.resetsAtWeekly : cachedMiniQuota?.resetsAtWeekly;
 
   const pct5h = 100 - activeRemainPct5h;
   const remainPct5h = activeRemainPct5h;
@@ -2061,8 +2019,36 @@ ${recentSnippet || "진행 내역 기록 없음"}
     if (!quiet || quiet <= lastSubmit || (session.cliId === "claude" && lastSubmit > 0 && Date.now() - quiet < 30_000)) return ctx;
     return { tokens: ctx?.tokens ?? 0, window: ctx?.window ?? null, source: ctx?.source ?? `pty:${session.id}`, completedAt: quiet };
   };
-  const sendToIdleTeamSession = async (session: typeof currentProjectSessions[number], prompt: string): Promise<boolean> => {
-    if (teamDeliveryLocksRef.current.has(session.id)) return false;
+  const queueSeenRef = useRef<Record<string, number>>({}); // 자동 전달 항목이 마지막으로 시도된 시각(오래되면 대기열 표시에서 제거)
+  // 모든 전달(배정/메일/보고/사용자 대기)의 단일 관문. meta가 있으면 못 보낸 사유와 함께 대기열에 올리고, 보내면 내린다
+  const sendToIdleTeamSession = async (
+    session: typeof currentProjectSessions[number],
+    prompt: string,
+    meta?: { id: string; source: QueueSource; preview: string }
+  ): Promise<boolean> => {
+    const q = useSessionQueue.getState();
+    const key = queueKey(session);
+    // 사용자가 대기열에서 직접 보내거나 버린 자동 항목: 다시 보내지 않고 '전달 완료'로 넘겨 호출부가 평소처럼 마무리하게 한다
+    if (meta && q.resolved.has(`${key}|${meta.id}`)) {
+      q.resolved.delete(`${key}|${meta.id}`);
+      q.remove(key, meta.id);
+      delete queueSeenRef.current[`${key}|${meta.id}`];
+      return true;
+    }
+    const ok = await sendToIdleTeamSessionRaw(session, prompt);
+    if (!meta) return ok;
+    if (ok) {
+      q.remove(key, meta.id);
+      delete queueSeenRef.current[`${key}|${meta.id}`];
+    } else {
+      const reason = sendBlockReasonRef.current[session.id] ?? "전달 조건 미충족";
+      queueSeenRef.current[`${key}|${meta.id}`] = Date.now();
+      q.upsert(key, { id: meta.id, source: meta.source, preview: meta.preview, payload: prompt, createdAt: Date.now(), reason, stuck: reason.startsWith("입력창에 멈춤") });
+    }
+    return ok;
+  };
+  const sendToIdleTeamSessionRaw = async (session: typeof currentProjectSessions[number], prompt: string): Promise<boolean> => {
+    if (teamDeliveryLocksRef.current.has(session.id)) { sendBlockReasonRef.current[session.id] = "앞 전달 처리 중"; return false; }
     teamDeliveryLocksRef.current.add(session.id);
     try {
       const blocked = (why: string) => ((sendBlockReasonRef.current[session.id] = why), false);
@@ -2086,9 +2072,18 @@ ${recentSnippet || "진행 내역 기록 없음"}
       if (action === "stuck") return blocked("입력창에 멈춤: 앞 전달이 제출되지 않았을 수 있음");
       delete pendingDeliveryRef.current[session.id];
       contextSourceRef.current[session.id] = ctx.source;
-      await apiWriteToSession(session.id, prompt, true);
-      pendingDeliveryRef.current[session.id] = { at: getLastSubmission(session.id) };
-      return true;
+      let confirmed = false;
+      const baseline = "startedAt" in ctx ? ctx.startedAt ?? 0 : 0;
+      await apiWriteToSession(session.id, prompt, true, {
+        hasStarted: async () => {
+          if (ctx.source.startsWith("pty:")) return null;
+          const current = await apiGetSessionContext(session, claimed);
+          return Boolean(current && current.source === ctx.source && (current.startedAt ?? 0) > baseline);
+        },
+        onResult: (result) => { confirmed = result; },
+      });
+      pendingDeliveryRef.current[session.id] = { at: getLastSubmission(session.id), started: confirmed, retriedAt: Date.now(), unconfirmed: !confirmed };
+      return confirmed || blocked("입력창에 멈춤: 전달의 제출을 확인하지 못했습니다");
     } finally {
       teamDeliveryLocksRef.current.delete(session.id);
     }
@@ -2151,7 +2146,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
           saveTeamMailDelivery(delivery);
           let sent: boolean;
           try {
-            sent = await sendToIdleTeamSession(session, prompt);
+            sent = await sendToIdleTeamSession(session, prompt, { id: `mail:${message.id}`, source: "mail", preview: `${sender}: ${message.subject.replace(/\s+/g, " ")}` });
           } catch (err) {
             removeTeamMailDelivery(project, session.agentId, message.id);
             throw err;
@@ -2178,6 +2173,25 @@ ${recentSnippet || "진행 내역 기록 없음"}
     void tick();
     const id = window.setInterval(tick, 3000);
     return () => { stopped = true; window.clearInterval(id); };
+  }, []);
+  // 사용자 대기열 자동 꺼내기: 세션이 유휴이고 앞 전달의 턴 시작이 확인되면(관문) 맨 앞 1건만 제출. 멈춤 항목은 뒤를 막는다
+  useEffect(() => {
+    let busy = false;
+    const tick = async () => {
+      if (busy) return;
+      busy = true;
+      try {
+        useSessionQueue.getState().dropStale((key, id) => Date.now() - (queueSeenRef.current[`${key}|${id}`] ?? 0) < 15_000);
+        for (const s of useAppStore.getState().sessions) {
+          const item = nextUserItem(useSessionQueue.getState().queues[queueKey(s)]);
+          if (item) await sendToIdleTeamSession(s, item.payload, { id: item.id, source: "user", preview: item.preview });
+        }
+      } catch (err) {
+        console.error("Session queue drain failed", err);
+      } finally { busy = false; }
+    };
+    const id = window.setInterval(tick, 3000);
+    return () => window.clearInterval(id);
   }, []);
   useEffect(() => {
     let polling = false;
@@ -2286,6 +2300,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
       const pmSession = projSessions.find(
         (s) => s.name.includes("PM") || s.agentRole?.includes("PM") || s.agentRole?.includes("리더")
       ) ?? projSessions[0];
+      if (tasks.length > 0) forgetEndedStarts(sent, tasks);
       const doneTasks: typeof tasks = [];
       for (const t of tasks) {
         const key = `${t.taskId}:${t.status}:${t.agentId}`;
@@ -2335,7 +2350,8 @@ ${recentSnippet || "진행 내역 기록 없음"}
           saveTeamMailDelivery(delivery);
           if (!await sendToIdleTeamSession(
             target,
-            `[PM 배정] .ai-agents/BLACKBOARD.md 작업표의 ${t.taskId} 작업을 수행하세요. 완료하면 해당 행의 상태를 ✅ 완료로 바꾸고 결과를 한 줄 메모로 남기세요. BLACKBOARD.md는 셸 명령이 아닌 파일 편집 도구로 수정하세요(한글 깨짐 방지). ${mailProtocol(t.agentId, agents)}\r`
+            `[PM 배정] .ai-agents/BLACKBOARD.md 작업표의 ${t.taskId} 작업을 수행하세요. 완료하면 해당 행의 상태를 ✅ 완료로 바꾸고 결과를 한 줄 메모로 남기세요. BLACKBOARD.md는 셸 명령이 아닌 파일 편집 도구로 수정하세요(한글 깨짐 방지). ${mailProtocol(t.agentId, agents)}\r`,
+            { id: `assign:${t.taskId}`, source: "assign", preview: `${t.taskId} 작업 배정` }
           )) {
             removeTeamMailDelivery(project, t.agentId, t.taskId, "task");
             setDispatchNote(project, t.taskId, `대기: ${sendBlockReasonRef.current[target.id] ?? "전달 조건 미충족"}`);
@@ -2351,7 +2367,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
           const task = doneTasks[0];
           const delivery = { id: `${task.taskId}:${task.agentId}`, agentId: pmSession.agentId, project, sessionId: pmSession.id, submittedAt: Date.now(), kind: "report" as const };
           saveTeamMailDelivery(delivery);
-          if (await sendToIdleTeamSession(pmSession, `[완료 보고] ${task.taskId} 작업이 완료되었습니다. .ai-agents/BLACKBOARD.md를 확인하고 다음 작업을 배정하거나 최종 보고하세요.\r`)) {
+          if (await sendToIdleTeamSession(pmSession, `[완료 보고] ${task.taskId} 작업이 완료되었습니다. .ai-agents/BLACKBOARD.md를 확인하고 다음 작업을 배정하거나 최종 보고하세요.\r`, { id: `report:${task.taskId}:${task.agentId}`, source: "report", preview: `${task.taskId} 완료 보고` })) {
             saveTeamMailDelivery({ ...delivery, submittedAt: getLastSubmission(pmSession.id) });
           } else {
             removeTeamMailDelivery(project, delivery.agentId, delivery.id, "report");
@@ -3039,7 +3055,28 @@ ${recentSnippet || "진행 내역 기록 없음"}
               </div>
             </div>
 
-                {focusedCliId === "cursor" && !sidebarQuota?.hasOfficialQuota ? (
+                {quotaPending ? (
+                  <div className="space-y-2.5 animate-pulse motion-reduce:animate-none" aria-busy="true" aria-label="쿼터 조회 중">
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="text-slate-500 font-medium">5시간 잔여</span>
+                        <span className="text-[10px] text-slate-500 font-mono">조회 중…</span>
+                      </div>
+                      <div className="w-full h-2 bg-slate-800/60 rounded-full overflow-hidden">
+                        <div className="h-full w-1/3 bg-slate-700/50 rounded-full" />
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="text-slate-500 font-medium">주간 잔여</span>
+                        <span className="text-[10px] text-slate-500 font-mono">조회 중…</span>
+                      </div>
+                      <div className="w-full h-2 bg-slate-800/60 rounded-full overflow-hidden">
+                        <div className="h-full w-1/2 bg-slate-700/50 rounded-full" />
+                      </div>
+                    </div>
+                  </div>
+                ) : focusedCliId === "cursor" && !sidebarQuota?.hasOfficialQuota ? (
                   <div className="space-y-1">
                     <div className="flex items-center justify-between text-[11px]">
                       <span className="text-slate-400 font-medium">월간 전체 사용량</span>

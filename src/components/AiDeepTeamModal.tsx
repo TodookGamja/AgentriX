@@ -26,11 +26,11 @@ import type {
   ProjectAgentInput,
   ProjectDeepContext,
 } from "../types/types";
-import { testAiConnection, generateDeepAiTeam, generateDeepAiTeamWithCli } from "../lib/aiDeepAnalyzer";
-import type { TeamCliOption, TeamHints } from "../lib/aiDeepAnalyzer";
+import { testAiConnection, generateDeepAiTeam, generateDeepAiTeamWithCli, filterExhaustedModels } from "../lib/aiDeepAnalyzer";
+import type { TeamHints } from "../lib/aiDeepAnalyzer";
 import { installedAgentClis } from "../lib/agentCli";
 import { loadCliModels } from "./ModelPicker";
-import { apiGetApiKeys, apiGetDetectedCliCredentials, apiSaveApiKey } from "../lib/tauriBridge";
+import { apiGetApiKeys, apiGetDetectedCliCredentials, apiSaveApiKey, apiGetUsageDashboard } from "../lib/tauriBridge";
 
 interface AiDeepTeamModalProps {
   isOpen: boolean;
@@ -234,11 +234,12 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
     try {
       let agents: ProjectAgentInput[];
       // 선택한 설치 CLI와 각 CLI의 모델 목록을 AI에게 전달 → 설치되지 않은 AI는 추천되지 않음
-      const options: TeamCliOption[] = await Promise.all(
+      const [availableOptions, usage] = await Promise.all([Promise.all(
         installed
           .filter((c) => teamCliIds.includes(c.id))
           .map(async (c) => ({ id: c.id, name: c.name, models: await loadCliModels(c.id) }))
-      );
+      ), apiGetUsageDashboard().catch(() => null)]);
+      const options = filterExhaustedModels(availableOptions, usage?.cliQuotas ?? []);
       if (options.length === 0) throw new Error("팀에 사용할 AI를 하나 이상 선택해 주세요.");
       const hints: TeamHints = { request: requestText, avoidNames: prevNamesRef.current.slice(-12) };
       if (activeTab === "cli") {
@@ -691,10 +692,13 @@ export const AiDeepTeamModal: React.FC<AiDeepTeamModalProps> = ({
                           className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 w-full bg-transparent text-[10px] text-slate-500 dark:text-slate-400 font-medium border-b border-transparent hover:border-slate-600 focus:outline-none focus:border-indigo-500"
                         />
                       </div>
-                      <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-slate-950 border border-slate-800 text-indigo-400 font-semibold uppercase">
-                        {ag.cliId}{ag.model ? ` · ${ag.model}` : ""}
-                      </span>
                     </div>
+                    <span
+                      title={`${ag.cliId}${ag.model ? ` · ${ag.model}` : ""}`}
+                      className="block max-w-full truncate px-1.5 py-0.5 rounded text-[10px] font-mono bg-slate-950 border border-slate-800 text-indigo-400 font-semibold uppercase"
+                    >
+                      {ag.cliId}{ag.model ? ` · ${ag.model}` : ""}
+                    </span>
                     <p className="text-[11px] text-slate-300 line-clamp-2 leading-relaxed">
                       {ag.rolePrompt}
                     </p>

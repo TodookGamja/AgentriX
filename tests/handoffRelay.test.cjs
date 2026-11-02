@@ -128,7 +128,7 @@ test("T7: launch passes collabProtocol to start_session and skips chat briefing 
   const app = fs.readFileSync("src/App.tsx", "utf8");
   const bridge = fs.readFileSync("src/lib/tauriBridge.ts", "utf8");
   assert.match(bridge, /collabProtocol: collabProtocol \?\? null/);
-  assert.match(app, /undefined,\s*collabProtocol\(agent\.id, projectAgents\)\s*\);/);
+  assert.match(app, /undefined,\s*collabProtocol\(agent\.id, projectAgents\),\s*startFresh\s*\);/);
   assert.match(app, /agent\.rolePrompt\.trim\(\) && !session\.roleInSystem/);
   // 출근 시 브리핑 쓰기 0건: 역할은 첫 전달 앞에 붙는다
   assert.ok(!/apiWriteToSession\(session\.id, briefing/.test(app));

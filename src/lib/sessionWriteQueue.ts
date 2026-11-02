@@ -15,8 +15,15 @@ export function pasteWrap(body: string, enabled: boolean): string {
 }
 
 // Enter 전송 뒤 출력이 전혀 없으면 \r이 삼켜진 것으로 보고 재전송한다.
-export function needsEnterRetry(enterAt: number, lastOutput: number | null): boolean {
-  return lastOutput === null || lastOutput < enterAt;
+// codex는 \r을 삼켜도 화면을 다시 그려 출력이 생기므로, Enter 이후 출력에 붙여넣기 칩이 남아 있어도 삼켜진 것으로 본다.
+export function submissionStarted(output: string, logStarted: boolean | null): boolean {
+  if (logStarted !== null) return logStarted;
+  if (output.includes("\x1b]7501;state=working")) return true;
+  const text = output.replace(/\x1b\[\d*C/g, " ").replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");
+  return /esc to (?:interrupt|cancel)|\bGenerating\.{0,3}|\bWorking \(/i.test(text);
+}
+export function needsEnterRetry(started: boolean, userChanged: boolean): boolean {
+  return !started && !userChanged;
 }
 
 const tails =new Map<string, Promise<void>>();

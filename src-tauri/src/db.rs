@@ -129,10 +129,32 @@ pub fn setup_schema(conn: &Connection) -> Result<()> {
         );
 
         CREATE INDEX IF NOT EXISTS idx_project_agents_path ON project_agents(project_path);
+
+        CREATE TABLE IF NOT EXISTS agent_cli_sessions (
+            agent_id TEXT NOT NULL,
+            cli_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            PRIMARY KEY (agent_id, cli_id)
+        );
         ",
     )?;
     // v1.0.5: 에이전트별 실행 모델 (이미 있으면 오류 무시)
     let _ = conn.execute("ALTER TABLE project_agents ADD COLUMN model TEXT NOT NULL DEFAULT ''", []);
+    Ok(())
+}
+
+pub fn get_agent_cli_session(conn: &Connection, agent_id: &str, cli_id: &str) -> rusqlite::Result<Option<String>> {
+    use rusqlite::OptionalExtension;
+    conn.query_row("SELECT session_id FROM agent_cli_sessions WHERE agent_id = ?1 AND cli_id = ?2", params![agent_id, cli_id], |row| row.get(0)).optional()
+}
+
+pub fn save_agent_cli_session(conn: &Connection, agent_id: &str, cli_id: &str, session_id: &str) -> rusqlite::Result<()> {
+    conn.execute("INSERT INTO agent_cli_sessions (agent_id, cli_id, session_id) VALUES (?1, ?2, ?3) ON CONFLICT(agent_id, cli_id) DO UPDATE SET session_id = excluded.session_id", params![agent_id, cli_id, session_id])?;
+    Ok(())
+}
+
+pub fn clear_agent_cli_session(conn: &Connection, agent_id: &str, cli_id: &str) -> rusqlite::Result<()> {
+    conn.execute("DELETE FROM agent_cli_sessions WHERE agent_id = ?1 AND cli_id = ?2", params![agent_id, cli_id])?;
     Ok(())
 }
 
@@ -496,6 +518,7 @@ pub fn delete_project_agent(
         "DELETE FROM project_agents WHERE id = ?1 AND LOWER(REPLACE(project_path, '/', '\\')) = ?2",
         params![agent_id, norm_lower],
     )?;
+    conn.execute("DELETE FROM agent_cli_sessions WHERE agent_id = ?1 AND NOT EXISTS (SELECT 1 FROM project_agents WHERE id = ?1)", params![agent_id])?;
 
     // T0b: 에이전트 삭제 시 디스크 상의 .ai-agents/agents/<id>/ 폴더도 함께 정리
     if !norm.is_empty() && !is_forbidden_system_dir(&norm) {
@@ -1481,6 +1504,7 @@ pub fn get_usage_dashboard(
     conn: &Connection,
     cli_filter: Option<&str>,
     timeframe: Option<&str>,
+    mut cli_quotas: Vec<CliQuotaStatus>,
 ) -> Result<UsageDashboardData> {
     let now = Utc::now();
     let cutoff_1h = (now - Duration::hours(1)).to_rfc3339();
@@ -1680,7 +1704,6 @@ pub fn get_usage_dashboard(
         ],
     );
 
-    let mut cli_quotas = crate::usage::collect_all_cli_quotas(false);
     for (extra_id, extra_name, extra_plan, extra_source) in [
         ("antigravity", "Antigravity (agy)", "Gemini", "~/.gemini/antigravity-cli 트랜스크립트"),
         ("cursor", "Cursor Agent CLI", "Cursor Pro", "~/.cursor 세션 로그"),
@@ -1962,6 +1985,7 @@ pub fn reset_all_user_data(conn: &Connection) -> Result<()> {
         DELETE FROM usage_logs;
         DELETE FROM team_members;
         DELETE FROM project_agents;
+        DELETE FROM agent_cli_sessions;
         DELETE FROM api_keys;
         DELETE FROM config_backups;
         VACUUM;
@@ -1982,6 +2006,17 @@ pub fn reset_all_user_data(conn: &Connection) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn agent_cli_session_survives_schema_upgrade_and_is_isolated() {
+        let conn = create_memory_db();
+        super::save_agent_cli_session(&conn, "agent-a", "claude", "first").unwrap();
+        super::save_agent_cli_session(&conn, "agent-b", "claude", "other").unwrap();
+        super::save_agent_cli_session(&conn, "agent-a", "claude", "second").unwrap();
+        super::setup_schema(&conn).unwrap();
+        assert_eq!(super::get_agent_cli_session(&conn, "agent-a", "claude").unwrap().as_deref(), Some("second"));
+        assert_eq!(super::get_agent_cli_session(&conn, "agent-b", "claude").unwrap().as_deref(), Some("other"));
+        assert_eq!(super::get_agent_cli_session(&conn, "agent-a", "codex").unwrap(), None);
+    }
     use super::*;
 
     fn create_memory_db() -> Connection {
@@ -2127,7 +2162,7 @@ name=\"core\"").unwrap();
         let dup_count = insert_usage_records(&conn, &records).unwrap();
         assert_eq!(dup_count, 0);
 
-        let dash = get_usage_dashboard(&conn, None, None).unwrap();
+        let dash = get_usage_dashboard(&conn, None, None, vec![]).unwrap();
         assert_eq!(dash.current_tokens, 2000);
         assert_eq!(dash.rolling_5h_tokens, 6000);
         assert_eq!(dash.weekly_tokens, 18000);

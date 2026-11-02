@@ -69,3 +69,20 @@ test("App dispatcher still skips start tasks until manual approval is approved",
   assert.match(app, /status === "rejected"/);
   assert.match(app, /upsertApproval\(project, \{ taskId: t\.taskId, agentId: t\.agentId, status: "pending" \}/);
 });
+
+test("shortTaskTitle strips markdown, keeps first sentence, caps at 40 chars", () => {
+  const api = loadTs("src/lib/blackboardDispatch.ts");
+  assert.equal(api.shortTaskTitle("**`pty.rs` 마커 제거**. 나머지 설명"), "pty.rs 마커 제거.");
+  assert.equal(api.shortTaskTitle("[링크](http://x) 제목"), "링크 제목");
+  assert.equal(api.shortTaskTitle(""), "");
+  const long = api.shortTaskTitle("가".repeat(100));
+  assert.equal(long.length, 40);
+  assert.ok(long.endsWith("…"));
+});
+
+test("T11: 팀빌더 카드 CLI·모델 배지는 이름 줄 밖(아래 줄)에서 말줄임+title", () => {
+  const src = require("node:fs").readFileSync("src/components/AiDeepTeamModal.tsx", "utf8");
+  const i = src.indexOf('aria-label="에이전트 역할"');
+  const rest = src.slice(i, i + 1600);
+  assert.match(rest, /<\/div>\s*<span\s+title=\{`\$\{ag\.cliId\}[\s\S]*?block max-w-full truncate/);
+});

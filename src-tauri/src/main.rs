@@ -10,6 +10,7 @@ pub mod mcp;
 pub mod pty;
 pub mod team_mail;
 pub mod usage;
+mod agy_quota;
 
 use cli::CliDefinition;
 use db::{
@@ -25,6 +26,8 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, State,
 };
+
+static MANAGED_SESSION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 pub struct AppState {
     pub pty: PtyManager,
@@ -971,6 +974,11 @@ fn output_with_prompt(mut cmd: std::process::Command, prompt: &str) -> Result<st
 #[test]
 fn prompt_is_passed_through_stdin() {
     let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
+    }
     cmd.args(["--exact", "stdin_echo_child", "--nocapture"]);
     cmd.env("AGENTRIX_STDIN_TEST", "1");
     let prompt = "line one\n\"quoted\" & %PATH%";
@@ -1100,15 +1108,44 @@ fn trust_project_folder(project_path: String) -> Result<(), String> {
 /// 세션의 실제 컨텍스트 토큰 (CLI 로그 기반). 로그가 없는 CLI는 None → 프론트가 화면 추정치 사용
 #[tauri::command]
 async fn get_session_context(
+    state: State<'_, AppState>,
     cli_id: String,
     session_id: String,
     cwd: String,
     started_at: String,
     claimed: Vec<String>,
 ) -> Result<Option<context::ContextUsage>, String> {
-    tokio::task::spawn_blocking(move || context::read_context(&cli_id, &session_id, &cwd, &started_at, &claimed))
+    let pty = state.pty.clone();
+    let db = state.db.clone();
+    tokio::task::spawn_blocking(move || {
+        let codex_dir = crate::cli::home_dir().join(".codex").join("sessions");
+        let resumed = if cli_id == "codex" { pty.resumed_cli_id(&session_id) } else { None };
+        let result = if let Some(id) = resumed {
+            context::codex_log_for_session(&codex_dir, &cwd, &id).and_then(|path| context::read_codex_session(&path))
+        } else {
+            context::read_context(&cli_id, &session_id, &cwd, &started_at, &claimed)
+        };
+        if cli_id == "codex" {
+            if let Some(result) = &result {
+                let _guard = MANAGED_SESSION_LOCK.lock().map_err(|e| e.to_string())?;
+                let sessions = pty.list_sessions();
+                if let Some(current) = sessions.iter().find(|s| s.id == session_id) {
+                    if let Some(agent_id) = &current.agent_id {
+                        let latest = sessions.iter().filter(|s| s.agent_id.as_ref() == Some(agent_id) && s.cli_id == "codex").max_by(|a, b| a.started_at.cmp(&b.started_at));
+                        if latest.is_some_and(|s| s.id == session_id) {
+                            if let Some(id) = context::unique_codex_session_id(&codex_dir, &current.cwd, &current.started_at, &result.source) {
+                                let conn = db.lock().map_err(|e| e.to_string())?;
+                                db::save_agent_cli_session(&conn, agent_id, "codex", &id).map_err(|e| e.to_string())?;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(result)
+    })
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?
 }
 
 /// 로그로 턴 종료를 못 읽는 CLI용: 터미널 출력이 10초 멈춘 시각 (팀 배정 유휴 판정)
@@ -1124,7 +1161,7 @@ fn get_session_paste_mode(state: State<'_, AppState>, session_id: String) -> Opt
 }
 
 #[tauri::command]
-fn start_session(
+async fn start_session(
     state: State<'_, AppState>,
     app: AppHandle,
     cli_id: String,
@@ -1136,6 +1173,7 @@ fn start_session(
     permission_auto: Option<bool>,
     suppress_brief: Option<bool>,
     collab_protocol: Option<String>,
+    start_fresh: Option<bool>,
 ) -> Result<SessionInfo, String> {
     let (mut cli_def, mut injected_env, mut agent_meta, headroom_enabled) = {
         let conn = state.db.lock().map_err(|e| e.to_string())?;
@@ -1181,15 +1219,76 @@ fn start_session(
         injected_env.insert("OPENCODE_PERMISSION".into(), r#"{"*":"allow"}"#.into());
     }
 
-    state.pty.start_session_with_def(
-        cli_def,
-        cwd,
-        injected_env,
-        headroom_command(initial_command, headroom_enabled),
-        agent_meta,
-        collab_protocol,
-        Some(app),
-    )
+    let pty = state.pty.clone();
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        static LAST_CODEX_LAUNCH: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+        let managed = matches!(cli_def.id.as_str(), "claude" | "codex")
+            && agent_meta.is_some()
+            && matches!(initial_command.as_deref(), None | Some("__WRAPPER__"))
+            && !cli_def.args.iter().any(|a| if cli_def.id == "claude" {
+                matches!(a.as_str(), "--resume" | "-r" | "--continue" | "-c" | "--session-id")
+            } else { a == "resume" });
+        let _guard = if managed { Some(MANAGED_SESSION_LOCK.lock().map_err(|e| e.to_string())?) } else { None };
+        let agent_id = agent_meta.as_ref().map(|agent| agent.id.clone());
+        if managed && !start_fresh.unwrap_or(false) && pty.list_sessions().iter().any(|s| s.agent_id == agent_id && s.cli_id == cli_def.id) {
+            return Err("이 에이전트의 세션이 이미 실행 중입니다. 새 대화로 시작하거나 기존 세션을 종료하세요.".into());
+        }
+        let resume_session_id = if managed && !start_fresh.unwrap_or(false) {
+            let conn = db.lock().map_err(|e| e.to_string())?;
+            let saved = db::get_agent_cli_session(&conn, agent_id.as_deref().unwrap(), &cli_def.id).map_err(|e| e.to_string())?;
+            saved.and_then(|id| {
+                if cli_def.id == "claude" {
+                    resumable_claude_session(&crate::cli::home_dir().join(".claude").join("projects"), &id)
+                } else {
+                    let sessions = crate::cli::home_dir().join(".codex").join("sessions");
+                    context::codex_log_for_session(&sessions, cwd.as_deref()?, &id)?;
+                    uuid::Uuid::parse_str(&id).ok().map(|id| id.to_string())
+                }
+            })
+        } else { None };
+        if resume_session_id.as_ref().is_some_and(|id| pty.list_sessions().iter().any(|s| &s.id == id || pty.resumed_cli_id(&s.id).as_ref() == Some(id))) {
+            return Err("이 에이전트의 세션이 이미 실행 중입니다. 새 대화로 시작하거나 기존 세션을 종료하세요.".into());
+        }
+        if managed && cli_def.id == "codex" {
+            if let Some(last) = *LAST_CODEX_LAUNCH.lock().map_err(|e| e.to_string())? {
+                std::thread::sleep(std::time::Duration::from_secs(2).saturating_sub(last.elapsed()));
+            }
+        }
+        let is_codex = cli_def.id == "codex";
+        let resuming = resume_session_id.is_some();
+        let session = pty.start_session_with_def(
+            cli_def,
+            cwd,
+            injected_env,
+            headroom_command(initial_command, headroom_enabled),
+            agent_meta,
+            collab_protocol,
+            resume_session_id,
+            Some(app),
+        )?;
+        if managed {
+            if is_codex { *LAST_CODEX_LAUNCH.lock().map_err(|e| e.to_string())? = Some(std::time::Instant::now()); }
+            let saved = db.lock().map_err(|e| e.to_string()).and_then(|conn|
+                if is_codex {
+                    if resuming { Ok(()) } else { db::clear_agent_cli_session(&conn, agent_id.as_deref().unwrap(), &session.cli_id).map_err(|e| e.to_string()) }
+                } else {
+                    db::save_agent_cli_session(&conn, agent_id.as_deref().unwrap(), &session.cli_id, &session.id).map_err(|e| e.to_string())
+                });
+            if let Err(err) = saved {
+                let _ = pty.stop_session(&session.id);
+                return Err(format!("세션 ID 저장 실패: {err}"));
+            }
+        }
+        Ok(session)
+    }).await.map_err(|e| e.to_string())?
+}
+
+fn resumable_claude_session(projects: &std::path::Path, id: &str) -> Option<String> {
+    let id = uuid::Uuid::parse_str(id).ok()?.to_string();
+    std::fs::read_dir(projects).ok()?.flatten()
+        .any(|entry| entry.path().join(format!("{id}.jsonl")).is_file())
+        .then_some(id)
 }
 
 fn headroom_command(command: Option<String>, enabled: bool) -> Option<String> {
@@ -1199,6 +1298,19 @@ fn headroom_command(command: Option<String>, enabled: bool) -> Option<String> {
 #[cfg(test)]
 mod headroom_launch_tests {
     use super::headroom_command;
+
+    #[test]
+    fn claude_resume_requires_uuid_and_existing_log() {
+        let root = std::env::temp_dir().join(format!("agentrix-resume-{}", uuid::Uuid::new_v4()));
+        let project = root.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        assert!(super::resumable_claude_session(&root, &id).is_none());
+        std::fs::write(project.join(format!("{id}.jsonl")), "{}").unwrap();
+        assert_eq!(super::resumable_claude_session(&root, &id), Some(id));
+        assert!(super::resumable_claude_session(&root, "../project/other").is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn disabled_headroom_blocks_wrapper_only() {
@@ -1296,10 +1408,10 @@ async fn sync_usage_logs(
 ) -> Result<UsageDashboardData, String> {
     let db = state.db.clone();
     tokio::task::spawn_blocking(move || {
-        usage::prefetch_live_quotas();
+        let quotas = usage::prefetch_live_quotas();
         let _ = usage::sync_all_cli_logs_shared(&db);
         let conn = db.lock().map_err(|e| e.to_string())?;
-        db::get_usage_dashboard(&conn, cli_filter.as_deref(), timeframe.as_deref()).map_err(|e| e.to_string())
+        db::get_usage_dashboard(&conn, cli_filter.as_deref(), timeframe.as_deref(), quotas).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1313,9 +1425,9 @@ async fn get_usage_dashboard(
 ) -> Result<UsageDashboardData, String> {
     let db = state.db.clone();
     tokio::task::spawn_blocking(move || {
-        usage::prefetch_live_quotas();
+        let quotas = usage::prefetch_live_quotas();
         let conn = db.lock().map_err(|e| e.to_string())?;
-        db::get_usage_dashboard(&conn, cli_filter.as_deref(), timeframe.as_deref()).map_err(|e| e.to_string())
+        db::get_usage_dashboard(&conn, cli_filter.as_deref(), timeframe.as_deref(), quotas).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1956,11 +2068,14 @@ fn main() {
                         }
                     }
                     "refresh" => {
-                        let _ = crate::usage::extract_claude_quota(true);
-                        let _ = crate::usage::extract_antigravity_quota(true);
-                        if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.emit("tray-quota-refreshed", ());
-                        }
+                        let app = app.clone();
+                        std::thread::spawn(move || {
+                            let _ = crate::usage::extract_claude_quota(true);
+                            let _ = crate::usage::extract_antigravity_quota(true);
+                            if let Some(w) = app.get_webview_window("main") {
+                                let _ = w.emit("tray-quota-refreshed", ());
+                            }
+                        });
                     }
                     "quit" => {
                         app.exit(0);

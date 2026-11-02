@@ -18,6 +18,7 @@ pub struct ContextUsage {
     /// 매칭된 로그 식별자 (같은 폴더의 다른 세션이 같은 로그를 잡지 않도록 프론트가 claimed로 돌려줌)
     pub source: String,
     pub completed_at: Option<i64>,
+    pub started_at: Option<i64>,
 }
 
 /// claimed: 다른 세션이 이미 잡은 source 목록
@@ -63,7 +64,20 @@ fn claude(projects: &Path, session_id: &str) -> Option<ContextUsage> {
         .find(|p| p.is_file())?;
     let content = std::fs::read_to_string(&file).ok()?;
     let tokens = claude_last_context(&content)?;
-    Some(ContextUsage { tokens, window: None, source: file.to_string_lossy().into(), completed_at: claude_completion(&content) })
+    Some(ContextUsage { tokens, window: None, source: file.to_string_lossy().into(), completed_at: claude_completion(&content), started_at: turn_started(&content, "claude") })
+}
+
+fn turn_started(content: &str, cli: &str) -> Option<i64> {
+    content.lines().rev().find_map(|line| {
+        let v: Value = serde_json::from_str(line).ok()?;
+        if v.get("isSidechain").and_then(Value::as_bool) == Some(true) { return None; }
+        let started = if cli == "claude" {
+            v.get("type").and_then(Value::as_str) == Some("user") && v.get("isMeta").and_then(Value::as_bool) != Some(true)
+        } else {
+            v.get("type").and_then(Value::as_str) == Some("event_msg") && matches!(v.pointer("/payload/type").and_then(Value::as_str), Some("user_message" | "task_started"))
+        };
+        started.then(|| v.get("timestamp").and_then(Value::as_str).and_then(parse_ts).map(|t| t.timestamp_millis())).flatten()
+    })
 }
 
 fn claude_completion(content: &str) -> Option<i64> {
@@ -140,7 +154,7 @@ fn codex(sessions: &Path, cwd: &str, started: DateTime<Utc>, claimed: &[String])
     }
     let (_, path, content) = best?;
     let (tokens, window) = codex_last_context(&content)?;
-    Some(ContextUsage { tokens, window, source: path.to_string_lossy().into(), completed_at: if matches == 1 { codex_completion(&content) } else { None } })
+    Some(ContextUsage { tokens, window, source: path.to_string_lossy().into(), completed_at: if matches == 1 { codex_completion(&content) } else { None }, started_at: if matches == 1 { turn_started(&content, "codex") } else { None } })
 }
 
 fn codex_last_context(content: &str) -> Option<(u64, Option<u64>)> {
@@ -153,6 +167,44 @@ fn codex_last_context(content: &str) -> Option<(u64, Option<u64>)> {
         let tokens = info.get("last_token_usage")?.get("total_tokens")?.as_u64()?;
         Some((tokens, info.get("model_context_window").and_then(|x| x.as_u64())))
     })
+}
+
+pub fn codex_log_for_session(sessions: &Path, cwd: &str, id: &str) -> Option<PathBuf> {
+    let id = uuid::Uuid::parse_str(id).ok()?.to_string();
+    let suffix = format!("{id}.jsonl");
+    walkdir::WalkDir::new(sessions).max_depth(5).into_iter().flatten()
+        .filter(|entry| entry.file_type().is_file() && entry.file_name().to_string_lossy().ends_with(&suffix))
+        .find_map(|entry| {
+            let content = std::fs::read_to_string(entry.path()).ok()?;
+            let meta: Value = serde_json::from_str(content.lines().next()?).ok()?;
+            let payload = meta.get("payload")?;
+            (payload.get("id")?.as_str()? == id && same_dir(payload.get("cwd")?.as_str()?, cwd))
+                .then(|| entry.into_path())
+        })
+}
+
+pub fn read_codex_session(path: &Path) -> Option<ContextUsage> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let (tokens, window) = codex_last_context(&content)?;
+    Some(ContextUsage { tokens, window, source: path.to_string_lossy().into(), completed_at: codex_completion(&content), started_at: turn_started(&content, "codex") })
+}
+
+pub fn unique_codex_session_id(sessions: &Path, cwd: &str, started_at: &str, source: &str) -> Option<String> {
+    let started = DateTime::parse_from_rfc3339(started_at).ok()?.with_timezone(&Utc);
+    let mut matches = Vec::new();
+    let files = collect_newest_jsonl_files(sessions, 5, 40, None);
+    if files.len() == 40 && files.last().is_some_and(|path| touched_since(path, started)) { return None; }
+    for path in files {
+        if !touched_since(&path, started) { break; }
+        let Ok(content) = std::fs::read_to_string(&path) else { continue };
+        let Some(meta) = content.lines().next().and_then(|line| serde_json::from_str::<Value>(line).ok()) else { continue };
+        let Some(payload) = meta.get("payload") else { continue };
+        let Some(timestamp) = payload.get("timestamp").and_then(Value::as_str).and_then(parse_ts) else { continue };
+        if !same_dir(payload.get("cwd").and_then(Value::as_str).unwrap_or(""), cwd) || timestamp < started - chrono::Duration::seconds(10) { continue; }
+        matches.push((path, payload.get("id").and_then(Value::as_str).and_then(|id| uuid::Uuid::parse_str(id).ok())));
+    }
+    if matches.len() != 1 || matches[0].0.to_string_lossy() != source { return None; }
+    matches[0].1.map(|id| id.to_string())
 }
 
 /// Antigravity: brain/<uuid>/.system_generated/logs/transcript.jsonl, 로그에 작업 폴더가 없어 시작 시각으로만 매칭
@@ -183,7 +235,7 @@ fn antigravity(brain: &Path, started: DateTime<Utc>, claimed: &[String]) -> Opti
     }
     let (_, path, content) = best?;
     let tokens = antigravity_last_context(&content)?;
-    Some(ContextUsage { tokens, window: None, source: path.to_string_lossy().into(), completed_at: None })
+    Some(ContextUsage { tokens, window: None, source: path.to_string_lossy().into(), completed_at: None, started_at: None })
 }
 
 fn antigravity_last_context(content: &str) -> Option<u64> {
@@ -231,12 +283,54 @@ fn opencode(db: &Path, cwd: &str, started: DateTime<Utc>, claimed: &[String]) ->
         [&sid], |r| r.get(0),
     ).ok();
     let completed_at = latest.and_then(|data| serde_json::from_str::<Value>(&data).ok()).and_then(|v| opencode_completion(&v, matches));
-    Some(ContextUsage { tokens, window: None, source: format!("opencode:{sid}"), completed_at })
+    Some(ContextUsage { tokens, window: None, source: format!("opencode:{sid}"), completed_at, started_at: None })
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn turn_start_uses_user_or_task_event_without_sidechains() {
+        let codex = r#"{"timestamp":"2026-11-02T02:00:00Z","type":"event_msg","payload":{"type":"user_message"}}"#;
+        let claude = r#"{"timestamp":"2026-11-02T02:00:00Z","type":"user"}"#;
+        let sidechain = r#"{"timestamp":"2026-11-02T02:00:00Z","type":"user","isSidechain":true}"#;
+        assert!(super::turn_started(codex, "codex").is_some());
+        assert!(super::turn_started(claude, "claude").is_some());
+        assert!(super::turn_started(sidechain, "claude").is_none());
+    }
     use super::*;
+
+    #[test]
+    fn codex_resume_only_saves_unambiguous_session() {
+        let root = std::env::temp_dir().join(format!("agentrix-codex-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let now = Utc::now().to_rfc3339();
+        let id = uuid::Uuid::new_v4().to_string();
+        let path = root.join(format!("rollout-{id}.jsonl"));
+        let log = |id: &str| format!("{}\n{}\n", serde_json::json!({"type":"session_meta", "payload":{"id":id,"cwd":"C:/project","timestamp":now}}), serde_json::json!({"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":42}}}}));
+        std::fs::write(&path, log(&id)).unwrap();
+        let source = path.to_string_lossy();
+        assert_eq!(unique_codex_session_id(&root, "C:/project", &now, &source), Some(id.clone()));
+        assert_eq!(codex_log_for_session(&root, "C:/project", &id), Some(path.clone()));
+        assert!(codex_log_for_session(&root, "C:/other", &id).is_none());
+        assert!(codex_log_for_session(&root, "C:/project", "../bad").is_none());
+        assert_eq!(read_codex_session(&path).unwrap().tokens, 42);
+        let other = uuid::Uuid::new_v4().to_string();
+        std::fs::write(root.join(format!("rollout-{other}.jsonl")), log(&other)).unwrap();
+        assert!(unique_codex_session_id(&root, "C:/project", &now, &source).is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn claude_context_uses_resumed_session_log() {
+        let root = std::env::temp_dir().join(format!("agentrix-context-{}", uuid::Uuid::new_v4()));
+        let project = root.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        std::fs::write(project.join(format!("{id}.jsonl")), r#"{"message":{"usage":{"input_tokens":100,"output_tokens":5}}}"#).unwrap();
+        assert_eq!(claude(&root, &id).unwrap().tokens, 105);
+        assert!(claude(&root, &uuid::Uuid::new_v4().to_string()).is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn only_finished_turns_are_idle() {

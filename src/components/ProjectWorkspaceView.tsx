@@ -64,7 +64,7 @@ interface ProjectWorkspaceViewProps {
   onOpenCreateCustomAgent: () => void;
   onOpenEditAgent: (agent: ProjectAgentRecord) => void;
   onDeleteAgent: (agentId: string) => Promise<void>;
-  onSpawnAgent: (agent: ProjectAgentRecord) => Promise<void>;
+  onSpawnAgent: (agent: ProjectAgentRecord, startFresh?: boolean) => Promise<void>;
   onSpawnAllAgents: () => Promise<void>;
   onFocusSession: (sessionId: string) => void;
   onStartRawCli: (cliId: string, initialCommand?: string) => Promise<void>;
@@ -675,6 +675,15 @@ export const ProjectWorkspaceView: React.FC<ProjectWorkspaceViewProps> = ({
                       >
                         <Play className="w-3.5 h-3.5" />
                         에이전트 실행
+                      </button>
+                    )}
+                    {!running && (
+                      <button
+                        onClick={() => onSpawnAgent(agent, true)}
+                        title="이전 대화를 이어가지 않고 새 대화로 시작"
+                        className="mt-1.5 w-full py-1.5 rounded-lg border border-slate-700 text-slate-400 hover:text-slate-200 hover:border-slate-500 text-[11px] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+                      >
+                        새 대화로 실행
                       </button>
                     )}
                   </div>

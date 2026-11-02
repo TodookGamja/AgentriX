@@ -3,6 +3,8 @@
 // 이력은 세션이 아니라 "프로젝트 폴더+에이전트" 키로 localStorage에 저장 → 릴레이·앱 재시작 후에도 같은 에이전트가 이어받음.
 const lineBufs = new Map<string, string>();
 const lastKeyAt = new Map<string, number>();
+const userInputVersion = new Map<string, number>();
+export const getUserInputVersion = (sessionId: string): number => userInputVersion.get(sessionId) ?? 0;
 // 키 입력으로 추정한 버퍼라 TUI 입력창과 어긋날 수 있음(Ctrl+W·Alt+Backspace·한글 조합·자동완성 등)
 // → 마지막 키 입력 후 30초가 지나면 '입력 중'으로 보지 않는다 (안 그러면 빈 입력창인데도 팀 전달이 영영 막힘)
 export const PENDING_INPUT_TTL_MS = 30_000;
@@ -52,11 +54,21 @@ export function recordSessionInput(sessionId: string, data: string, injected = f
     submissionVersion.set(sessionId, getSubmissionVersion(sessionId) + 1);
   }
   if (injected) return;
+  // 포커스(\x1b[I/O)·마우스(\x1b[<..M) 보고처럼 제어 시퀀스뿐인 자동 응답은 사용자 타이핑이 아니므로 타이머도 버퍼도 건드리지 않는다
+  // OSC(\x1b]11;rgb:..) 색상 질의 응답, 커서 위치 보고(\x1b[r;cR)도 TUI 질의에 xterm이 자동으로 보내는 것이다
+  const AUTO = /\x1b\[[0-9;?<=>]*[ -/]*[@-~]|\x1bO[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
+  if (data.startsWith("\x1b") && !data.replace(AUTO, "")) return;
+  userInputVersion.set(sessionId, getUserInputVersion(sessionId) + 1);
   lastKeyAt.set(sessionId, Date.now());
   let buf = lineBufs.get(sessionId) ?? "";
   // 단독 Esc·Ctrl+C·Ctrl+U는 TUI가 입력창을 비우는 키 → 버퍼도 비운다 (안 비우면 '입력창에 글이 남음'으로 오판해 팀 전달이 영영 막힘)
   if (data === "\x1b" || data === "\x03" || data === "\x15") {
     lineBufs.set(sessionId, "");
+    return;
+  }
+  // Ctrl+W·Alt+Backspace는 TUI가 단어 단위로 지운다
+  if (data === "\x17" || data === "\x1b\x7f" || data === "\x1b\b") {
+    lineBufs.set(sessionId, buf.replace(/\S*\s*$/, ""));
     return;
   }
   // 방향키·붙여넣기 마커 등 제어 시퀀스는 버림
@@ -78,6 +90,7 @@ export function recordSessionInput(sessionId: string, data: string, injected = f
 }
 
 export function forgetSessionInput(sessionId: string): void {
+  userInputVersion.delete(sessionId);
   lastSubmission.delete(sessionId);
   submissionVersion.delete(sessionId);
   lastKeyAt.delete(sessionId);

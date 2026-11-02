@@ -77,6 +77,32 @@ test("SEC: shell / PTY injection guards wired (run_quiet meta reject + ps_escape
   assert.match(read("src-tauri/src/handoff.rs"), /fn validate_safe_handoff_path/);
 });
 
+test("SEC T5: session resume rejects path-like IDs; markers allowlisted; resume XOR session-id", () => {
+  const main = read("src-tauri/src/main.rs");
+  const pty = read("src-tauri/src/pty.rs");
+  // Claude/Codex 재개 ID는 UUID parse 후에만 사용 → ../ 등 경로 조작 불가
+  assert.match(main, /fn resumable_claude_session/);
+  assert.match(main, /uuid::Uuid::parse_str\(&id\)|uuid::Uuid::parse_str\(id\)/);
+  assert.match(main, /claude_resume_requires_uuid_and_existing_log/);
+  assert.match(main, /\.\.\/project\/other/);
+  assert.match(main, /codex_log_for_session[\s\S]{0,120}Uuid::parse_str/);
+  // 마커는 명시 9개만 제거(설정·OAuth 유지)
+  assert.match(pty, /fn is_claude_session_marker/);
+  assert.match(pty, /CLAUDE_CODE_MESSAGING_TOKEN/);
+  assert.match(pty, /CLAUDE_CODE_GIT_BASH_PATH/);
+  assert.match(pty, /CLAUDE_CODE_OAUTH_TOKEN/);
+  assert.match(pty, /claude_session_marker_matches_inherited_keys/);
+  // --resume 과 --session-id 는 삼항으로 하나만 extend (둘 다 붙이지 않음)
+  assert.match(
+    pty,
+    /cli\.args\.extend\(\[if resume_id\.is_some\(\) \{ "--resume" \} else \{ "--session-id" \}\.to_string\(\), session_id\.clone\(\)\]\)/
+  );
+  // 새 대화 경로
+  assert.match(main, /start_fresh/);
+  assert.match(read("src/lib/tauriBridge.ts"), /startFresh/);
+  assert.match(read("src/components/ProjectWorkspaceView.tsx"), /새 대화로 실행/);
+});
+
 test("SEC: v1.0.4 write path waits for echo then sends CR only; no secret logging of body", () => {
   const bridge = read("src/lib/tauriBridge.ts");
   const queue = read("src/lib/sessionWriteQueue.ts");

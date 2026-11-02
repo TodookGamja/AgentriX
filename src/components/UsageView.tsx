@@ -521,14 +521,14 @@ export const UsageView: React.FC<UsageViewProps> = ({
                     </div>
                   </div>
 
-                  {q.cliId === "cursor" && !q.hasOfficialQuota ? (
+                {(q.cliId === "cursor" || q.cliId === "antigravity") && !q.hasOfficialQuota ? (
                     <div className="space-y-1">
                       <div className="flex items-center justify-between text-xs">
-                        <span className="text-slate-300 font-semibold">월간 전체 사용량</span>
+                      <span className="text-slate-300 font-semibold">{q.cliId === "cursor" ? "월간 전체 사용량" : "잔량"}</span>
                         <span className="text-slate-400">확인 불가</span>
                       </div>
                       <div className="w-full h-2 bg-slate-800/40 rounded-full overflow-hidden"><div className="h-full bg-slate-700/40 w-full" /></div>
-            <p className="text-[11px] text-slate-500">Cursor 로그인 정보를 읽지 못했습니다.</p>
+                    <p className="text-[11px] text-slate-500">{q.cliId === "cursor" ? "Cursor 로그인 정보를 읽지 못했습니다." : "Antigravity 잔량을 조회하지 못했습니다."}</p>
                     </div>
                   ) : (<>
                   {/* 5시간 세션 한도 게이지 */}
@@ -572,10 +572,10 @@ export const UsageView: React.FC<UsageViewProps> = ({
                           remainWk <= 15 ? "text-rose-400" : "text-indigo-300"
                         }`}
                       >
-                        {remainWk}%
+                    {remainWk}%
                       </span>
                     </div>
-                    <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
+                                    <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
                       <div
                         className={`h-full rounded-full transition-all ${
                           isHighWeekly

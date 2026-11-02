@@ -27,3 +27,18 @@ test("status uses the first marker so done notes mentioning 🔥 stay done", () 
   assert.equal(api.statusKind("⏳ 대기"), null);
   assert.equal(api.statusKind("⏳ 대기 — 완료 후 재개"), null);
 });
+
+test("forgetEndedStarts: re-start after done/waiting redelivers once, steady 🔥 does not", () => {
+  const t = (status) => [{ taskId: "T1", agentId: "a", status }];
+  const sent = new Set(["T1:start:a"]);
+  assert.equal(api.forgetEndedStarts(sent, t("start")), false); // 🔥 유지: 중복 전달 0
+  assert.ok(sent.has("T1:start:a"));
+  assert.equal(api.forgetEndedStarts(sent, t("done")), true); // ✅ 확인 → start 기록 삭제
+  assert.equal(sent.has("T1:start:a"), false); // 다시 🔥가 되면 키가 없어 1회 재전달
+  const s2 = new Set(["T1:start:a"]);
+  api.forgetEndedStarts(s2, [{ taskId: "T2", agentId: "a", status: "start" }]); // ⏳로 행이 빠진 경우
+  assert.equal(s2.has("T1:start:a"), false);
+  const s3 = new Set(["T1:done:a"]);
+  api.forgetEndedStarts(s3, t("start")); // 재착수 후 다음 완료도 PM에 보고
+  assert.equal(s3.has("T1:done:a"), false);
+});

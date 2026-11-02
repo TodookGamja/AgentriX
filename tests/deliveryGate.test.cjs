@@ -13,6 +13,11 @@ test("no previous delivery or turn-start evidence proceeds", () => {
   assert.equal(api.deliveryGate({ at: 1 }, true, 0, 0), "proceed");
 });
 
+test("unconfirmed delivery never resends from the queue", () => {
+  assert.equal(api.deliveryGate({ at: 1, retriedAt: 2, unconfirmed: true }, false, 9000, 20000), "stuck");
+  assert.equal(api.deliveryGate({ at: 1, retriedAt: 2, unconfirmed: true }, true, 9000, 20000), "proceed");
+});
+
 test("log-less CLI (a): submitted normally then idle -> proceeds (output after the echo window seen)", () => {
   const p = { at: 1000 };
   assert.equal(api.deliveryGate(p, false, 1000 + api.ECHO_WINDOW_MS + 1, 1000 + 60000), "proceed");
@@ -39,6 +44,6 @@ test("busy right after delivery waits without resend or stuck", () => {
 test("App gates sendToIdleTeamSession with deliveryGate and never writes the next prompt before proceed", () => {
   const app = fs.readFileSync("src/App.tsx", "utf8");
   const g = app.indexOf("deliveryGate(pending");
-  const w = app.indexOf("apiWriteToSession(session.id, prompt, true)");
+  const w = app.indexOf("apiWriteToSession(session.id, prompt, true,");
   assert.ok(g > 0 && w > g);
 });

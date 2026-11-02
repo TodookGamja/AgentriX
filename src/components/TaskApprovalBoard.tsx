@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { apiGetProjectBlackboard } from "../lib/tauriBridge";
-import { boardTaskTitle, parseBoardTasks } from "../lib/blackboardDispatch";
+import { boardTaskTitle, parseBoardTasks, shortTaskTitle } from "../lib/blackboardDispatch";
 import {
   getApprovalMode,
   getApprovals,
@@ -85,13 +85,21 @@ export const TaskApprovalBoard: React.FC<TaskApprovalBoardProps> = ({ projectPat
       <div className={`text-xs font-bold ${tone}`}>
         {title} ({total})
       </div>
-      {items.length === 0 && <div className="py-6 text-center border border-dashed border-slate-800/80 rounded-lg text-slate-500 text-[11px]">없음</div>}
+      {items.length === 0 && <div className="py-6 text-center border border-dashed border-slate-800/80 rounded-lg text-slate-400 text-[11px]">없음</div>}
       {items.map((c) => (
         <div key={`${c.taskId}:${c.agentId}`} className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 space-y-1.5">
-          <div className="text-xs text-slate-200">
-            <span className="font-mono text-indigo-300">{c.taskId}</span> · {nameOf(c.agentId)}
+          <div className="text-xs font-semibold text-slate-100 truncate" title={c.title || c.taskId}>
+            {shortTaskTitle(c.title) || c.taskId}
           </div>
-          {c.title && <div className="text-[11px] text-slate-400 line-clamp-2">{c.title}</div>}
+          <div className="text-[10px] text-slate-400 truncate">
+            <span className="font-mono">{c.taskId}</span> · {nameOf(c.agentId)}
+          </div>
+          {c.title && c.title !== shortTaskTitle(c.title) && (
+            <details className="text-[11px] text-slate-400">
+              <summary className={`cursor-pointer text-slate-400 hover:text-slate-200 ${FOCUS}`}>전체 설명</summary>
+              <div className="mt-1 whitespace-pre-wrap break-words max-h-32 overflow-y-auto">{c.title}</div>
+            </details>
+          )}
           {tone.includes("sky") && notes[c.taskId] && (
             <div className={`text-[11px] break-all line-clamp-2 ${notes[c.taskId].startsWith("전달됨") ? "text-sky-300/80" : "text-amber-300/80"}`}>
               {notes[c.taskId]}
