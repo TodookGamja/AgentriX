@@ -66,9 +66,9 @@ test("T3(b)(e): agy main = GEMINI MODELS via /quota PTY; normalize + cache prese
     usage.indexOf("pub fn extract_antigravity_quota")
   );
   // 메인 = GEMINI MODELS만 (Claude/GPT·최솟값 혼합 금지); 옛 API 경로 제거
-  assert.match(worker, /crate::agy_quota::fetch\(\)/);
+  assert.match(worker, /crate::agy_quota::fetch_combined\(\)/);
   assert.doesNotMatch(usage, /retrieveUserQuota|antigravity_min_5h|antigravity_gemini_group/);
-  assert.match(agy, /g\.name\.contains\("GEMINI MODELS"\)/);
+  assert.match(agy, /g\.name\.eq_ignore_ascii_case\("GEMINI MODELS"\)/);
   assert.match(agy, /remaining_percent_5h:\s*five/);
   assert.match(agy, /remaining_percent_weekly:\s*weekly/);
   assert.match(normalize, /g\.name\.contains\("GEMINI MODELS"\)/);
@@ -90,17 +90,18 @@ test("T9: /quota parse drives main+weekly; sub_groups keep Claude/GPT·Argon; no
     usage.indexOf("fn fetch_antigravity_quota_worker"),
     usage.indexOf("fn get_agy_cache_file")
   );
-  assert.match(worker, /crate::agy_quota::fetch\(\)/);
+  assert.match(worker, /crate::agy_quota::fetch_combined\(\)/);
   assert.doesNotMatch(worker, /retrieveUserQuota|retrieveUserQuotaSummary|antigravity_gemini_group/);
-  assert.doesNotMatch(agy, /retrieveUserQuota/);
+  assert.match(agy, /retrieveUserQuotaSummary/);
+  assert.match(agy, /retrieveUserQuota/);
   // 메인 주간은 파싱값(weekly) — 옛 센티널 100/None 하드코딩 금지
   assert.match(agy, /remaining_percent_weekly:\s*weekly/);
-  assert.match(agy, /resets_at_weekly:\s*main\.resets_at_weekly\.clone\(\)/);
+  assert.match(agy, /resets_at_weekly:\s*main\.and_then\(/);
   assert.doesNotMatch(agy, /remaining_percent_weekly:\s*100\.0/);
   // 픽스처: Gemini 5h 94.71 / 주간 24.67, 타 그룹은 sub만
   assert.match(agy, /94\.71/);
   assert.match(agy, /24\.67/);
-  assert.match(agy, /source_label:\s*"agy \/quota"/);
+  assert.match(agy, /source_label:\s*"agy \/quota \+ API"/);
   assert.match(agy, /sub_groups:\s*Some\(groups\)/);
   assert.match(agy, /from_secs\(15\)/);
   assert.match(agy, /child\.kill\(\)/);

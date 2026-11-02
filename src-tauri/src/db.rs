@@ -1431,6 +1431,10 @@ pub struct SubQuotaGroup {
     pub resets_at_5h: Option<String>,
     pub remaining_weekly: Option<f64>,
     pub resets_at_weekly: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_5h: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_weekly: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

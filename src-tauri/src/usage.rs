@@ -1374,12 +1374,14 @@ fn rfc3339_expired(s: &str) -> bool {
 }
 
 fn fetch_antigravity_quota_worker() -> Result<(CliQuotaStatus, bool), String> {
-    let res = crate::agy_quota::fetch()?;
-    let cache_mutex = AGY_QUOTA_CACHE.get_or_init(|| Mutex::new(None));
-    if let Ok(mut guard) = cache_mutex.lock() {
-        *guard = Some((Instant::now(), res.clone()));
+    let (res, complete) = crate::agy_quota::fetch_combined()?;
+    if complete {
+        let cache_mutex = AGY_QUOTA_CACHE.get_or_init(|| Mutex::new(None));
+        if let Ok(mut guard) = cache_mutex.lock() {
+            *guard = Some((Instant::now(), res.clone()));
+        }
     }
-    Ok((res, true))
+    Ok((res, complete))
 }
 fn get_agy_cache_file() -> PathBuf {
     dirs::data_dir()
@@ -1403,7 +1405,7 @@ fn load_agy_cache_from_disk() -> Option<CliQuotaStatus> {
     if p.is_file() {
         if let Ok(content) = std::fs::read_to_string(&p) {
             if let Ok(quota) = serde_json::from_str::<CliQuotaStatus>(&content) {
-                if quota.source_label != "agy /quota" { return None; }
+                if quota.source_label != "agy /quota" && quota.source_label != "agy /quota + API" { return None; }
                 let saved = p.metadata().ok()?.modified().ok()?;
                 return Some(normalize_cached_quota(quota, saved.into(), Utc::now()));
             }
@@ -1773,6 +1775,7 @@ mod live_quota_tests {
             crate::db::SubQuotaGroup {
                 name: "Claude/GPT".into(),
                 description: None,
+                source_5h: None, source_weekly: None,
                 remaining_5h: Some(20.0),
                 resets_at_5h: Some("09:00".into()),
                 remaining_weekly: None,
@@ -1781,6 +1784,7 @@ mod live_quota_tests {
             crate::db::SubQuotaGroup {
                 name: "GEMINI MODELS".into(),
                 description: None,
+                source_5h: None, source_weekly: None,
                 remaining_5h: Some(80.0),
                 resets_at_5h: Some("15:00".into()), // still valid
                 remaining_weekly: None,
