@@ -520,21 +520,25 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       return;
     }
 
-    if (broadcastToProject && onBroadcastToProject) {
-      await onBroadcastToProject(session.cwd, `${message}\r`);
-    } else if (broadcastToSplit && splitActive && onBroadcastPrompt) {
-      await onBroadcastPrompt(`${message}\r`);
-    } else {
-      await apiWriteToSession(session.id, `${message}\r`);
-    }
-
     if (trimmed) setPromptHistory((prev) => [trimmed, ...prev.slice(0, 29)]);
     setAttachments([]);
     setHistoryIdx(-1);
     setPromptText("");
     termRef.current?.scrollToBottom();
-    termRef.current?.focus();
     if (onActivity) onActivity();
+    try {
+      if (broadcastToProject && onBroadcastToProject) {
+        await onBroadcastToProject(session.cwd, `${message}\r`);
+      } else if (broadcastToSplit && splitActive && onBroadcastPrompt) {
+        await onBroadcastPrompt(`${message}\r`);
+      } else {
+        await apiWriteToSession(session.id, `${message}\r`);
+      }
+    } catch (error) {
+      setPromptText((current) => [promptText, current].filter(Boolean).join("\n"));
+      setAttachments((current) => [...attachments, ...current]);
+      console.error(error);
+    }
   };
 
   // 작업 중인 세션에 보낼 메시지를 바로 쓰지 않고 대기열에 올린다(유휴가 되면 앱이 1건씩 제출)

@@ -1151,13 +1151,15 @@ async fn get_session_context(
 /// 로그로 턴 종료를 못 읽는 CLI용: 터미널 출력이 10초 멈춘 시각 (팀 배정 유휴 판정)
 /// ponytail: 진행 표시 없이 10초 넘게 조용히 일하는 CLI면 유휴로 오판, 그런 CLI가 생기면 리더 함수로 로그 판정 추가
 #[tauri::command]
-fn get_session_quiet_since(state: State<'_, AppState>, session_id: String, quiet_ms: Option<i64>) -> Option<i64> {
-    state.pty.output_quiet_since(&session_id, quiet_ms.unwrap_or(10_000))
+async fn get_session_quiet_since(state: State<'_, AppState>, session_id: String, quiet_ms: Option<i64>) -> Result<Option<i64>, String> {
+    let pty = state.pty.clone();
+    tokio::task::spawn_blocking(move || pty.output_quiet_since(&session_id, quiet_ms.unwrap_or(10_000))).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn get_session_paste_mode(state: State<'_, AppState>, session_id: String) -> Option<bool> {
-    state.pty.paste_mode(&session_id)
+async fn get_session_paste_mode(state: State<'_, AppState>, session_id: String) -> Result<Option<bool>, String> {
+    let pty = state.pty.clone();
+    tokio::task::spawn_blocking(move || pty.paste_mode(&session_id)).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1330,18 +1332,22 @@ async fn list_cli_models(cli_id: String) -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-fn write_to_session(
+async fn write_to_session(
     state: State<'_, AppState>,
     session_id: String,
     data: String,
 ) -> Result<(), String> {
-    let cli_id = state.pty.write_to_session(&session_id, data.as_bytes())?;
-    if data.contains('\r') || data.contains('\n') {
-        if let Ok(conn) = state.db.lock() {
-            usage::record_live_session_interaction(&conn, &cli_id, data.len());
+    let pty = state.pty.clone();
+    let db = state.db.clone();
+    tokio::task::spawn_blocking(move || {
+        let cli_id = pty.write_to_session(&session_id, data.as_bytes())?;
+        if data.contains('\r') || data.contains('\n') {
+            if let Ok(conn) = db.lock() {
+                usage::record_live_session_interaction(&conn, &cli_id, data.len());
+            }
         }
-    }
-    Ok(())
+        Ok(())
+    }).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -1355,12 +1361,13 @@ fn resize_session(
 }
 
 #[tauri::command]
-fn read_session_output(
+async fn read_session_output(
     state: State<'_, AppState>,
     session_id: String,
     cursor: usize,
 ) -> Result<PtyOutputChunk, String> {
-    state.pty.read_output_from(&session_id, cursor)
+    let pty = state.pty.clone();
+    tokio::task::spawn_blocking(move || pty.read_output_from(&session_id, cursor)).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

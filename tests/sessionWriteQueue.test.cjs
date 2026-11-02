@@ -10,6 +10,14 @@ const moduleExports = {};
 vm.runInNewContext(js, { exports: moduleExports, Promise, Map });
 const { queueSessionWrite } = moduleExports;
 
+test("chat clears before waiting for delivery and restores failed drafts", () => {
+  const source = fs.readFileSync("src/components/TerminalPane.tsx", "utf8");
+  const send = source.slice(source.indexOf("const handleSendChatPrompt"), source.indexOf("const handleQueuePrompt"));
+  assert.ok(send.indexOf('setPromptText("")') < send.indexOf("await onBroadcastToProject"));
+  assert.match(send, /catch \(error\)[\s\S]*setPromptText\(\(current\)/);
+  assert.match(send, /setAttachments\(\(current\)/);
+});
+
 test("serializes writes per session and continues after a failed write", async () => {
   const events = [];
   let release;
