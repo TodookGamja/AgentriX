@@ -114,7 +114,7 @@ test("T51: 보드 ✅가 된 assign·PM이 결과 메일을 받은 report는 stu
   assert.equal(q.prism[1].stuck, true);
   // 단위 밖 배선: 대시 tick이 보드 done + 결과 메일로 정리하고 deliveryGate 대기도 푼다
   const src = require("node:fs").readFileSync("src/App.tsx", "utf8");
-  const blk = src.slice(src.indexOf("교착 해소: 보드 ✅가 된 assign"), src.indexOf("교착 해소: 보드 ✅가 된 assign") + 1800);
+  const blk = src.slice(src.indexOf("교착 해소: 보드 ✅가 된 assign"), src.indexOf("교착 해소: 보드 ✅가 된 assign") + 3600);
   assert.match(blk, /settledAutoIds\(/);
   assert.match(blk, /removeTeamMailDelivery\(project, s\.agentId/);
   assert.match(blk, /delete pendingDeliveryRef\.current\[s\.id\]/);
@@ -159,4 +159,36 @@ test("T65: inbox에서 사라진 mail 항목만 제거, 미처리·예약 중·a
   const got = api.staleMailIds(list, new Set(["B"]), new Set(["C"]));
   assert.equal(JSON.stringify(got), JSON.stringify(["mail:A"]));
   assert.equal(JSON.stringify(api.staleMailIds(undefined, new Set(), new Set())), "[]");
+});
+
+test("T1: 🔥가 아닌 assign만 제거, 🔥 assign·mail·user는 유지, 빈 목록이면 호출부가 안 부름", () => {
+  const list = [it("assign:T_1", "assign"), it("assign:T_2", "assign"), it("mail:M", "mail"), it("u", "user")];
+  assert.equal(JSON.stringify(api.revokedAssignIds(list, new Set(["T_1"]))), JSON.stringify(["assign:T_2"]));
+  assert.equal(JSON.stringify(api.revokedAssignIds(undefined, new Set())), "[]");
+  const src = require("node:fs").readFileSync("src/App.tsx", "utf8");
+  assert.match(src, /tasks\.length === 0 \? \[\] : revokedAssignIds\(/);
+  assert.ok(src.includes("if (boardTasks.length > 0) clearDispatchNotes("));
+});
+
+test("T1b: 🔥 아닌 작업의 assign handled·resolved 기록만 지워 재착수 시 재전달이 막히지 않는다", () => {
+  const recs = ["a1|assign:T_1", "a1|assign:T_2", "a1|report:T_2:a1", "a2|assign:T_3", "a1|mail:M"];
+  assert.equal(JSON.stringify(api.staleAssignRecordKeys(recs, "a1", new Set(["T_1"]))), JSON.stringify(["a1|assign:T_2"]));
+  const src = require("node:fs").readFileSync("src/App.tsx", "utf8");
+  assert.ok(!src.includes("for (const id of revoked) useSessionQueue.getState().markHandled"));
+  assert.ok(src.includes("st.unmark(stale)"));
+  // 재전달 경로: 기록이 지워진 뒤에는 handled에 없으므로 continue로 막히지 않는다
+  const handled = ["a1|assign:T_2"].filter((k) => !api.staleAssignRecordKeys(["a1|assign:T_2"], "a1", new Set()).includes(k));
+  assert.equal(handled.includes("a1|assign:T_2"), false);
+});
+
+test("T4: 전달 보류는 delivery.log에 CLI·사유·로그 시작/종료 유무를 남긴다", () => {
+  const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "src", "App.tsx"), "utf8").replace(/\r/g, "");
+  assert.ok(src.includes("attempt.step(`blocked_${session.cliId}_"));
+  assert.ok(src.includes("logSig = `_ctx${ctx ?"));
+});
+
+test("T8: resumed id 없는 Codex 세션도 저장된 대화 id의 로그로 ctx를 읽는다", () => {
+  const src = require("node:fs").readFileSync("src-tauri/src/main.rs", "utf8").replace(/\r/g, "");
+  assert.ok(src.includes("pty.resumed_cli_id(&session_id).or_else("));
+  assert.ok(src.includes('context::saved_codex_log_in_use(&codex_dir, &cwd, &saved, &started_at)'));
 });

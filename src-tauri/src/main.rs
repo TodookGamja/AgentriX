@@ -1133,7 +1133,15 @@ async fn get_session_context(
     let db = state.db.clone();
     tokio::task::spawn_blocking(move || {
         let codex_dir = crate::cli::home_dir().join(".codex").join("sessions");
-        let resumed = if cli_id == "codex" { pty.resumed_cli_id(&session_id) } else { None };
+        let resumed = if cli_id == "codex" {
+            pty.resumed_cli_id(&session_id).or_else(|| {
+                let agent_id = pty.list_sessions().into_iter().find(|s| s.id == session_id)?.agent_id?;
+                let conn = db.lock().ok()?;
+                let saved = db::get_agent_cli_session(&conn, &agent_id, "codex").ok()??;
+                drop(conn);
+                context::saved_codex_log_in_use(&codex_dir, &cwd, &saved, &started_at)
+            })
+        } else { None };
         let result = if let Some(id) = resumed {
             context::codex_log_for_session(&codex_dir, &cwd, &id).and_then(|path| context::read_codex_session(&path))
         } else {

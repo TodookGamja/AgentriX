@@ -63,3 +63,33 @@ test("T69: PM 수신 메일 꼬리말은 다음 단계 지시, 팀원 꼬리말�
   assert.ok(!member.includes("다음 작업을 배정"));
   assert.ok(api.collabProtocol("pm", agents).endsWith("최종 보고하세요."));
 });
+
+test("T5: 한 번만 사라졌다 돌아온 🔥 행은 정리·재전달 없음, 연속 2회 🔥가 아니면 정리", () => {
+  const row = (id, status) => ({ taskId: id, agentId: "a", status });
+  const sent = new Set(["X1:start:a", "X2:start:a"]);
+  let prev = [row("X1", "start"), row("X2", "start")];
+  // 읽기 1: X1이 부분 읽기로 사라짐 → 아직 🔥로 간주
+  let read = [row("X2", "start"), row("Y", "wait")];
+  assert.equal(JSON.stringify(api.keepRecentStarts(prev, read).filter((t) => t.status === "start").map((t) => t.taskId)), '["X2","X1"]');
+  assert.equal(api.forgetEndedStarts(sent, api.keepRecentStarts(prev, read)), false);
+  assert.ok(sent.has("X1:start:a")); // 기록 유지: 돌아와도 재전달 없음
+  prev = read.filter((t) => t.status === "start");
+  // 읽기 2: X1 돌아옴
+  read = [row("X1", "start"), row("X2", "start")];
+  assert.equal(api.forgetEndedStarts(sent, api.keepRecentStarts(prev, read)), false);
+  // 읽기 3·4: X1이 연속 2회 🔥 아님 → 정리
+  prev = read;
+  read = [row("X2", "start"), row("X1", "done")];
+  assert.equal(api.forgetEndedStarts(sent, api.keepRecentStarts(prev, read)), false); // 1회째: 유지
+  prev = read.filter((t) => t.status === "start");
+  assert.equal(api.forgetEndedStarts(sent, api.keepRecentStarts(prev, read)), true); // 2회째: 정리
+  assert.ok(!sent.has("X1:start:a") && sent.has("X2:start:a"));
+});
+
+test("T5: App.tsx 정리 경로는 모두 boardTasks(2회 확인) 기준", () => {
+  const src = fs.readFileSync("src/App.tsx", "utf8").replace(/\r/g, "");
+  assert.ok(src.includes("forgetEndedStarts(sent, boardTasks)"));
+  assert.ok(src.includes("const startIds = new Set(boardTasks.filter"));
+  assert.ok(src.includes("revokedAssignIds(list, new Set(boardTasks.filter"));
+  assert.ok(src.includes("clearDispatchNotes(project, (id) => boardTasks.some"));
+});

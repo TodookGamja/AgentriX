@@ -162,3 +162,10 @@ export function collabProtocol(agentId: string, agents: { id: string; name: stri
   const mail = mailProtocol(agentId, agents);
   return isPm ? `${boardProtocol(agents.filter((a) => a.id !== agentId))} ${mail}` : mail;
 }
+
+// 작업표 일시 오독 방지: 팀원이 BLACKBOARD.md를 쓰는 도중 읽으면 🔥 행이 한 번 사라져 보일 수 있다.
+// 지난 읽기에서 🔥였던 행이 이번 읽기에서 🔥가 아니면 한 번은 아직 🔥로 간주한다(정리 판단 전용). 연속 2회 🔥가 아니어야 정리된다.
+export function keepRecentStarts(prevStarts: BoardTask[], tasks: BoardTask[]): BoardTask[] {
+  const live = new Set(tasks.filter((t) => t.status === "start").map((t) => `${t.taskId}:${t.agentId}`));
+  return [...tasks, ...prevStarts.filter((p) => p.status === "start" && !live.has(`${p.taskId}:${p.agentId}`))];
+}

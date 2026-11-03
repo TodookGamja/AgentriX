@@ -53,3 +53,9 @@ export function setDispatchNote(project: string, taskId: string, note: string): 
   if (notes[taskId] === note) return;
   localStorage.setItem(dispatchNotesKey(project), JSON.stringify({ ...notes, [taskId]: note }));
 }
+
+export function clearDispatchNotes(project: string, keep: (taskId: string) => boolean): void {
+  const notes = getDispatchNotes(project);
+  const next = Object.fromEntries(Object.entries(notes).filter(([id]) => keep(id)));
+  if (Object.keys(next).length !== Object.keys(notes).length) localStorage.setItem(dispatchNotesKey(project), JSON.stringify(next));
+}

@@ -109,15 +109,15 @@ import { AiDeepTeamModal } from "./components/AiDeepTeamModal";
 import { MarkdownLite } from "./components/MarkdownLite";
 import { FolderPickerModal } from "./components/FolderPickerModal";
 import { AgentrixLogo } from "./components/AgentrixLogo";
-import { boardProtocol, collabProtocol, forgetEndedStarts, hasTaskResultMail, mailProtocol, parseBoardTasks } from "./lib/blackboardDispatch";
+import { boardProtocol, collabProtocol, forgetEndedStarts, hasTaskResultMail, keepRecentStarts, mailProtocol, parseBoardTasks } from "./lib/blackboardDispatch";
 import { getTeamMailDeliveries, pruneStaleDeliveries, pruneStaleMailDeliveries, removeTeamMailDelivery, reserveTeamMailDelivery, saveTeamMailDelivery } from "./lib/teamMailDelivery";
-import { findApproval, getApprovalMode, setDispatchNote, upsertApproval } from "./lib/taskApproval";
+import { clearDispatchNotes, findApproval, getApprovalMode, getDispatchNotes, setDispatchNote, upsertApproval } from "./lib/taskApproval";
 import { countNewChars } from "./lib/tokenEstimate";
 import { deliveryGate, logTurnStillBusy, tabIsActive, type PendingDelivery } from "./lib/deliveryGate";
 import { DeliveryAttempt, withDeliveryDeadline } from "./lib/deliveryAttempt";
 import { CursorBusyError, readTerminalScreen, readTerminalTranscript, readCursorTurn } from "./lib/cursorScreen";
 import { useSessionQueue, queueKey } from "./lib/sessionQueueStore";
-import { nextQueueItem, previewOf, queueReservation, settledAutoIds, deliveredByScreen, staleMailIds, type QueueSource } from "./lib/sessionQueue";
+import { nextQueueItem, previewOf, queueReservation, settledAutoIds, revokedAssignIds, staleAssignRecordKeys, deliveredByScreen, staleMailIds, type QueueSource } from "./lib/sessionQueue";
 import { forgetSessionInput, getLastSubmission, getSubmissionVersion, getSessionInputHistory, hasPendingSessionInput, setInstructionKeyResolver } from "./lib/inputHistory";
 import { permissionLaunch } from "./lib/permissionSettings";
 import {
@@ -2068,6 +2068,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
     if (!quiet || quiet <= lastSubmit || (session.cliId === "claude" && lastSubmit > 0 && Date.now() - quiet < 30_000)) return ctx;
     return { tokens: ctx?.tokens ?? 0, window: ctx?.window ?? null, source: ctx?.source ?? `pty:${session.id}`, completedAt: quiet };
   };
+  const prevStartsRef = useRef<Record<string, ReturnType<typeof parseBoardTasks>>>({}); // 프로젝트별 지난 읽기의 🔥 행(오독 방지 2회 확인용)
   const queueSeenRef = useRef<Record<string, number>>({}); // 자동 전달 항목이 마지막으로 시도된 시각(오래되면 대기열 표시에서 제거)
   // 모든 전달(배정/메일/보고/사용자 대기)의 단일 관문. meta가 있으면 못 보낸 사유와 함께 대기열에 올리고, 보내면 내린다
   const sendToIdleTeamSession = async (
@@ -2112,7 +2113,13 @@ ${recentSnippet || "진행 내역 기록 없음"}
     if (teamDeliveryLocksRef.current.has(session.id)) { sendBlockReasonRef.current[session.id] = "앞 전달 처리 중"; return false; }
     teamDeliveryLocksRef.current.add(session.id);
     const attempt = new DeliveryAttempt(session.id, crypto.randomUUID());
-    const blocked = (why: string) => ((sendBlockReasonRef.current[session.id] = why), false);
+    // delivery.log에 막은 CLI·사유 코드·로그 시작/종료 유무를 남긴다(stage는 영숫자/-/_만 기록됨): 반복 재시도 세션의 원인 특정용
+    let logSig = "";
+    const blocked = (why: string) => {
+      sendBlockReasonRef.current[session.id] = why;
+      attempt.step(`blocked_${session.cliId}_${why.startsWith("팀원이 응답 중") ? "busy" : why.startsWith("입력창에 멈춤") ? "stuck" : why.startsWith("입력창에") ? "typing" : "other"}${logSig}`);
+      return false;
+    };
     try {
       return await withDeliveryDeadline(attempt, async () => {
       if (hasPendingSessionInput(session.id)) return blocked("입력창에 30초 안에 친 글이 남아 있음");
@@ -2121,7 +2128,10 @@ ${recentSnippet || "진행 내역 기록 없음"}
       attempt.step("turn");
       const ctx = await getTurnContext(session, claimed);
       attempt.check();
-      if (!ctx?.completedAt || ctx.completedAt <= getLastSubmission(session.id)) return blocked("팀원이 응답 중(턴 종료 신호 대기)");
+      if (!ctx?.completedAt || ctx.completedAt <= getLastSubmission(session.id)) {
+        logSig = `_ctx${ctx ? "1" : "0"}_s${(ctx as { startedAt?: number | null } | null)?.startedAt ? "1" : "0"}_c${ctx?.completedAt ? "1" : "0"}_${(ctx?.source ?? "none").startsWith("pty:") ? "pty" : "log"}`;
+        return blocked("팀원이 응답 중(턴 종료 신호 대기)");
+      }
       if (hasPendingSessionInput(session.id)) return blocked("입력창에 30초 안에 친 글이 남아 있음");
       if (!useAppStore.getState().sessions.some((s) => s.id === session.id)) return false;
       const pending = pendingDeliveryRef.current[session.id];
@@ -2496,7 +2506,11 @@ ${recentSnippet || "진행 내역 기록 없음"}
       const pmSession = projSessions.find(
         (s) => s.name.includes("PM") || s.agentRole?.includes("PM") || s.agentRole?.includes("리더")
       ) ?? projSessions[0];
-      if (tasks.length > 0) forgetEndedStarts(sent, tasks);
+      // 정리(start 기록·revoked·unmark·메모)는 연속 2회 읽기에서 모두 🔥가 아닌 행만 대상: 쓰는 도중 읽은 일시 오독으로 진행 중 작업이 재전달되지 않게 한다
+      const boardTasks = tasks.length > 0 ? keepRecentStarts(prevStartsRef.current[project] ?? [], tasks) : tasks;
+      if (tasks.length > 0) prevStartsRef.current[project] = tasks.filter((t) => t.status === "start");
+      if (boardTasks.length > 0) forgetEndedStarts(sent, boardTasks);
+      if (boardTasks.length > 0) clearDispatchNotes(project, (id) => boardTasks.some((t) => t.taskId === id && t.status === "start") || !/^(대기|전달)/.test(getDispatchNotes(project)[id] ?? "")); // 🔥가 아닌 작업의 지난 대기·전달 메모 정리
       // 이미 수행·보고된 자동 항목이 stuck/대기로 head를 막는 교착 해소: 보드 ✅가 된 assign, PM이 결과 메일을 받은 report를 대기열·예약에서 제거
       {
         let mails: Awaited<ReturnType<typeof apiRouteTeamMail>> | null = null;
@@ -2504,13 +2518,23 @@ ${recentSnippet || "진행 내역 기록 없음"}
           if (!s.agentId) continue;
           const key = queueKey(s);
           const list = useSessionQueue.getState().queues[key];
+          if (tasks.length > 0) {
+            // 🔥가 아닌 작업의 assign handled·resolved 기록 삭제: 나중에 다시 🔥가 되면 재전달되게 한다
+            const st = useSessionQueue.getState();
+            const startIds = new Set(boardTasks.filter((t) => t.status === "start" && t.agentId === s.agentId).map((t) => t.taskId));
+            const stale = staleAssignRecordKeys([...st.handled, ...st.resolved], key, startIds);
+            if (stale.length) st.unmark(stale);
+          }
           if (!list?.length) continue;
           if (list.some((it) => it.source === "report")) mails ??= await apiRouteTeamMail(project).catch(() => []);
-          const ids = settledAutoIds(
+          const settled = settledAutoIds(
             list,
             new Set(tasks.filter((t) => t.status === "done" && t.agentId === s.agentId).map((t) => t.taskId)),
             (taskId, reporterId) => hasTaskResultMail(mails ?? [], taskId, reporterId, s.agentId!)
           );
+          // 🔥에서 대기로 되돌림·삭제·담당 변경된 지난 배정도 제거(보드를 정상으로 읽은 경우에만 이 블록에 들어옴)
+          const revoked = tasks.length === 0 ? [] : revokedAssignIds(list, new Set(boardTasks.filter((t) => t.status === "start" && t.agentId === s.agentId).map((t) => t.taskId)));
+          const ids = [...new Set([...settled, ...revoked])];
           // 제출 확인은 실패했지만 대상 터미널 화면에 이미 찍힌 항목(메모리상 화면 기록만 사용)은 전달된 것으로 확정
           const onScreen = deliveredByScreen(list, readTerminalTranscript(s.id));
           for (const id of [...ids, ...onScreen.filter((x) => !ids.includes(x))]) {

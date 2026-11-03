@@ -230,6 +230,15 @@ pub fn codex_log_for_session(sessions: &Path, cwd: &str, id: &str) -> Option<Pat
         })
 }
 
+// 이어하기(resume)로 열린 Codex 세션인데 PTY에 resumed id가 없을 때의 대체: 에이전트에 저장된 Codex 대화 id의 로그가 이 세션 시작 이후 갱신됐으면 그 로그를 쓴다.
+// 이어하기 로그는 첫 줄 시각이 과거라 read_context의 시작 시각 매칭(10초)에 영원히 안 걸려 ctx가 None이 되고, 턴 종료 판정이 막힌다.
+// ponytail: 에이전트당 세션은 1개라 저장 id가 곧 이 세션. 새 대화로 시작했다면 옛 로그는 시작 이후 갱신되지 않아 제외된다.
+pub fn saved_codex_log_in_use(sessions: &Path, cwd: &str, id: &str, started_at: &str) -> Option<String> {
+    let started = parse_ts(started_at)?;
+    let path = codex_log_for_session(sessions, cwd, id)?;
+    touched_since(&path, started).then(|| id.to_string())
+}
+
 pub fn read_codex_session(path: &Path) -> Option<ContextUsage> {
     let content = std::fs::read_to_string(path).ok()?;
     let (tokens, window) = codex_last_context(&content)?;
@@ -499,4 +508,33 @@ mod tests {
 
         assert!(same_dir("C:/Users/a/Proj/", "c:\\users\\a\\proj"));
     }
+    #[test]
+    fn resumed_codex_log_with_old_meta_is_found_via_saved_id_and_completion_survives_compacted() {
+        let root = std::env::temp_dir().join(format!("agentrix-codex-resume-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let path = root.join(format!("rollout-{id}.jsonl"));
+        let line = |ts: &str, v: serde_json::Value| format!("{}
+", serde_json::json!({"timestamp": ts, "type": v["type"], "payload": v["payload"]}));
+        let mut log = line("2020-01-01T00:00:00.000Z", serde_json::json!({"type":"session_meta","payload":{"id":id,"cwd":"C:/project","timestamp":"2020-01-01T00:00:00.000Z"}}));
+        log += &line("2020-01-01T00:00:01.000Z", serde_json::json!({"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":7},"model_context_window":100}}}));
+        log += &line("2026-11-03T07:35:53.700Z", serde_json::json!({"type":"event_msg","payload":{"type":"task_started"}}));
+        log += &line("2026-11-03T07:36:14.453Z", serde_json::json!({"type":"compacted","payload":{"message":"summary"}}));
+        log += &line("2026-11-03T07:36:14.486Z", serde_json::json!({"type":"event_msg","payload":{"type":"task_complete"}}));
+        std::fs::write(&path, log).unwrap();
+        let now = Utc::now().to_rfc3339();
+        // 시작 시각 매칭으로는 첫 줄 시각이 과거라 못 찾는다(이어하기 로그가 ctx=None이던 원인)
+        assert!(read_context("codex", "x", "C:/project", &now, &[]).is_none());
+        // 저장 id 대체 경로: 시작 이후 갱신된 로그면 찾고, compacted 뒤 task_complete를 완료로 읽는다
+        assert_eq!(saved_codex_log_in_use(&root, "C:/project", &id, &now), Some(id.clone()));
+        let ctx = read_codex_session(&path).unwrap();
+        assert_eq!(ctx.completed_at, Some(1793691374486));
+        assert_eq!(ctx.started_at, Some(1793691353700));
+        // 새 대화로 시작해 옛 로그가 시작 이후 갱신되지 않았으면 제외
+        let future = (Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+        assert!(saved_codex_log_in_use(&root, "C:/project", &id, &future).is_none());
+        assert!(saved_codex_log_in_use(&root, "C:/other", &id, &now).is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
 }

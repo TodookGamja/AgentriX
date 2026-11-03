@@ -133,3 +133,15 @@ export function deliveredByScreen(list: QueueItem[] | undefined, lines: string[]
 export function staleMailIds(list: QueueItem[] | undefined, openMailIds: ReadonlySet<string>, reservedIds: ReadonlySet<string>): string[] {
   return (list ?? []).filter((it) => it.source === "mail" && !openMailIds.has(it.id.slice(5)) && !reservedIds.has(it.id.slice(5))).map((it) => it.id);
 }
+
+// 착수 해제된 배정: 담당자의 🔥(start) 행이 더는 아닌 assign:<ID>(대기로 되돌림·행 삭제·담당 변경·통합)는 지난 작업이라 대기열에서 제거한다.
+// 호출부는 보드를 정상으로 읽은 경우(행이 1개 이상)에만 부른다. 읽기 실패(빈 목록)에서는 부르지 않아 유지된다.
+export function revokedAssignIds(list: QueueItem[] | undefined, startTaskIds: ReadonlySet<string>): string[] {
+  return (list ?? []).filter((it) => it.source === "assign" && !startTaskIds.has(it.id.slice(7))).map((it) => it.id);
+}
+
+// 담당자의 🔥가 아닌 작업의 assign 처리 기록(handled·resolved) 키: 지워 두어야 ✅/대기 뒤 다시 🔥가 될 때 재전달이 막히지 않는다.
+export function staleAssignRecordKeys(records: string[], queueKeyOf: string, startTaskIds: ReadonlySet<string>): string[] {
+  const prefix = `${queueKeyOf}|assign:`;
+  return records.filter((k) => k.startsWith(prefix) && !startTaskIds.has(k.slice(prefix.length)));
+}

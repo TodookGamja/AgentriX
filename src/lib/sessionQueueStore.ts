@@ -13,6 +13,7 @@ interface SessionQueueState {
   resolve: (sid: string, id: string) => void;
   clearResolved: (key: string) => void;
   markHandled: (key: string) => void;
+  unmark: (keys: string[]) => void;
 }
 
 // 키 = agentId(없으면 sessionId): 재출근으로 세션 ID가 바뀌어도 사용자 항목이 이어진다
@@ -28,6 +29,7 @@ export const useSessionQueue = create<SessionQueueState>()(
       resolve: (sid, id) => set((s) => ({ queues: removeItem(s.queues, sid, id), resolved: [...new Set([...s.resolved, `${sid}|${id}`])] })),
       clearResolved: (key) => set((s) => ({ resolved: s.resolved.filter((item) => item !== key) })),
       markHandled: (key) => set((s) => ({ resolved: s.resolved.filter((item) => item !== key), handled: [...new Set([...s.handled, key])] })),
+      unmark: (keys) => set((s) => ({ resolved: s.resolved.filter((k) => !keys.includes(k)), handled: s.handled.filter((k) => !keys.includes(k)) })),
       upsert: (sid, item) => set((s) => { const q = upsertItem(s.queues, sid, item); return q === s.queues ? s : { queues: q }; }),
       remove: (sid, id) => set((s) => { const q = removeItem(s.queues, sid, id); return q === s.queues ? s : { queues: q }; }),
       move: (sid, id, dir) => set((s) => { const q = moveItem(s.queues, sid, id, dir); return q === s.queues ? s : { queues: q }; }),
