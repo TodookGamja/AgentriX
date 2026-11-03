@@ -119,3 +119,37 @@ test("T51: 보드 ✅가 된 assign·PM이 결과 메일을 받은 report는 stu
   assert.match(blk, /removeTeamMailDelivery\(project, s\.agentId/);
   assert.match(blk, /delete pendingDeliveryRef\.current\[s\.id\]/);
 });
+
+test("T54: PM 본인 담당 행의 완료는 PM에게 자기 보고(doneTasks)를 만들지 않는다", () => {
+  const src = require("node:fs").readFileSync("src/App.tsx", "utf8");
+  const i = src.indexOf("doneTasks.push(t);");
+  assert.ok(i > 0);
+  assert.match(src.slice(i - 200, i), /t\.agentId === pmSession\.agentId\) continue/);
+});
+
+test("T58/T59: stuck 항목은 화면에 본문 끝까지 찍히고 입력창 영역 밖에 응답이 뒤따를 때만 전달 확정, 미제출 긴 입력은 유지", () => {
+  const body = (id) => `[팀 메시지: PM] 메일 ID: ${id}. 이미 처리한 ID면 다시 처리하지 마세요. 내용: 끝부분 마커 문장입니다 ${id}`;
+  const mail = it("mail:M_1", "mail", { stuck: true, payload: body("M_1") });
+  const assign = it("assign:T_9", "assign", { unconfirmed: true, payload: "[PM 배정] .ai-agents/BLACKBOARD.md 작업표의 T_9 작업을 수행하세요. 끝 ABCDEFGHIJKLMN" });
+  const normal = it("mail:M_2", "mail", { payload: body("M_2") });
+  const tail = ["", "", "", ""];
+  const got = (list, lines) => JSON.stringify(api.deliveredByScreen(list, lines));
+  const wrap = (t, n = 30) => t.match(new RegExp(`.{1,${n}}`, "g"));
+  // 제출됨: 본문(줄바꿈으로 쪼개져도) + 실제 응답 10줄 이상 + 아래 입력창 영역
+  const reply = Array.from({ length: 10 }, (_, i) => `✦ 응답 ${i + 1}`);
+  const sent = [...wrap(body("M_1")), "[PM 배정] .ai-agents/BLACKBOARD.md 작업표의 T_9 작업을 수행하세요.", "끝 ABCDEFGHIJKLMN", ...reply, ...tail];
+  assert.equal(got([mail, assign, normal], sent), JSON.stringify(["mail:M_1", "assign:T_9"]));
+  // T60: 미제출 본문 아래 CLI 하단 UI 5줄·8줄(박스 테두리 포함)은 응답으로 보지 않음
+  const ui = ["╭────────╮", "│ > │", "╰────────╯", "? for shortcuts", "model: x", "~/proj", "ctx 10%", "────"];
+  assert.equal(got([mail], [...wrap(body("M_1")), ...ui.slice(0, 5), ...tail]), "[]");
+  assert.equal(got([mail], [...wrap(body("M_1")), ...ui, ...tail]), "[]");
+  // 응답 9줄 + 테두리만 있는 줄들은 10줄에 못 미쳐 유지
+  assert.equal(got([mail], [...wrap(body("M_1")), ...reply.slice(0, 9), "────", "╰──╯", ...tail]), "[]");
+  // 미제출 긴 입력: 본문 끝이 화면 맨 아래까지 이어짐(앞부분 ID는 위로 밀려도 끝이 아래 4줄 안) → 유지
+  assert.equal(got([mail], ["위쪽 출력", ...wrap(body("M_1")), "", "상태줄"]), "[]");
+  // 본문 끝이 입력창 영역 밖이어도 뒤에 응답(비어 있지 않은 줄)이 없으면 유지
+  assert.equal(got([mail], ["x", ...wrap(body("M_1")), "", "", "", "", ""]), "[]");
+  // 본문 끝부분이 화면에 없으면(앞부분만) 유지
+  assert.equal(got([mail], ["메일 ID: M_1. 이미 처리한", "응답1", "응답2", ...tail, "z"]), "[]");
+  assert.equal(got([mail], null), "[]");
+});

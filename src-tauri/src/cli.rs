@@ -351,7 +351,7 @@ pub fn resolve_cli_binary(
         }
         let dir_path = Path::new(dir);
         for cand in candidates {
-            if cli_id == "cursor" && (cand.eq_ignore_ascii_case("agent.exe") || cand.eq_ignore_ascii_case("agent.cmd")) && is_grok_bin(&dir_path) {
+            if cli_id == "cursor" && (cand.eq_ignore_ascii_case("agent.exe") || cand.eq_ignore_ascii_case("agent.cmd")) && is_grok_bin(dir_path) {
                 continue;
             }
             let full = dir_path.join(cand);
@@ -422,13 +422,7 @@ pub fn resolve_cli_binary(
         _ => {}
     }
 
-    for fb in fallbacks {
-        if fb.is_file() {
-            return Some(fb);
-        }
-    }
-
-    None
+    fallbacks.into_iter().find(|fb| fb.is_file())
 }
 
 fn is_grok_bin(path: &Path) -> bool {

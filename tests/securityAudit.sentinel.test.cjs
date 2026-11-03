@@ -158,17 +158,14 @@ test("SEC: release assets include .sig; repo has no private minisign key", () =>
   assert.deepEqual(walk(ROOT).filter((p) => !p.includes(`${path.sep}.tauri${path.sep}`)), []);
 });
 
-test("SEC: CSP baseline keeps default-src self; img-src http: tracked as V104_SEC5 Medium", () => {
+test("SEC: CSP baseline keeps default-src self; img-src has no bare http: (V104_SEC5)", () => {
   const conf = JSON.parse(read("src-tauri/tauri.conf.json"));
   assert.match(conf.app.security.csp, /default-src 'self'/);
   assert.match(conf.app.security.csp, /img-src[^;]*https:/);
-  // V104_SEC5: remove bare http: from img-src when Forge lands the fix.
-  // Until then, presence is expected and reported as Medium (not a gate fail).
-  assert.equal(
-    /img-src[^;]*\bhttp:/.test(conf.app.security.csp),
-    true,
-    "expected img-src http: until V104_SEC5; flip assertion when fixed"
-  );
+  // V104_SEC5: bare http: 금지, http://asset.localhost는 허용. 토큰 단위 비교로 느슨한 정규식 오탐을 막는다.
+  const img = conf.app.security.csp.match(/img-src([^;]*)/)[1].trim().split(/\s+/);
+  assert.ok(!img.includes("http:"), "img-src must not allow bare http:");
+  assert.ok(img.includes("http://asset.localhost"));
 });
 
 test("SEC: helper/PTY/agy processes pin safe_helper_cwd; System32 startup is guarded", () => {

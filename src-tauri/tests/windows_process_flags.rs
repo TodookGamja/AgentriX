@@ -20,7 +20,7 @@ fn check_directory(dir: &Path) {
                 let flag = variable.map(|name| format!("{name}.creation_flags(")).unwrap_or_else(|| ".creation_flags(".to_string());
                 let valid = |next: &&str| next.contains(&flag) && (next.contains("0x08000000") || (next.contains("0x00000200") && next.contains("0x00000008")));
                 let found = lines[index..].iter().take(40).take_while(|next| !next.contains(".output()") && !next.contains(".spawn()") && !next.contains(".status()")).any(valid)
-                    || valid(&line);
+                    || valid(line);
                 assert!(found, "{}:{}: Windows process missing creation flags", path.display(), index + 1);
             }
         }

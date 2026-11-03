@@ -57,3 +57,15 @@ export function readCursorTurn(id: string, quietSince?: number | null, output = 
   if (next) turns.set(id, next);
   return next;
 }
+
+// 전달 확정용 화면 기록(메모리 전용, 저장·전송 안 함): 모든 CLI 터미널의 최근 줄(줄바꿈으로 이어진 줄은 한 줄로 합침)
+const transcripts = new Map<string, () => string[]>();
+
+export function registerTerminalTranscript(id: string, read: () => string[]): () => void {
+  transcripts.set(id, read);
+  return () => { if (transcripts.get(id) === read) transcripts.delete(id); };
+}
+
+export function readTerminalTranscript(id: string): string[] | null {
+  return transcripts.get(id)?.() ?? null;
+}

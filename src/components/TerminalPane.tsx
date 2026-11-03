@@ -30,7 +30,7 @@ import {
 } from "../lib/tauriBridge";import { FilePickerModal } from "./FilePickerModal";
 import { isTerminalReport, shouldResizePty } from "../lib/terminalReplay";
 import { getRoleState, ROLE_STATE_EVENT } from "../lib/handoffRelay";
-import { readCursorTurn, registerTerminalScreen } from "../lib/cursorScreen";
+import { readCursorTurn, registerTerminalScreen, registerTerminalTranscript } from "../lib/cursorScreen";
 import { useSessionQueue, queueKey } from "../lib/sessionQueueStore";
 import { useAppStore } from "../lib/store";
 import { hasPendingSessionInput } from "../lib/inputHistory";
@@ -379,6 +379,16 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       const start = buffer.baseY + Math.max(0, term.rows - 10);
       return Array.from({ length: Math.min(term.rows, 10) }, (_, i) => buffer.getLine(start + i)?.translateToString(true) ?? "");
     }) : () => {};
+    const unregisterTranscript = registerTerminalTranscript(session.id, () => {
+      const buffer = term.buffer.active;
+      const lines: string[] = [];
+      for (let i = Math.max(0, buffer.length - 400); i < buffer.length; i++) {
+        const line = buffer.getLine(i);
+        const text = line?.translateToString(true) ?? "";
+        if (line?.isWrapped && lines.length) lines[lines.length - 1] += text; else lines.push(text);
+      }
+      return lines;
+    });
     fitAddonRef.current = fitAddon;
     // 재마운트 시 버퍼 재생이 기본 80열로 그려져 줄이 겹치지 않도록, 보이는 상태면 재생 전에 크기부터 맞춘다.
     if (container.clientWidth > 0) {
@@ -481,6 +491,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       container.removeEventListener("paste", handlePaste);
       dataDisposable.dispose();
       unregisterCursorScreen();
+      unregisterTranscript();
       term.dispose();
     };
   }, [session.id]);

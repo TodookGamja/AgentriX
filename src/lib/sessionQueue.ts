@@ -96,3 +96,34 @@ export function settledAutoIds(
   }
   return out;
 }
+
+// 제출 확인은 실패했지만(stuck/unconfirmed) 대상 터미널 화면에 그 항목이 이미 찍혀 있고 CLI 응답이 뒤따르면 전달된 것으로 본다.
+// 조건: ① 시작 문구와 본문 끝부분(payload 마지막 40자)이 순서대로 화면에 있고 ② 본문 끝이 맨 아래 4줄(입력창 영역) 밖이며
+// ③ 그 뒤에 비어 있지 않은 줄(응답)이 1줄 이상. 긴 미제출 입력은 끝이 화면 맨 아래까지 이어지므로 확정하지 않는다.
+// ponytail: 화면 기록 범위(최근 줄)를 벗어난 전달은 못 알아본다. 그 경우는 기존처럼 멈춤으로 남는다.
+// ponytail: Cursor/Gemini/Codex 입력창 아래 하단 UI(상태줄·안내·모드 표시)가 실측 최대 5~8줄이라 그보다 넉넉한 10줄. 짧은 응답은 정리하지 않고 사용자가 ✕로 처리(애매하면 유지).
+const MIN_REPLY_LINES = 10;
+const squash = (v: string) => v.replace(/\s+/g, "");
+export function deliveredByScreen(list: QueueItem[] | undefined, lines: string[] | null | undefined): string[] {
+  if (!lines || lines.length <= 4) return [];
+  const flat = squash(lines.join(""));
+  const out: string[] = [];
+  for (const it of list ?? []) {
+    if (!it.stuck && !it.unconfirmed) continue;
+    const id = it.id.slice(it.id.indexOf(":") + 1);
+    const head = it.source === "mail" ? `메일 ID: ${id}`
+      : it.source === "assign" ? `[PM 배정] .ai-agents/BLACKBOARD.md 작업표의 ${id} 작업`
+      : it.source === "report" ? `[완료 보고] ${id.split(":")[0]}` : "";
+    const tail = squash(it.payload ?? "").slice(-40);
+    if (!head || tail.length < 10) continue;
+    const h = flat.indexOf(squash(head));
+    const t = h < 0 ? -1 : flat.indexOf(tail, h);
+    if (t < 0) continue;
+    const end = t + tail.length;
+    let pos = 0, endLine = -1;
+    for (let i = 0; i < lines.length; i++) { pos += squash(lines[i]).length; if (pos >= end) { endLine = i; break; } }
+    if (endLine < 0 || endLine >= lines.length - 4) continue;
+    if (lines.slice(endLine + 1).filter((l) => l.replace(/[\s─-╿]/g, "")).length >= MIN_REPLY_LINES) out.push(it.id);
+  }
+  return out;
+}

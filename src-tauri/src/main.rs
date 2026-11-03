@@ -107,9 +107,9 @@ fn apply_dialog_theme_mode(theme: Option<&str>, hwnd_opt: Option<*mut std::ffi::
 
         // 1. DwmSetWindowAttribute & AllowDarkModeForWindow for parent window if available
         if let Some(hwnd) = hwnd_opt {
-            let dwmapi = LoadLibraryA(b"dwmapi.dll\0".as_ptr());
+            let dwmapi = LoadLibraryA(c"dwmapi.dll".as_ptr().cast());
             if !dwmapi.is_null() {
-                let proc_dwm = GetProcAddress(dwmapi, b"DwmSetWindowAttribute\0".as_ptr());
+                let proc_dwm = GetProcAddress(dwmapi, c"DwmSetWindowAttribute".as_ptr().cast());
                 if !proc_dwm.is_null() {
                     let set_dwm: extern "system" fn(*mut std::ffi::c_void, u32, *const i32, u32) -> i32 =
                         std::mem::transmute(proc_dwm);
@@ -119,7 +119,7 @@ fn apply_dialog_theme_mode(theme: Option<&str>, hwnd_opt: Option<*mut std::ffi::
                 }
             }
 
-            let uxtheme_w = LoadLibraryA(b"uxtheme.dll\0".as_ptr());
+            let uxtheme_w = LoadLibraryA(c"uxtheme.dll".as_ptr().cast());
             if !uxtheme_w.is_null() {
                 // Ordinal 133: AllowDarkModeForWindow
                 let proc133 = GetProcAddress(uxtheme_w, 133 as *const u8);
@@ -132,7 +132,7 @@ fn apply_dialog_theme_mode(theme: Option<&str>, hwnd_opt: Option<*mut std::ffi::
         }
 
         // 2. uxtheme.dll hook
-        let uxtheme = LoadLibraryA(b"uxtheme.dll\0".as_ptr());
+        let uxtheme = LoadLibraryA(c"uxtheme.dll".as_ptr().cast());
         if !uxtheme.is_null() {
             // Ordinal 135: SetPreferredAppMode (Windows 10 1903+)
             let proc135 = GetProcAddress(uxtheme, 135 as *const u8);
@@ -169,7 +169,7 @@ fn apply_dialog_theme_mode(theme: Option<&str>, hwnd_opt: Option<*mut std::ffi::
 fn set_app_theme_mode(window: tauri::WebviewWindow, theme: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        let hwnd_raw = window.hwnd().ok().map(|h| h.0 as *mut std::ffi::c_void);
+        let hwnd_raw = window.hwnd().ok().map(|h| h.0);
         apply_dialog_theme_mode(Some(&theme), hwnd_raw);
     }
     Ok(())
@@ -183,7 +183,7 @@ fn pick_project_folder(
 ) -> Result<Option<String>, String> {
     #[cfg(target_os = "windows")]
     {
-        let hwnd_raw = window.hwnd().ok().map(|h| h.0 as *mut std::ffi::c_void);
+        let hwnd_raw = window.hwnd().ok().map(|h| h.0);
         apply_dialog_theme_mode(theme.as_deref(), hwnd_raw);
     }
 
@@ -1072,9 +1072,7 @@ async fn run_cli_deep_analysis(
 
     if cli_id == "codex" {
         cmd.args(["exec", "--skip-git-repo-check", "-"]);
-    } else if cli_id == "claude" {
-        cmd.arg("-p").arg(&prompt);
-    } else if cli_id == "antigravity" {
+    } else if cli_id == "claude" || cli_id == "antigravity" {
         cmd.arg("-p").arg(&prompt);
     } else {
         cmd.arg(&prompt);
@@ -1179,6 +1177,7 @@ async fn get_session_paste_mode(state: State<'_, AppState>, session_id: String) 
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Tauri invoke 인자 계약(프론트와 1:1)이라 줄일 수 없음
 async fn start_session(
     state: State<'_, AppState>,
     app: AppHandle,

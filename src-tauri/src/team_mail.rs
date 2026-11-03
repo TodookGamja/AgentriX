@@ -134,6 +134,14 @@ pub fn route(project: &Path, roster: &[(String, String)]) -> Result<Vec<InboxMes
     Ok(messages)
 }
 
+pub fn acknowledge(project: &Path, agent: &str, id: &str) -> Result<(), String> {
+    if !safe_id(id) { return Err("Invalid message ID".into()); }
+    let inbox = agent_dir(project, agent)?.join("inbox");
+    let done = inbox.join("done");
+    fs::create_dir_all(&done).map_err(|e| e.to_string())?;
+    fs::rename(inbox.join(format!("{id}.json")), done.join(format!("{id}.json"))).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -173,12 +181,4 @@ mod tests {
         assert!(parse_text_mail("수신: Mira", &agents, "a").is_none());
         fs::remove_dir_all(project).unwrap();
     }
-}
-
-pub fn acknowledge(project: &Path, agent: &str, id: &str) -> Result<(), String> {
-    if !safe_id(id) { return Err("Invalid message ID".into()); }
-    let inbox = agent_dir(project, agent)?.join("inbox");
-    let done = inbox.join("done");
-    fs::create_dir_all(&done).map_err(|e| e.to_string())?;
-    fs::rename(inbox.join(format!("{id}.json")), done.join(format!("{id}.json"))).map_err(|e| e.to_string())
 }

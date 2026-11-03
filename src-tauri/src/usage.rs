@@ -149,7 +149,7 @@ pub fn collect_newest_jsonl_files(
             .unwrap_or(SystemTime::UNIX_EPOCH);
         files.push((path.to_path_buf(), mtime));
     }
-    files.sort_by(|a, b| b.1.cmp(&a.1));
+    files.sort_by_key(|f| std::cmp::Reverse(f.1));
     files.into_iter().take(max_files).map(|(p, _)| p).collect()
 }
 
@@ -607,7 +607,7 @@ pub mod antigravity_parser {
             }
         }
 
-        candidates.sort_by(|a, b| b.1.cmp(&a.1));
+        candidates.sort_by_key(|c| std::cmp::Reverse(c.1));
 
         for (path, _) in candidates.into_iter().take(25) {
             if let Ok(content) = std::fs::read_to_string(&path) {
@@ -933,9 +933,7 @@ fn extract_codex_quota_from_logs() -> CliQuotaStatus {
                         None,
                     ),
                     Some(ts) => {
-                        let effective_used = if hit_limit_exceeded || raw_used_5h >= 99.0 && hit_limit_exceeded {
-                            100.0
-                        } else if hit_limit_exceeded {
+                        let effective_used = if hit_limit_exceeded {
                             100.0
                         } else {
                             raw_used_5h.clamp(0.0, 100.0)

@@ -479,7 +479,7 @@ pub fn upsert_project_agent(
         .id
         .clone()
         .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| format!("agent-{}", uuid::Uuid::new_v4().to_string()[..8].to_string()));
+        .unwrap_or_else(|| format!("agent-{}", &uuid::Uuid::new_v4().to_string()[..8]));
     let now = Utc::now().to_rfc3339();
 
     conn.execute(
@@ -1789,7 +1789,7 @@ pub fn get_usage_dashboard(
             item.percentage = ((item.total_tokens as f64 / timeframe_model_tokens as f64) * 1000.0).round() / 10.0;
         }
     }
-    model_breakdown.sort_by(|a, b| b.total_tokens.cmp(&a.total_tokens));
+    model_breakdown.sort_by_key(|m| std::cmp::Reverse(m.total_tokens));
 
     let mut cli_summaries: Vec<CliUsageSummary> = cli_map.into_values().collect();
     cli_summaries.sort_by(|a, b| a.cli_id.cmp(&b.cli_id));

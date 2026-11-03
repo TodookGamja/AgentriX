@@ -115,9 +115,9 @@ import { findApproval, getApprovalMode, setDispatchNote, upsertApproval } from "
 import { countNewChars } from "./lib/tokenEstimate";
 import { deliveryGate, logTurnStillBusy, tabIsActive, type PendingDelivery } from "./lib/deliveryGate";
 import { DeliveryAttempt, withDeliveryDeadline } from "./lib/deliveryAttempt";
-import { CursorBusyError, readTerminalScreen, readCursorTurn } from "./lib/cursorScreen";
+import { CursorBusyError, readTerminalScreen, readTerminalTranscript, readCursorTurn } from "./lib/cursorScreen";
 import { useSessionQueue, queueKey } from "./lib/sessionQueueStore";
-import { nextQueueItem, previewOf, queueReservation, settledAutoIds, type QueueSource } from "./lib/sessionQueue";
+import { nextQueueItem, previewOf, queueReservation, settledAutoIds, deliveredByScreen, type QueueSource } from "./lib/sessionQueue";
 import { forgetSessionInput, getLastSubmission, getSubmissionVersion, getSessionInputHistory, hasPendingSessionInput, setInstructionKeyResolver } from "./lib/inputHistory";
 import { permissionLaunch } from "./lib/permissionSettings";
 import {
@@ -2505,11 +2505,18 @@ ${recentSnippet || "진행 내역 기록 없음"}
             new Set(tasks.filter((t) => t.status === "done" && t.agentId === s.agentId).map((t) => t.taskId)),
             (taskId, reporterId) => hasTaskResultMail(mails ?? [], taskId, reporterId, s.agentId!)
           );
-          for (const id of ids) {
+          // 제출 확인은 실패했지만 대상 터미널 화면에 이미 찍힌 항목(메모리상 화면 기록만 사용)은 전달된 것으로 확정
+          const onScreen = deliveredByScreen(list, readTerminalTranscript(s.id));
+          for (const id of [...ids, ...onScreen.filter((x) => !ids.includes(x))]) {
             useSessionQueue.getState().remove(key, id);
             delete queueSeenRef.current[`${key}|${id}`];
-            const kind = id.startsWith("assign:") ? "task" : "report";
-            removeTeamMailDelivery(project, s.agentId, id.slice(id.indexOf(":") + 1), kind);
+            const kind = id.startsWith("assign:") ? "task" : id.startsWith("report:") ? "report" : undefined;
+            const itemId = id.slice(id.indexOf(":") + 1);
+            if (onScreen.includes(id)) {
+              if (!kind) await apiAcknowledgeTeamMail(project, s.agentId, itemId).catch(() => {});
+              else useSessionQueue.getState().markHandled(`${key}|${id}`);
+            }
+            removeTeamMailDelivery(project, s.agentId, itemId, kind);
             delete pendingDeliveryRef.current[s.id]; // 앞 전달 확인 대기(deliveryGate)가 다음 항목을 계속 막지 않게
           }
         }
@@ -2549,7 +2556,8 @@ ${recentSnippet || "진행 내역 기록 없음"}
           if (!pmSession) continue;
           if (useSessionQueue.getState().handled.includes(`${queueKey(pmSession)}|report:${t.taskId}:${t.agentId}`)) continue;
           if (getTeamMailDeliveries().some((d) => d.project === project && d.agentId === t.agentId && d.id === t.taskId && d.kind === "task")) continue;
-          doneTasks.push(t);
+          if (t.agentId === pmSession.agentId) continue; // PM 본인 행은 자기 자신에게 완료 보고를 만들지 않음
+      doneTasks.push(t);
           continue;
         }
         const target = projSessions.find((s) => s.agentId === t.agentId);

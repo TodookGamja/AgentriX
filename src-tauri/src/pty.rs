@@ -167,6 +167,7 @@ pub fn resolve_safe_cwd(cwd: Option<String>) -> String {
 }
 
 impl PtyManager {
+    #[allow(clippy::too_many_arguments)] // start_session 인자를 그대로 전달하는 경계 함수
     pub fn start_session_with_def(
         &self,
         mut cli_def: CliDefinition,

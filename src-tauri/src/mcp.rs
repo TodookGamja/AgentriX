@@ -552,7 +552,7 @@ pub fn apply_item_to_paths(
                 .or_else(|| cfg.get("pluginName"))
                 .and_then(|v| v.as_str())
                 .unwrap_or(&item.id);
-            let safe_folder = folder_name.replace('@', "-").replace('/', "-");
+            let safe_folder = folder_name.replace(['@', '/'], "-");
             let target_dir = skills_dir.join(safe_folder);
             std::fs::create_dir_all(&target_dir)?;
             let skill_file = target_dir.join("SKILL.md");
