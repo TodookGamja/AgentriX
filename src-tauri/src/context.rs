@@ -75,12 +75,41 @@ fn claude_local_user(v: &Value) -> bool {
             ["<command-name>", "<local-command-stdout>", "<local-command-caveat>"].iter().any(|tag| content.starts_with(tag)))
 }
 
+/// Claude Code는 슬래시 명령을 입력하면 평문 user 항목("/compact")을 먼저 남기고, 뒤에 <command-name>/compact</command-name>과
+/// <local-command-stdout>을 남긴다. 그 짝이 뒤따르는 평문 항목은 모델 턴이 아니라 로컬 명령이므로 줄 번호를 모아 둔다.
+/// 스킬처럼 stdout 없이 모델 응답이 이어지는 명령, "/"로 시작하는 일반 프롬프트(짝 없음)는 포함하지 않는다.
+fn claude_plain_local_commands(content: &str) -> std::collections::HashSet<usize> {
+    let mut out = std::collections::HashSet::new();
+    let mut open: Vec<(usize, String)> = Vec::new(); // (평문 항목 줄, 명령 이름) 중 command-name 짝을 기다리는 것
+    let mut paired: Vec<(usize, String)> = Vec::new(); // command-name까지 나왔고 stdout을 기다리는 것
+    for (i, line) in content.lines().enumerate() {
+        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        if v.get("type").and_then(Value::as_str) != Some("user") || v.get("isSidechain").and_then(Value::as_bool) == Some(true) { continue; }
+        let Some(text) = v.pointer("/message/content").and_then(Value::as_str) else { continue };
+        if let Some(name) = text.strip_prefix("<command-name>").and_then(|t| t.split("</command-name>").next()) {
+            // 실제 기록은 뒤에 <command-message>·<command-args>가 붙으므로 닫는 태그까지만 이름으로 본다
+            let name = name.trim().to_string();
+            if let Some(p) = open.iter().rposition(|(_, n)| *n == name) { paired.push(open.remove(p)); }
+        } else if text.starts_with("<local-command-stdout>") {
+            out.extend(paired.drain(..).map(|(idx, _)| idx));
+        } else if !claude_local_user(&v) {
+            if let Some(cmd) = text.strip_prefix('/').and_then(|t| t.split_whitespace().next()) {
+                open.push((i, format!("/{cmd}")));
+            }
+        }
+    }
+    out
+}
+
 fn turn_started(content: &str, cli: &str) -> Option<i64> {
-    content.lines().rev().find_map(|line| {
+    let plain = if cli == "claude" { claude_plain_local_commands(content) } else { Default::default() };
+    let total = content.lines().count();
+    content.lines().rev().enumerate().find_map(|(r, line)| {
+        let idx = total - 1 - r;
         let v: Value = serde_json::from_str(line).ok()?;
         if v.get("isSidechain").and_then(Value::as_bool) == Some(true) { return None; }
         let started = if cli == "claude" {
-            v.get("type").and_then(Value::as_str) == Some("user") && !claude_local_user(&v)
+            v.get("type").and_then(Value::as_str) == Some("user") && !claude_local_user(&v) && !plain.contains(&idx)
         } else {
             v.get("type").and_then(Value::as_str) == Some("event_msg") && matches!(v.pointer("/payload/type").and_then(Value::as_str), Some("user_message" | "task_started"))
         };
@@ -90,11 +119,14 @@ fn turn_started(content: &str, cli: &str) -> Option<i64> {
 
 fn claude_completion(content: &str) -> Option<i64> {
     let mut local_output_at = None;
-    for line in content.lines().rev() {
+    let plain = claude_plain_local_commands(content);
+    let total = content.lines().count();
+    for (r, line) in content.lines().rev().enumerate() {
+        let idx = total - 1 - r;
         let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
         if v.get("isSidechain").and_then(Value::as_bool) == Some(true) { continue; }
         match v.get("type").and_then(Value::as_str) {
-            Some("user") if claude_local_user(&v) => {
+            Some("user") if claude_local_user(&v) || plain.contains(&idx) => {
                 if local_output_at.is_none() && v.pointer("/message/content").and_then(Value::as_str).is_some_and(|text| text.starts_with("<local-command-stdout>")) {
                     local_output_at = v.get("timestamp").and_then(Value::as_str).and_then(parse_ts).map(|t| t.timestamp_millis());
                 }
@@ -322,6 +354,36 @@ mod tests {
             let active = [user, running, caveat, &cmd, summary, output, boundary].join("\n");
             assert!(super::claude_completion(&active).is_none());
         }
+    }
+    #[test]
+    fn claude_plain_slash_entry_is_local_only_when_paired_with_command_name_and_stdout() {
+        let line = |ts: &str, v: &str| format!(r#"{{"timestamp":"2026-11-02T02:{ts}Z","type":"user","message":{{"content":{}}}}}"#, serde_json::json!(v));
+        let done = r#"{"timestamp":"2026-11-02T02:00:01Z","type":"assistant","message":{"stop_reason":"end_turn"}}"#;
+        let boundary = r#"{"timestamp":"2026-11-02T02:00:09Z","type":"system","subtype":"compact_boundary"}"#;
+        let first = line("00:00", "real request");
+        let end = super::parse_ts("2026-11-02T02:00:08Z").unwrap().timestamp_millis();
+        let real_cmd = |name: &str| line("00:03", &format!("<command-name>{name}</command-name>
+            <command-message>{}</command-message>
+            <command-args></command-args>", name.trim_start_matches('/')));
+        for (plain, name) in [("/compact", "/compact"), ("/clear", "/clear"), ("/model opus", "/model")] {
+            // 실제 순서: end_turn → 평문 → boundary → 요약 → caveat → command-name(+message+args) → stdout → attachment
+            let summary = r#"{"timestamp":"2026-11-02T02:00:04Z","type":"user","isCompactSummary":true,"message":{"content":"summary"}}"#;
+            let caveat = r#"{"timestamp":"2026-11-02T02:00:05Z","type":"user","isMeta":true,"message":{"content":"<local-command-caveat>x"}}"#;
+            let attach = r#"{"timestamp":"2026-11-02T02:00:09Z","type":"attachment"}"#;
+            let content = [first.clone(), done.into(), line("00:02", plain), boundary.into(), summary.into(), caveat.into(), real_cmd(name), line("00:08", "<local-command-stdout>ok"), attach.into()].join("
+");
+            assert_eq!(super::claude_completion(&content), Some(end), "{plain}");
+            assert_eq!(super::turn_started(&content, "claude"), super::parse_ts("2026-11-02T02:00:00Z").map(|t| t.timestamp_millis()), "{plain}");
+        }
+        // 스킬: command-name은 있으나 stdout 없이 모델 응답 대기 → 실행 중(완료 없음)
+        let skill = [first.clone(), done.into(), line("00:02", "/review"), real_cmd("/review")].join("
+");
+        assert!(super::claude_completion(&skill).is_none());
+        // 짝 없는 "/" 프롬프트는 일반 턴 시작
+        let path = [first.clone(), done.into(), line("00:02", "/usr/bin 에서 찾아줘")].join("
+");
+        assert!(super::claude_completion(&path).is_none());
+        assert_eq!(super::turn_started(&path, "claude"), super::parse_ts("2026-11-02T02:00:02Z").map(|t| t.timestamp_millis()));
     }
     #[test]
     fn turn_start_uses_user_or_task_event_without_sidechains() {

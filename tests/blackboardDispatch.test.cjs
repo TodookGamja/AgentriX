@@ -53,3 +53,13 @@ test("forgetEndedStarts: re-start after done/waiting redelivers once, steady �
   api.forgetEndedStarts(s3, t("start")); // 재착수 후 다음 완료도 PM에 보고
   assert.equal(s3.has("T1:done:a"), false);
 });
+
+test("T69: PM 수신 메일 꼬리말은 다음 단계 지시, 팀원 꼬리말은 불변", () => {
+  const agents = [{ id: "pm", name: "Conductor PM", roleTitle: "총괄 PM" }, { id: "a1", name: "Pixel", roleTitle: "프론트엔드" }];
+  const pm = api.mailProtocol("pm", agents), member = api.mailProtocol("a1", agents);
+  assert.ok(pm.endsWith("결과를 받으면 답장하지 말고 .ai-agents/BLACKBOARD.md를 확인해 다음 작업을 배정하거나 모두 끝났으면 최종 보고하세요."));
+  assert.ok(!pm.includes("불필요한 답장"));
+  assert.ok(member.endsWith("요청에는 답변하고, 결과 통보에는 불필요한 답장을 하지 마세요."));
+  assert.ok(!member.includes("다음 작업을 배정"));
+  assert.ok(api.collabProtocol("pm", agents).endsWith("최종 보고하세요."));
+});

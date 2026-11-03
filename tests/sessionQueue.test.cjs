@@ -153,3 +153,10 @@ test("T58/T59: stuck 항목은 화면에 본문 끝까지 찍히고 입력창 �
   assert.equal(got([mail], ["메일 ID: M_1. 이미 처리한", "응답1", "응답2", ...tail, "z"]), "[]");
   assert.equal(got([mail], null), "[]");
 });
+
+test("T65: inbox에서 사라진 mail 항목만 제거, 미처리·예약 중·assign/user는 유지", () => {
+  const list = [it("mail:A", "mail"), it("mail:B", "mail"), it("mail:C", "mail", { stuck: true }), it("assign:T_1", "assign"), it("u1", "user")];
+  const got = api.staleMailIds(list, new Set(["B"]), new Set(["C"]));
+  assert.equal(JSON.stringify(got), JSON.stringify(["mail:A"]));
+  assert.equal(JSON.stringify(api.staleMailIds(undefined, new Set(), new Set())), "[]");
+});

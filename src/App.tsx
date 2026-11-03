@@ -117,7 +117,7 @@ import { deliveryGate, logTurnStillBusy, tabIsActive, type PendingDelivery } fro
 import { DeliveryAttempt, withDeliveryDeadline } from "./lib/deliveryAttempt";
 import { CursorBusyError, readTerminalScreen, readTerminalTranscript, readCursorTurn } from "./lib/cursorScreen";
 import { useSessionQueue, queueKey } from "./lib/sessionQueueStore";
-import { nextQueueItem, previewOf, queueReservation, settledAutoIds, deliveredByScreen, type QueueSource } from "./lib/sessionQueue";
+import { nextQueueItem, previewOf, queueReservation, settledAutoIds, deliveredByScreen, staleMailIds, type QueueSource } from "./lib/sessionQueue";
 import { forgetSessionInput, getLastSubmission, getSubmissionVersion, getSessionInputHistory, hasPendingSessionInput, setInstructionKeyResolver } from "./lib/inputHistory";
 import { permissionLaunch } from "./lib/permissionSettings";
 import {
@@ -2224,6 +2224,12 @@ ${recentSnippet || "진행 내역 기록 없음"}
           if (stopped || !session.agentId) continue;
           try {
           const deliveries = getTeamMailDeliveries().filter((d) => d.project === project && d.agentId === session.agentId);
+          // 이미 처리(ack)돼 미처리 목록에서 사라진 메일 항목은 대기열에서 제거하고 handled로 막는다(재전송 0). 예약 중인 id는 유지.
+          for (const id of staleMailIds(useSessionQueue.getState().queues[queueKey(session)], new Set(messages.filter((m) => m.to === session.agentId).map((m) => m.id)), new Set(deliveries.filter((d) => !d.kind).map((d) => d.id)))) {
+            useSessionQueue.getState().remove(queueKey(session), id);
+            useSessionQueue.getState().markHandled(`${queueKey(session)}|${id}`);
+            delete queueSeenRef.current[`${queueKey(session)}|${id}`];
+          }
           for (const queued of messages.filter((m) => m.to === session.agentId)) {
             const id = `mail:${queued.id}`;
             const key = queueKey(session);

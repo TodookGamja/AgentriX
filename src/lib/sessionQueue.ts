@@ -127,3 +127,9 @@ export function deliveredByScreen(list: QueueItem[] | undefined, lines: string[]
   }
   return out;
 }
+
+// 미처리 메일 목록(inbox)에 더는 없는 mail:<id> 항목 = 이미 처리·ack된 메일. 대기열에 남아 있으면 head drain이 다시 보내므로 제거 대상이다.
+// 예약(전달 중) 중인 id는 진행 중일 수 있어 유지한다. 목록 조회가 실패하면 호출하지 않는다(호출부 try 안).
+export function staleMailIds(list: QueueItem[] | undefined, openMailIds: ReadonlySet<string>, reservedIds: ReadonlySet<string>): string[] {
+  return (list ?? []).filter((it) => it.source === "mail" && !openMailIds.has(it.id.slice(5)) && !reservedIds.has(it.id.slice(5))).map((it) => it.id);
+}
