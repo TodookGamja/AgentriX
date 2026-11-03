@@ -34,7 +34,7 @@ export const TaskApprovalBoard: React.FC<TaskApprovalBoardProps> = ({ projectPat
   const [mode, setMode] = useState(() => getApprovalMode(projectPath));
   const [approvals, setApprovals] = useState<TaskApproval[]>([]);
   const [notes, setNotes] = useState<Record<string, string>>({});
-  const [cards, setCards] = useState<(Card & { status: "start" | "done" | "wait"; confirmed: boolean; live: boolean; queued: boolean; waitReason: string })[]>([]);
+  const [cards, setCards] = useState<(Card & { status: "start" | "done" | "wait" | "closed"; confirmed: boolean; live: boolean; queued: boolean; waitReason: string })[]>([]);
   const [rejecting, setRejecting] = useState<string | null>(null);
   const [reason, setReason] = useState("");
   const [showAllDone, setShowAllDone] = useState(false);

@@ -2,7 +2,7 @@
 export interface BoardTask {
   taskId: string;
   agentId: string;
-  status: "start" | "done" | "wait";
+  status: "start" | "done" | "wait" | "closed"; // closed: 통합·취소된 행(전달·완료 보고 없음, 작업보드에서는 완료 칸)
 }
 
 export function hasTaskResultMail(mails: { from: string; to: string; subject: string; body: string }[], taskId: string, agentId: string, pmId: string): boolean {
@@ -16,7 +16,7 @@ export function hasTaskResultMail(mails: { from: string; to: string; subject: st
 }
 
 export function boardTaskColumn(input: { status: BoardTask["status"]; manual: boolean; approval?: string; confirmed: boolean; live: boolean; queued: boolean }): "approval" | "waiting" | "running" | "done" | "rejected" {
-  if (input.status === "done") return "done";
+  if (input.status === "done" || input.status === "closed") return "done";
   if (input.status === "wait") return "waiting";
   if (input.approval === "rejected") return "rejected";
   if (input.manual && (!input.approval || input.approval === "pending")) return "approval";
@@ -34,9 +34,10 @@ function findAgentByName(cell: string, names: Record<string, string>): string | 
 }
 
 // 상태 칸에서 가장 앞에 나온 표시로 판정 (완료 메모에 "⏳/🔥/✅" 같은 글이 섞여도 앞의 ✅ 완료가 우선, ⏳ 대기는 null)
-export function statusKind(status: string): "start" | "done" | null {
-  const m = status.match(/⏳|대기|🔥|착수|in-progress|✅|완료|done/i);
+export function statusKind(status: string): "start" | "done" | "closed" | null {
+  const m = status.match(/⏳|대기|🔥|착수|in-progress|✅|완료|done|통합|취소|merged|cancel(?:l)?ed/i);
   if (!m) return null;
+  if (/통합|취소|merged|cancel/i.test(m[0])) return "closed";
   return /🔥|착수|in-progress/i.test(m[0]) ? "start" : /⏳|대기/.test(m[0]) ? null : "done";
 }
 
@@ -140,7 +141,7 @@ export function boardTaskTitle(board: string, taskId: string): string {
 export function boardProtocol(agents: { id: string; name: string; roleTitle: string }[]): string {
   const roster = agents.map((a) => `${a.name}(${a.roleTitle})`).join(", ");
   const taskPrefix = `T${Date.now()}_`;
-  return `[총괄 협업 규칙] 당신은 조율만 담당합니다. 코드 구현, 수정, 테스트를 직접 수행하거나 자체 하위 에이전트를 생성하지 마세요. 등록된 다른 팀원에게 작업을 배정하고 결과를 확인하세요. [작업표 규칙] .ai-agents/BLACKBOARD.md에 "| ID | 작업 | 담당 | 선행 | 기준 | 상태 |" 표로 작업을 적으세요. 이번 작업 ID는 ${taskPrefix}1, ${taskPrefix}2처럼 지정하고, 담당 칸에는 아래 팀원의 이름을 정확히 쓰고, 상태는 ⏳ 대기 / 🔥 착수 / ✅ 완료 중 하나만 씁니다. 🔥 착수로 바꾸면 담당 에이전트 터미널에 자동 전달되고, ✅ 완료되면 당신에게 보고됩니다. BLACKBOARD.md는 셸 명령(PowerShell 등)이 아닌 파일 편집 도구로 UTF-8 그대로 수정하세요(한글·이모지 깨짐 방지). 팀원: ${roster}`;
+  return `[총괄 협업 규칙] 당신은 조율만 담당합니다. 코드 구현, 수정, 테스트를 직접 수행하거나 자체 하위 에이전트를 생성하지 마세요. 등록된 다른 팀원에게 작업을 배정하고 결과를 확인하세요. [작업표 규칙] .ai-agents/BLACKBOARD.md에 "| ID | 작업 | 담당 | 선행 | 기준 | 상태 |" 표로 작업을 적으세요. 이번 작업 ID는 ${taskPrefix}1, ${taskPrefix}2처럼 지정하고, 담당 칸에는 아래 팀원의 이름을 정확히 쓰고, 상태는 ⏳ 대기 / 🔥 착수 / ✅ 완료 중 하나만 씁니다(다른 작업에 합치거나 취소한 행은 상태를 "통합 → <ID>" 또는 "취소"로 바꾸세요. 대기로 두지 마세요). 🔥 착수로 바꾸면 담당 에이전트 터미널에 자동 전달되고, ✅ 완료되면 당신에게 보고됩니다. BLACKBOARD.md는 셸 명령(PowerShell 등)이 아닌 파일 편집 도구로 UTF-8 그대로 수정하세요(한글·이모지 깨짐 방지). 팀원: ${roster}`;
 }
 
 export function mailProtocol(agentId: string, agents: { id: string; name: string; roleTitle: string }[]): string {

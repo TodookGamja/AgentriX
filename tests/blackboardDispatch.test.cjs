@@ -93,3 +93,32 @@ test("T5: App.tsx 정리 경로는 모두 boardTasks(2회 확인) 기준", () =>
   assert.ok(src.includes("revokedAssignIds(list, new Set(boardTasks.filter"));
   assert.ok(src.includes("clearDispatchNotes(project, (id) => boardTasks.some"));
 });
+
+test("T1793692464223_1: 통합·취소 행은 closed — 전달·완료 보고 대상 아님, 대기 칸 제외, 🔥→통합은 정리 대상", () => {
+  const board = [
+    "| ID | 작업 | 담당 | 선행 | 기준 | 상태 |",
+    "|---|---|---|---|---|---|",
+    "| T1_1 | a | agentA | — | x | 통합 → T1_9 |",
+    "| T1_2 | b | agentA | — | x | 취소 |",
+    "| T1_3 | c | agentA | — | x | cancelled |",
+    "| T1_4 | d | agentA | — | x | merged into T1_9 |",
+    "| T1_5 | e | agentA | — | x | ⏳ 대기 (취소 아님) |",
+    "| T1_6 | f | agentA | — | x | ✅ 완료 (T1_2 통합) |",
+    "| T1_7 | g | agentA | — | x | 🔥 착수 |",
+  ].join("\n");
+  const t = api.parseBoardTasks(board, ["agentA"], undefined, true);
+  const st = Object.fromEntries(t.map((x) => [x.taskId, x.status]));
+  assert.equal(JSON.stringify(st), JSON.stringify({ T1_1: "closed", T1_2: "closed", T1_3: "closed", T1_4: "closed", T1_5: "wait", T1_6: "done", T1_7: "start" }));
+  assert.equal(api.boardTaskColumn({ status: "closed", manual: false, confirmed: false, live: true, queued: false }), "done");
+  // 🔥였다가 통합으로 바뀌면 start 기록 정리
+  const sent = new Set(["T1_1:start:agentA"]);
+  assert.equal(api.forgetEndedStarts(sent, t), true);
+  assert.ok(!sent.has("T1_1:start:agentA"));
+  const src = fs.readFileSync("src/App.tsx", "utf8").replace(/\r/g, "");
+  assert.ok(src.includes('if (t.status === "wait" || t.status === "closed") continue;'));
+});
+
+test("T1793692464223_1: PM 지침에 통합·취소 상태 표기 안내", () => {
+  const s = fs.readFileSync("src/lib/blackboardDispatch.ts", "utf8");
+  assert.ok(s.includes('"통합 → <ID>" 또는 "취소"'));
+});

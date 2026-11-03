@@ -2553,7 +2553,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
       }
       const doneTasks: typeof tasks = [];
       for (const t of tasks) {
-        if (t.status === "wait") continue;
+        if (t.status === "wait" || t.status === "closed") continue;
         const key = `${t.taskId}:${t.status}:${t.agentId}`;
         if (sent.has(key)) continue;
         // 수동 승인 모드: 사용자가 승인한 작업만 전달, 반려는 사유를 PM에게 알리고 종료
