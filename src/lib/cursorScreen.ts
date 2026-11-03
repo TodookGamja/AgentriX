@@ -9,16 +9,21 @@ export class CursorBusyError extends Error {
 }
 
 export function cursorTurnBusy(lines: string[]): boolean {
-  return lines.some((line) => /ctrl\+c\s+to\s+stop/i.test(line));
+  const bottom = lines.slice(-5);
+  return bottom.some((line) => /ctrl\+c\s+to\s+stop|\brunning\b/i.test(line)) ||
+    (bottom.some((line) => /\b(?:approval|run this command)\b/i.test(line)) &&
+      bottom.some((line) => /\ballow\b/i.test(line)));
 }
 
-export function cursorTurnFromLines(lines: string[], previous: CursorTurn | undefined, now: number): CursorTurn | undefined {
+export function cursorTurnFromLines(lines: string[], previous: CursorTurn | undefined, now: number, quietSince?: number | null, output = false): CursorTurn {
   if (cursorTurnBusy(lines)) {
     return previous && !previous.completedAt ? { startedAt: previous.startedAt } : { startedAt: now };
   }
-  if (!previous || previous.completedAt) return previous;
+  if (!previous || (previous.completedAt && output)) return { startedAt: now, lastFalseAt: now };
+  if (previous.completedAt) return previous;
   if (previous.lastFalseAt === undefined) return { ...previous, lastFalseAt: now };
-  return now - previous.lastFalseAt >= 1000 ? { ...previous, completedAt: now } : previous;
+  return now - previous.lastFalseAt >= 5000 && quietSince != null && now - quietSince >= 3000
+    ? { ...previous, completedAt: now } : previous;
 }
 
 export function cursorPastedSubmission(lines: string[], before: string[]): boolean {
@@ -45,10 +50,10 @@ export function readTerminalScreen(id: string): string[] | null {
   return screens.get(id)?.() ?? null;
 }
 
-export function readCursorTurn(id: string): CursorTurn | undefined {
+export function readCursorTurn(id: string, quietSince?: number | null, output = false): CursorTurn | undefined {
   const lines = readTerminalScreen(id);
   if (!lines) return undefined;
-  const next = cursorTurnFromLines(lines, turns.get(id), Date.now());
+  const next = cursorTurnFromLines(lines, turns.get(id), Date.now(), quietSince, output);
   if (next) turns.set(id, next);
   return next;
 }

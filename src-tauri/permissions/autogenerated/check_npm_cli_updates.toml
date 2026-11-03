@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-check-npm-cli-updates"
+description = "Enables the check_npm_cli_updates command without any pre-configured scope."
+commands.allow = ["check_npm_cli_updates"]
+
+[[permission]]
+identifier = "deny-check-npm-cli-updates"
+description = "Denies the check_npm_cli_updates command without any pre-configured scope."
+commands.deny = ["check_npm_cli_updates"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-install-npm-cli-update"
+description = "Enables the install_npm_cli_update command without any pre-configured scope."
+commands.allow = ["install_npm_cli_update"]
+
+[[permission]]
+identifier = "deny-install-npm-cli-update"
+description = "Denies the install_npm_cli_update command without any pre-configured scope."
+commands.deny = ["install_npm_cli_update"]

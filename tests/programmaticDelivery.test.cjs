@@ -4,16 +4,18 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 const ts = require("typescript");
 
-function setup(pasteMode = true) {
+function setup(pasteMode = true, quiet = Date.now()) {
   const session = { id: "resumed", agentId: "agent-1", cliId: "codex", cwd: "project", startedAt: "2026-11-02T00:00:00Z", rolePrompt: "역할 지침", roleInSystem: false };
   const writes = [];
+  const routes = [];
   let enters = 0;
   let inputVersion = 0;
   const invoke = async (name, args) => {
+    if (name === "route_team_mail") { routes.push(args.projectPath); await new Promise(setImmediate); return []; }
     if (name === "get_project_agents") return [{ id: session.agentId, name: "Forge", roleTitle: "Engineer", rolePrompt: session.rolePrompt, autoBrief: true }];
     if (name === "get_session_context") return { source: "log", startedAt: enters >= 2 ? 200 : 100 };
     if (name === "get_session_paste_mode") return pasteMode;
-    if (name === "get_session_quiet_since") return Date.now();
+    if (name === "get_session_quiet_since") return quiet;
     if (name === "read_session_output") return { data: "prompt redraw", nextCursor: 0 };
     if (name === "write_to_session") { writes.push(args.data); if (args.data === "\r") enters++; return; }
     throw new Error(`unexpected invoke: ${name}`);
@@ -37,8 +39,16 @@ function setup(pasteMode = true) {
   load("src/lib/sessionWriteQueue.ts", "./sessionWriteQueue");
   modules["./sessionWriteQueue"].enterReady = () => true;
   const bridge = load("src/lib/tauriBridge.ts", "./tauriBridge");
-  return { bridge, writes, session, role: modules["./handoffRelay"], screen: modules["./cursorScreen"] };
+  return { bridge, writes, routes, session, role: modules["./handoffRelay"], screen: modules["./cursorScreen"] };
 }
+
+test("concurrent mail routing for the same project shares one request", async () => {
+  const { bridge, routes } = setup();
+  await Promise.all([bridge.apiRouteTeamMail("project"), bridge.apiRouteTeamMail("project")]);
+  assert.equal(routes.length, 1);
+  await bridge.apiRouteTeamMail("project");
+  assert.equal(routes.length, 2);
+});
 
 test("Codex paste retries Enter without repeating body when a rendered chip remains", async () => {
   for (const mode of [false, null]) {
@@ -59,6 +69,15 @@ test("Cursor checks rendered busy state immediately before writing", async () =>
   session.cliId = "cursor";
   session.roleInSystem = true;
   screen.registerTerminalScreen(session.id, () => ["Working", "ctrl+c to stop"]);
+  await assert.rejects(bridge.apiWriteToSession(session.id, "task\r", true, { hasStarted: async () => false, onResult() {} }), /응답 중/);
+  assert.deepEqual(writes, []);
+});
+
+test("Cursor refuses a write while output is not quiet even with a clear screen", async () => {
+  const { bridge, writes, session, screen } = setup(true, null);
+  session.cliId = "cursor";
+  session.roleInSystem = true;
+  screen.registerTerminalScreen(session.id, () => ["→"]);
   await assert.rejects(bridge.apiWriteToSession(session.id, "task\r", true, { hasStarted: async () => false, onResult() {} }), /응답 중/);
   assert.deepEqual(writes, []);
 });

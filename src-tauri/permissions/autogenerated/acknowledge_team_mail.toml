@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-acknowledge-team-mail"
+description = "Enables the acknowledge_team_mail command without any pre-configured scope."
+commands.allow = ["acknowledge_team_mail"]
+
+[[permission]]
+identifier = "deny-acknowledge-team-mail"
+description = "Denies the acknowledge_team_mail command without any pre-configured scope."
+commands.deny = ["acknowledge_team_mail"]

@@ -14,7 +14,7 @@ import { collabProtocol } from "./blackboardDispatch";
 import { useAppStore } from "./store";
 import { enterReady, needsEnterRetry, pasteWrap, queueSessionWrite, submissionStarted } from "./sessionWriteQueue";
 import type { DeliveryAttempt } from "./deliveryAttempt";
-import { codexPastePending, CursorBusyError, cursorPastedSubmission, cursorTurnBusy, readTerminalScreen } from "./cursorScreen";
+import { codexPastePending, CursorBusyError, cursorPastedSubmission, cursorTurnBusy, readCursorTurn, readTerminalScreen } from "./cursorScreen";
 import type {
   ApiKeyStatus,
   ApplyResult,
@@ -366,7 +366,10 @@ export async function apiWriteToSession(sessionId: string, data: string, injecte
       const cursorBefore = session?.cliId === "cursor" ? readTerminalScreen(sessionId) : null;
         const pasteMode = await invoke<boolean | null>("get_session_paste_mode", { sessionId }).catch(() => null);
       const cursorAtWrite = session?.cliId === "cursor" ? readTerminalScreen(sessionId) : null;
-      if (cursorAtWrite && cursorTurnBusy(cursorAtWrite)) throw new CursorBusyError();
+      if (session?.cliId === "cursor") {
+        const quiet = await apiGetSessionQuietSince(sessionId, 3000).catch(() => null);
+        if (!cursorAtWrite || !quiet || !readCursorTurn(sessionId, quiet)?.completedAt) throw new CursorBusyError();
+      }
       if (verify && getUserInputVersion(sessionId) !== inputVersion) throw new Error("사용자 입력으로 전달이 중단되었습니다.");
       verify?.attempt?.commit();
       const wrapped = pasteWrap(body, pasteMode, session?.cliId);
@@ -446,8 +449,14 @@ export interface TeamMail {
   body: string;
 }
 
+const routingMail = new Map<string, Promise<TeamMail[]>>();
 export async function apiRouteTeamMail(projectPath: string): Promise<TeamMail[]> {
-  return isTauriRuntime() ? invoke<TeamMail[]>("route_team_mail", { projectPath }) : [];
+  if (!isTauriRuntime()) return [];
+  const pending = routingMail.get(projectPath);
+  if (pending) return pending;
+  const request = invoke<TeamMail[]>("route_team_mail", { projectPath }).finally(() => routingMail.delete(projectPath));
+  routingMail.set(projectPath, request);
+  return request;
 }
 
 export async function apiAcknowledgeTeamMail(projectPath: string, agentId: string, messageId: string): Promise<void> {
@@ -469,9 +478,9 @@ export async function apiGetSessionContext(
   });
 }
 
-export async function apiGetSessionQuietSince(sessionId: string): Promise<number | null> {
+export async function apiGetSessionQuietSince(sessionId: string, quietMs?: number): Promise<number | null> {
   if (!isTauriRuntime()) return null;
-  return invoke<number | null>("get_session_quiet_since", { sessionId });
+  return invoke<number | null>("get_session_quiet_since", { sessionId, quietMs });
 }
 
 export async function apiResizeSession(

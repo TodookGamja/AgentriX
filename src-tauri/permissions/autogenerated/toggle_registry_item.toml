@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-toggle-registry-item"
+description = "Enables the toggle_registry_item command without any pre-configured scope."
+commands.allow = ["toggle_registry_item"]
+
+[[permission]]
+identifier = "deny-toggle-registry-item"
+description = "Denies the toggle_registry_item command without any pre-configured scope."
+commands.deny = ["toggle_registry_item"]

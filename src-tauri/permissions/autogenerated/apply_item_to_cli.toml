@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-apply-item-to-cli"
+description = "Enables the apply_item_to_cli command without any pre-configured scope."
+commands.allow = ["apply_item_to_cli"]
+
+[[permission]]
+identifier = "deny-apply-item-to-cli"
+description = "Denies the apply_item_to_cli command without any pre-configured scope."
+commands.deny = ["apply_item_to_cli"]

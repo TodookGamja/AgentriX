@@ -9,6 +9,17 @@ const js = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind
 const api = {};
 vm.runInNewContext(js, { exports: api, require: () => ({}) });
 
+test("only the assigned agent's result mail for this exact task replaces its report", () => {
+  const mail = { from: "agent", to: "pm", subject: "T123_4 작업 완료", body: "결과" };
+  assert.equal(api.hasTaskResultMail([mail], "T123_4", "agent", "pm"), true);
+  assert.equal(api.hasTaskResultMail([{ ...mail, subject: "T123_4 작업", body: "결과를 확인했습니다" }], "T123_4", "agent", "pm"), true);
+  assert.equal(api.hasTaskResultMail([mail], "T123_40", "agent", "pm"), false);
+  assert.equal(api.hasTaskResultMail([mail], "T123_4", "other", "pm"), false);
+  assert.equal(api.hasTaskResultMail([{ ...mail, subject: "T123_4 완료 문의" }], "T123_4", "agent", "pm"), false);
+  assert.equal(api.hasTaskResultMail([{ ...mail, body: "작업을 완료하지 못했습니다" }], "T123_4", "agent", "pm"), false);
+  assert.equal(api.hasTaskResultMail([{ ...mail, to: "other" }], "T123_4", "agent", "pm"), false);
+});
+
 test("table rows accept non-T prefixed IDs (SEC1) and ignore plain words", () => {
   const board = [
     "| ID | 작업 | 담당 | 선행 | 상태 |",

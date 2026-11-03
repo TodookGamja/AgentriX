@@ -57,6 +57,14 @@ export function nextQueueItem(list: QueueItem[] | undefined): QueueItem | undefi
   return list?.[0];
 }
 
+export function queueReservation(item: QueueItem, session: { id: string; agentId?: string | null; cwd: string }, now: number) {
+  if (!session.agentId || item.source === "user" || !item.id.startsWith(`${item.source}:`)) return null;
+  const id = item.id.slice(item.source.length + 1);
+  if (!id || (item.source === "report" && !id.includes(":"))) return null;
+  return { id, agentId: session.agentId, project: session.cwd, sessionId: session.id, submittedAt: now,
+    kind: item.source === "assign" ? "task" as const : item.source === "report" ? "report" as const : undefined, unconfirmed: true };
+}
+
 export function nextUserItem(list: QueueItem[] | undefined): QueueItem | undefined {
   const first = nextQueueItem(list);
   return first?.source === "user" && !first.stuck ? first : undefined;
@@ -69,4 +77,22 @@ export function dropStaleAuto(map: QueueMap, isFresh: (key: string, id: string) 
     for (const it of list) if (it.source !== "user" && !isFresh(key, it.id)) next = removeItem(next, key, it.id);
   }
   return next;
+}
+
+// 이미 끝난 자동 항목 id: 보드에서 ✅가 된 assign:<ID>(담당자가 받아 수행했다는 증거)와, PM이 이미 결과 메일을 받은 report:<ID>:<agent>.
+// 🔥 행은 배정 직후에도 🔥라서 전달 증거가 아니므로 제외한다. 근거 없는 stuck 항목은 그대로 둔다(중복 전달 방지).
+export function settledAutoIds(
+  list: QueueItem[] | undefined,
+  doneTaskIds: ReadonlySet<string>,
+  hasResultMail: (taskId: string, reporterId: string) => boolean
+): string[] {
+  const out: string[] = [];
+  for (const it of list ?? []) {
+    if (it.source === "assign" && doneTaskIds.has(it.id.slice(7))) out.push(it.id);
+    else if (it.source === "report") {
+      const [taskId, reporterId] = it.id.slice(7).split(":");
+      if (taskId && reporterId && hasResultMail(taskId, reporterId)) out.push(it.id);
+    }
+  }
+  return out;
 }

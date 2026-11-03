@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-seed-project-agents-preset"
+description = "Enables the seed_project_agents_preset command without any pre-configured scope."
+commands.allow = ["seed_project_agents_preset"]
+
+[[permission]]
+identifier = "deny-seed-project-agents-preset"
+description = "Denies the seed_project_agents_preset command without any pre-configured scope."
+commands.deny = ["seed_project_agents_preset"]

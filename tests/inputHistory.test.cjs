@@ -120,7 +120,7 @@ test("T6: App sendToIdleTeamSessionRaw 공통 경로 — 락 사유·pending 가
   assert.match(app, /teamDeliveryLocksRef\.current\.has\(session\.id\)[\s\S]{0,120}앞 전달 처리 중/);
   assert.match(app, /hasPendingSessionInput\(session\.id\)[\s\S]{0,60}입력창에 30초 안에 친 글이 남아 있음/);
   // 사용자 대기열·배정·완료보고 모두 sendToIdleTeamSession
-  assert.match(app, /nextUserItem[\s\S]{0,220}sendToIdleTeamSession/);
+  assert.match(app, /nextQueueItem[\s\S]{0,400}sendToIdleTeamSession/);
   assert.match(app, /sendToIdleTeamSession\([\s\S]{0,500}source: "assign"/);
   assert.match(app, /sendToIdleTeamSession\([\s\S]{0,500}source: "report"/);
   const bridge = fs.readFileSync(path.join(ROOT, "src/lib/tauriBridge.ts"), "utf8");

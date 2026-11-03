@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-analyze-project-workspace"
+description = "Enables the analyze_project_workspace command without any pre-configured scope."
+commands.allow = ["analyze_project_workspace"]
+
+[[permission]]
+identifier = "deny-analyze-project-workspace"
+description = "Denies the analyze_project_workspace command without any pre-configured scope."
+commands.deny = ["analyze_project_workspace"]

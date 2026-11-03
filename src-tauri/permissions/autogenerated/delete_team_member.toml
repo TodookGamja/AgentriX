@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-delete-team-member"
+description = "Enables the delete_team_member command without any pre-configured scope."
+commands.allow = ["delete_team_member"]
+
+[[permission]]
+identifier = "deny-delete-team-member"
+description = "Denies the delete_team_member command without any pre-configured scope."
+commands.deny = ["delete_team_member"]

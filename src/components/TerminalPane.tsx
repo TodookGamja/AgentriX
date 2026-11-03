@@ -412,10 +412,10 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
         cursorRef.current = chunk.nextCursor;        if (chunk.data && chunk.data.length > 0) {
           // 스크롤을 강제로 내리지 않는다: 맨 아래에 있으면 xterm이 알아서 따라가고, 위로 올려 둔 경우엔 그대로 둔다.
           if (replayed) {
-            term.write(chunk.data, () => { if (session.cliId === "cursor") readCursorTurn(session.id); });
+            term.write(chunk.data, () => { if (session.cliId === "cursor") readCursorTurn(session.id, undefined, true); });
             onOutputChunkRef.current?.(session.id, chunk.data);
           } else {
-            term.write(chunk.data, () => { replaying = false; if (session.cliId === "cursor") readCursorTurn(session.id); });
+            term.write(chunk.data, () => { replaying = false; if (session.cliId === "cursor") readCursorTurn(session.id, undefined, true); });
           }
           replayed = true;
         } else if (!replayed) {

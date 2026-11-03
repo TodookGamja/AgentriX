@@ -1,0 +1,27 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "sensitive",
+  "description": "민감 커맨드(업데이트·설치·세션 쓰기·자격 증명·파일/URL·초기화) 전용 권한",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "allow-update-plugin",
+    "allow-install-token-tool",
+    "allow-install-npm-cli-update",
+    "allow-perform-in-app-update",
+    "allow-write-to-session",
+    "allow-start-session",
+    "allow-stop-session",
+    "allow-get-detected-cli-credentials",
+    "allow-request-with-detected-credential",
+    "allow-get-api-keys",
+    "allow-save-api-key",
+    "allow-delete-api-key",
+    "allow-run-cli-deep-analysis",
+    "allow-reset-app-data",
+    "allow-open-external-url",
+    "allow-read-file-as-base64",
+    "allow-app-window-exit"
+  ]
+}

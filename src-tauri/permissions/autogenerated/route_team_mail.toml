@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-route-team-mail"
+description = "Enables the route_team_mail command without any pre-configured scope."
+commands.allow = ["route_team_mail"]
+
+[[permission]]
+identifier = "deny-route-team-mail"
+description = "Denies the route_team_mail command without any pre-configured scope."
+commands.deny = ["route_team_mail"]

@@ -15,6 +15,74 @@ test("tabs stay active for observed log turns or recent output and stop when idl
   assert.equal(api.tabIsActive(100, undefined), false);
 });
 
+test("recent output marks every CLI tab active even with a completed Cursor turn", () => {
+  for (const cli of ["claude", "codex", "cursor", "agy"]) {
+    assert.equal(api.tabIsActive(null, cli === "cursor" ? { startedAt: 100, completedAt: 200 } : undefined), true, cli);
+    assert.equal(api.tabIsActive(200, { startedAt: 100, completedAt: 200 }), false, cli);
+  }
+});
+
+test("busy tabs and split panels retain a static ring when motion is reduced", () => {
+  const app = fs.readFileSync("src/App.tsx", "utf8");
+  assert.match(app, /animate-pulse motion-reduce:animate-none ring-2 ring-cyan-400/);
+  assert.match(app, /ring-1 ring-cyan-400 shrink-0[\s\S]{0,120}animate-spin motion-reduce:animate-none/);
+});
+
+test("tab polling reflects active output for every CLI", async () => {
+  const source = ts.createSourceFile("App.tsx", fs.readFileSync("src/App.tsx", "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  let effect;
+  function visit(node) {
+    if (ts.isCallExpression(node) && node.expression.getText(source) === "useEffect" && node.arguments[0]?.getText(source).includes("setBusySessionIds")) effect = node.arguments[0].getText(source);
+    ts.forEachChild(node, visit);
+  }
+  visit(source);
+  assert.ok(effect);
+  const ids = ["claude", "codex", "cursor", "agy"];
+  let visible = "";
+  let quiet = null;
+  let tick;
+  const sandbox = {
+    module: { exports: null },
+    useAppStore: { getState: () => ({ sessions: ids.map((id) => ({ id, cliId: id })) }) },
+    apiGetSessionQuietSince: async () => quiet,
+    readCursorTurn: () => ({ startedAt: 100, completedAt: 200 }),
+    tabTurnRef: { current: {} }, tabIsActive: api.tabIsActive,
+    setBusySessionIds: (value) => { visible = value; },
+    window: { setInterval: (callback) => { tick = callback; return 1; }, clearInterval: () => {} },
+  };
+  vm.runInNewContext(ts.transpileModule(`module.exports = ${effect}`, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, sandbox);
+  sandbox.module.exports();
+  await new Promise(setImmediate);
+  assert.equal(visible, ids.join(","));
+  quiet = 200;
+  tick();
+  await new Promise(setImmediate);
+  assert.equal(visible, "");
+});
+
+test("Claude local-command completion waits for output to settle and never overrides a running turn", async () => {
+  const source = ts.createSourceFile("App.tsx", fs.readFileSync("src/App.tsx", "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  let expression;
+  function visit(node) {
+    if (ts.isVariableDeclaration(node) && node.name.getText(source) === "getTurnContext") expression = node.initializer.getText(source);
+    ts.forEachChild(node, visit);
+  }
+  visit(source);
+  assert.ok(expression);
+  let quiet = null;
+  let ctx = { source: "claude-log", tokens: 10, window: null, startedAt: 50, completedAt: 200 };
+  const sandbox = { module: { exports: null }, getLastSubmission: () => 100,
+    apiGetSessionContext: async () => ctx, apiGetSessionQuietSince: async (_id, ms) => { assert.equal(ms, 3000); return quiet; },
+    logTurnStillBusy: api.logTurnStillBusy, Date };
+  vm.runInNewContext(ts.transpileModule(`module.exports = ${expression}`, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, sandbox);
+  const session = { id: "s", cliId: "claude" };
+  assert.equal(await sandbox.module.exports(session, []), null);
+  quiet = 200;
+  assert.equal((await sandbox.module.exports(session, [])).completedAt, 200);
+  ctx = { ...ctx, startedAt: 300, completedAt: null };
+  assert.equal((await sandbox.module.exports(session, [])).completedAt, null);
+});
+
 test("a running or ambiguous Codex turn cannot be treated as idle on silence", () => {
   assert.equal(api.logTurnStillBusy("codex", { startedAt: 100, completedAt: null }), true);
   assert.equal(api.logTurnStillBusy("codex", { startedAt: 100, completedAt: 200 }), false);

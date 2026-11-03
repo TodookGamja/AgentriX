@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-upsert-project-agent"
+description = "Enables the upsert_project_agent command without any pre-configured scope."
+commands.allow = ["upsert_project_agent"]
+
+[[permission]]
+identifier = "deny-upsert-project-agent"
+description = "Denies the upsert_project_agent command without any pre-configured scope."
+commands.deny = ["upsert_project_agent"]

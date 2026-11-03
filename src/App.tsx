@@ -109,7 +109,7 @@ import { AiDeepTeamModal } from "./components/AiDeepTeamModal";
 import { MarkdownLite } from "./components/MarkdownLite";
 import { FolderPickerModal } from "./components/FolderPickerModal";
 import { AgentrixLogo } from "./components/AgentrixLogo";
-import { boardProtocol, collabProtocol, forgetEndedStarts, mailProtocol, parseBoardTasks } from "./lib/blackboardDispatch";
+import { boardProtocol, collabProtocol, forgetEndedStarts, hasTaskResultMail, mailProtocol, parseBoardTasks } from "./lib/blackboardDispatch";
 import { getTeamMailDeliveries, pruneStaleDeliveries, pruneStaleMailDeliveries, removeTeamMailDelivery, reserveTeamMailDelivery, saveTeamMailDelivery } from "./lib/teamMailDelivery";
 import { findApproval, getApprovalMode, setDispatchNote, upsertApproval } from "./lib/taskApproval";
 import { countNewChars } from "./lib/tokenEstimate";
@@ -117,7 +117,7 @@ import { deliveryGate, logTurnStillBusy, tabIsActive, type PendingDelivery } fro
 import { DeliveryAttempt, withDeliveryDeadline } from "./lib/deliveryAttempt";
 import { CursorBusyError, readTerminalScreen, readCursorTurn } from "./lib/cursorScreen";
 import { useSessionQueue, queueKey } from "./lib/sessionQueueStore";
-import { nextUserItem, previewOf, type QueueSource } from "./lib/sessionQueue";
+import { nextQueueItem, previewOf, queueReservation, settledAutoIds, type QueueSource } from "./lib/sessionQueue";
 import { forgetSessionInput, getLastSubmission, getSubmissionVersion, getSessionInputHistory, hasPendingSessionInput, setInstructionKeyResolver } from "./lib/inputHistory";
 import { permissionLaunch } from "./lib/permissionSettings";
 import {
@@ -409,7 +409,9 @@ export const App: React.FC = () => {
   }, []);
   useEffect(() => {
     const id = window.setInterval(() => {
-      for (const session of useAppStore.getState().sessions) if (session.cliId === "cursor") readCursorTurn(session.id);
+      for (const session of useAppStore.getState().sessions) if (session.cliId === "cursor") {
+        void apiGetSessionQuietSince(session.id, 3000).then((quiet) => readCursorTurn(session.id, quiet)).catch(() => {});
+      }
     }, 1000);
     return () => window.clearInterval(id);
   }, []);
@@ -1366,7 +1368,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
       const quiet = await Promise.all(ids.map((id) => apiGetSessionQuietSince(id).catch(() => 0)));
       setBusySessionIds(ids.filter((id, i) => {
         const turn = sessions[i].cliId === "cursor" ? readCursorTurn(id) : undefined;
-        return turn ? !turn.completedAt : tabIsActive(quiet[i], tabTurnRef.current[id]);
+        return tabIsActive(quiet[i], turn ?? tabTurnRef.current[id]);
       }).join(","));
     };
     void tick();
@@ -2056,7 +2058,10 @@ ${recentSnippet || "진행 내역 기록 없음"}
     }
     const ctx = await apiGetSessionContext(session, claimed).catch(() => null);
     const lastSubmit = getLastSubmission(session.id);
-    if (ctx?.completedAt && ctx.completedAt > lastSubmit) return ctx;
+    if (ctx?.completedAt && ctx.completedAt > lastSubmit) {
+      if (session.cliId === "claude" && !await apiGetSessionQuietSince(session.id, 3000).catch(() => null)) return null;
+      return ctx;
+    }
     // A running or ambiguous log takes precedence over terminal silence.
     if (logTurnStillBusy(session.cliId, ctx)) return ctx;
     const quiet = await apiGetSessionQuietSince(session.id).catch(() => null);
@@ -2338,8 +2343,38 @@ ${recentSnippet || "진행 내역 기록 없음"}
       busy = true;
       try {
         for (const s of useAppStore.getState().sessions) {
-          const item = nextUserItem(useSessionQueue.getState().queues[queueKey(s)]);
-          if (item) await sendToIdleTeamSession(s, item.payload, { id: item.id, source: "user", preview: item.preview });
+          const key = queueKey(s);
+          const item = nextQueueItem(useSessionQueue.getState().queues[key]);
+          if (!item || item.stuck || item.unconfirmed) continue;
+          if (item.source === "user") {
+            await sendToIdleTeamSession(s, item.payload, { id: item.id, source: item.source, preview: item.preview });
+            continue;
+          }
+          const delivery = queueReservation(item, s, Date.now());
+          if (!delivery) continue;
+          if (item.source === "report") {
+            const separator = delivery.id.indexOf(":");
+            const messages = await apiRouteTeamMail(s.cwd);
+            if (hasTaskResultMail(messages, delivery.id.slice(0, separator), delivery.id.slice(separator + 1), delivery.agentId)) {
+              useSessionQueue.getState().remove(key, item.id);
+              useSessionQueue.getState().markHandled(`${key}|${item.id}`);
+              continue;
+            }
+          }
+          if (!reserveTeamMailDelivery(delivery)) continue;
+          try {
+            const sent = await sendToIdleTeamSession(s, item.payload, { id: item.id, source: item.source, preview: item.preview });
+            if (sent) {
+              saveTeamMailDelivery({ ...delivery, submittedAt: getLastSubmission(s.id), unconfirmed: false });
+            } else if (sendBlockReasonRef.current[s.id] !== "입력창에 멈춤: 전달의 제출을 확인하지 못했습니다") {
+              removeTeamMailDelivery(delivery.project, delivery.agentId, delivery.id, delivery.kind);
+            }
+          } catch (err) {
+            if (!useSessionQueue.getState().queues[key]?.find((queued) => queued.id === item.id)?.stuck) {
+              removeTeamMailDelivery(delivery.project, delivery.agentId, delivery.id, delivery.kind);
+            }
+            throw err;
+          }
         }
       } catch (err) {
         console.error("Session queue drain failed", err);
@@ -2371,9 +2406,10 @@ ${recentSnippet || "진행 내역 기록 없음"}
         continue;
       }
       let board: string;
-      let agents: ProjectAgentRecord[];
+          let agents: ProjectAgentRecord[];
+          let messages: Awaited<ReturnType<typeof apiRouteTeamMail>>;
       try {
-        [board, agents] = await Promise.all([apiGetProjectBlackboard(project), apiGetProjectAgents(project)]);
+            [board, agents, messages] = await Promise.all([apiGetProjectBlackboard(project), apiGetProjectAgents(project), apiRouteTeamMail(project)]);
       } catch {
         continue;
       }
@@ -2455,6 +2491,29 @@ ${recentSnippet || "진행 내역 기록 없음"}
         (s) => s.name.includes("PM") || s.agentRole?.includes("PM") || s.agentRole?.includes("리더")
       ) ?? projSessions[0];
       if (tasks.length > 0) forgetEndedStarts(sent, tasks);
+      // 이미 수행·보고된 자동 항목이 stuck/대기로 head를 막는 교착 해소: 보드 ✅가 된 assign, PM이 결과 메일을 받은 report를 대기열·예약에서 제거
+      {
+        let mails: Awaited<ReturnType<typeof apiRouteTeamMail>> | null = null;
+        for (const s of projSessions) {
+          if (!s.agentId) continue;
+          const key = queueKey(s);
+          const list = useSessionQueue.getState().queues[key];
+          if (!list?.length) continue;
+          if (list.some((it) => it.source === "report")) mails ??= await apiRouteTeamMail(project).catch(() => []);
+          const ids = settledAutoIds(
+            list,
+            new Set(tasks.filter((t) => t.status === "done" && t.agentId === s.agentId).map((t) => t.taskId)),
+            (taskId, reporterId) => hasTaskResultMail(mails ?? [], taskId, reporterId, s.agentId!)
+          );
+          for (const id of ids) {
+            useSessionQueue.getState().remove(key, id);
+            delete queueSeenRef.current[`${key}|${id}`];
+            const kind = id.startsWith("assign:") ? "task" : "report";
+            removeTeamMailDelivery(project, s.agentId, id.slice(id.indexOf(":") + 1), kind);
+            delete pendingDeliveryRef.current[s.id]; // 앞 전달 확인 대기(deliveryGate)가 다음 항목을 계속 막지 않게
+          }
+        }
+      }
       const doneTasks: typeof tasks = [];
       for (const t of tasks) {
         if (t.status === "wait") continue;
@@ -2480,6 +2539,13 @@ ${recentSnippet || "진행 내역 기록 없음"}
           }
         }
         if (t.status === "done") {
+              if (pmSession?.agentId && hasTaskResultMail(messages, t.taskId, t.agentId, pmSession.agentId) &&
+                !getTeamMailDeliveries().some((d) => d.project === project && d.agentId === pmSession.agentId && d.kind === "report" && d.id === `${t.taskId}:${t.agentId}`)) {
+                useSessionQueue.getState().resolve(queueKey(pmSession), `report:${t.taskId}:${t.agentId}`);
+                sent.add(key);
+                localStorage.setItem(storeKey, JSON.stringify([...sent]));
+                continue;
+              }
           if (!pmSession) continue;
           if (useSessionQueue.getState().handled.includes(`${queueKey(pmSession)}|report:${t.taskId}:${t.agentId}`)) continue;
           if (getTeamMailDeliveries().some((d) => d.project === project && d.agentId === t.agentId && d.id === t.taskId && d.kind === "task")) continue;
@@ -3485,7 +3551,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
                       }}
                       title={`${s.name} ${s.agentRole ? `(${s.agentRole})` : ""}`}
                       className={`group flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium cursor-pointer border transition shrink-0 whitespace-nowrap ${
-                        busySessionIds.split(",").includes(s.id) ? "animate-pulse motion-reduce:animate-none " : ""
+                        busySessionIds.split(",").includes(s.id) ? "animate-pulse motion-reduce:animate-none ring-2 ring-cyan-400 " : ""
                       }${
                         isPrimary
                           ? "bg-slate-950 text-slate-100 font-bold border-indigo-500/80 shadow-sm"
@@ -3742,7 +3808,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
                         </span>
                         <kbd className="inline-flex items-center px-1.5 py-0.5 rounded bg-slate-900 text-slate-300 font-mono text-[9px] border border-slate-700/80 shrink-0 select-none">Alt+{slotIdx + 1}</kbd>
                         {busySessionIds.split(",").includes(session.id) && (
-                          <span className="inline-flex items-center gap-1 text-[10px] text-slate-300 shrink-0">
+                          <span className="inline-flex items-center gap-1 text-[10px] text-cyan-200 rounded ring-1 ring-cyan-400 shrink-0">
                             <Loader2 className="w-3 h-3 animate-spin motion-reduce:animate-none" />
                             작업 중
                           </span>

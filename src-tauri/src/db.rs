@@ -27,6 +27,9 @@ pub fn init_db_at(db_path: &Path) -> Result<Connection> {
     let conn = Connection::open(db_path)?;
     setup_schema(&conn)?;
     seed_defaults(&conn)?;
+    if let Err(err) = migrate_api_keys(&conn) {
+        eprintln!("API 키 보관 방식 이전 실패(옛 값 유지): {err}");
+    }
     Ok(conn)
 }
 
@@ -1256,24 +1259,81 @@ pub fn get_custom_clis(conn: &Connection) -> Result<Vec<CliDefinition>> {
     Ok(rows.flatten().collect())
 }
 
-// --- API Key 난독화/복호화 (평문 노출 방지) ---
+// --- API Key 보호 (V104_SEC1) ---
+// 저장 형식: "v2:" + base64(OS 보호 blob). Windows는 DPAPI(CryptProtectData, 현재 사용자 계정에 묶임)로 암호화한다.
+// "v2:" 접두사가 없는 값은 옛 사용자명 XOR 난독화 값이며, init_db_at의 migrate_api_keys가 시작 시 v2로 바꿔 쓴다.
+// ponytail: Windows 외 플랫폼은 OS 보호 API가 없어 v2 안에서도 XOR 난독화로 대체(보안 아님). 필요하면 keyring 크레이트로 교체.
+const KEY_V2_PREFIX: &str = "v2:";
+const KEY_ENTROPY: &[u8] = b"AI_CLI_MANAGER_API_KEY_v2";
+
+#[cfg(target_os = "windows")]
+mod os_protect {
+    #[repr(C)]
+    struct DataBlob {
+        cb_data: u32,
+        pb_data: *mut u8,
+    }
+    #[link(name = "crypt32")]
+    extern "system" {
+        fn CryptProtectData(
+            data_in: *const DataBlob, descr: *const u16, entropy: *const DataBlob, reserved: *mut std::ffi::c_void,
+            prompt: *mut std::ffi::c_void, flags: u32, data_out: *mut DataBlob,
+        ) -> i32;
+        fn CryptUnprotectData(
+            data_in: *const DataBlob, descr: *mut *mut u16, entropy: *const DataBlob, reserved: *mut std::ffi::c_void,
+            prompt: *mut std::ffi::c_void, flags: u32, data_out: *mut DataBlob,
+        ) -> i32;
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn LocalFree(mem: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+    }
+    const CRYPTPROTECT_UI_FORBIDDEN: u32 = 0x1;
+
+    fn run(input: &[u8], protect: bool) -> Option<Vec<u8>> {
+        let entropy = DataBlob { cb_data: super::KEY_ENTROPY.len() as u32, pb_data: super::KEY_ENTROPY.as_ptr() as *mut u8 };
+        let inb = DataBlob { cb_data: input.len() as u32, pb_data: input.as_ptr() as *mut u8 };
+        let mut out = DataBlob { cb_data: 0, pb_data: std::ptr::null_mut() };
+        // SAFETY: 입력/엔트로피 blob은 호출 동안 살아 있고, 출력 blob은 LocalFree로 해제하기 전에 복사한다.
+        unsafe {
+            let ok = if protect {
+                CryptProtectData(&inb, std::ptr::null(), &entropy, std::ptr::null_mut(), std::ptr::null_mut(), CRYPTPROTECT_UI_FORBIDDEN, &mut out)
+            } else {
+                CryptUnprotectData(&inb, std::ptr::null_mut(), &entropy, std::ptr::null_mut(), std::ptr::null_mut(), CRYPTPROTECT_UI_FORBIDDEN, &mut out)
+            };
+            if ok == 0 || out.pb_data.is_null() {
+                return None;
+            }
+            let bytes = std::slice::from_raw_parts(out.pb_data, out.cb_data as usize).to_vec();
+            LocalFree(out.pb_data as *mut _);
+            Some(bytes)
+        }
+    }
+    pub fn protect(plain: &[u8]) -> Option<Vec<u8>> { run(plain, true) }
+    pub fn unprotect(cipher: &[u8]) -> Option<Vec<u8>> { run(cipher, false) }
+}
+
+#[cfg(not(target_os = "windows"))]
+mod os_protect {
+    fn xor(data: &[u8]) -> Vec<u8> {
+        data.iter().enumerate().map(|(i, b)| b ^ super::KEY_ENTROPY[i % super::KEY_ENTROPY.len()]).collect()
+    }
+    pub fn protect(plain: &[u8]) -> Option<Vec<u8>> { Some(xor(plain)) }
+    pub fn unprotect(cipher: &[u8]) -> Option<Vec<u8>> { Some(xor(cipher)) }
+}
+
 fn cipher_secret() -> Vec<u8> {
     let host_salt = format!("ACM_SECRET_SALT_{}_v1", whoami::username());
     host_salt.into_bytes()
 }
 
-fn encrypt_key(plain: &str) -> String {
-    let salt = cipher_secret();
-    let xored: Vec<u8> = plain
-        .as_bytes()
-        .iter()
-        .enumerate()
-        .map(|(i, b)| b ^ salt[i % salt.len()])
-        .collect();
-    B64.encode(xored)
+fn encrypt_key(plain: &str) -> Result<String> {
+    let blob = os_protect::protect(plain.as_bytes()).ok_or_else(|| anyhow::anyhow!("API 키를 OS 보호 저장소로 암호화하지 못했습니다."))?;
+    Ok(format!("{KEY_V2_PREFIX}{}", B64.encode(blob)))
 }
 
-fn decrypt_key(cipher: &str) -> Option<String> {
+// 옛 형식(v1): 사용자명 XOR + Base64. 이전(migrate)과 읽기 호환용으로만 남긴다.
+fn decrypt_legacy_key(cipher: &str) -> Option<String> {
     let decoded = B64.decode(cipher.as_bytes()).ok()?;
     let salt = cipher_secret();
     let plain: Vec<u8> = decoded
@@ -1282,6 +1342,36 @@ fn decrypt_key(cipher: &str) -> Option<String> {
         .map(|(i, b)| b ^ salt[i % salt.len()])
         .collect();
     String::from_utf8(plain).ok()
+}
+
+fn decrypt_key(cipher: &str) -> Option<String> {
+    match cipher.strip_prefix(KEY_V2_PREFIX) {
+        Some(rest) => String::from_utf8(os_protect::unprotect(&B64.decode(rest.as_bytes()).ok()?)?).ok(),
+        None => decrypt_legacy_key(cipher),
+    }
+}
+
+// 시작 시 옛 형식 값을 v2로 바꿔 쓴다. 복호화/재암호화/되읽기 검증이 실패한 행은 건드리지 않아(손실 0) 다음 시작에 다시 시도한다.
+pub fn migrate_api_keys(conn: &Connection) -> Result<usize> {
+    let rows: Vec<(String, String, String)> = {
+        let mut stmt = conn.prepare("SELECT cli_id, key_name, cipher_value FROM api_keys WHERE cipher_value NOT LIKE 'v2:%'")?;
+        let mapped = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        mapped.flatten().collect()
+    };
+    let mut migrated = 0;
+    for (cli_id, key_name, cipher) in rows {
+        let Some(plain) = decrypt_legacy_key(&cipher) else { continue };
+        let Ok(v2) = encrypt_key(&plain) else { continue };
+        if decrypt_key(&v2).as_deref() != Some(plain.as_str()) {
+            continue;
+        }
+        conn.execute(
+            "UPDATE api_keys SET cipher_value = ?1 WHERE cli_id = ?2 AND key_name = ?3 AND cipher_value = ?4",
+            params![v2, cli_id, key_name, cipher],
+        )?;
+        migrated += 1;
+    }
+    Ok(migrated)
 }
 
 fn mask_api_key(plain: &str) -> String {
@@ -1308,7 +1398,7 @@ pub fn save_api_key(conn: &Connection, cli_id: &str, key_name: &str, raw_key: &s
     if cleaned.is_empty() {
         anyhow::bail!("API 키 값은 비어 있을 수 없습니다.");
     }
-    let cipher = encrypt_key(cleaned);
+    let cipher = encrypt_key(cleaned)?;
     let now = Utc::now().to_rfc3339();
     conn.execute(
         "INSERT INTO api_keys (cli_id, key_name, cipher_value, updated_at)
@@ -2117,6 +2207,28 @@ mod tests {
             env_map.get("ANTHROPIC_API_KEY").map(|s| s.as_str()),
             Some("sk-ant-api03-secret9876")
         );
+    }
+
+    #[test]
+    fn api_key_is_stored_v2_and_legacy_xor_rows_migrate_without_loss() {
+        let conn = create_memory_db();
+        save_api_key(&conn, "claude", "ANTHROPIC_API_KEY", "sk-ant-api03-secret9876").unwrap();
+        let stored: String = conn.query_row("SELECT cipher_value FROM api_keys", [], |r| r.get(0)).unwrap();
+        assert!(stored.starts_with("v2:"));
+        assert!(!stored.contains("secret9876"));
+        let salt = cipher_secret();
+        let legacy = B64.encode("sk-old-legacy-key".bytes().enumerate().map(|(i, b)| b ^ salt[i % salt.len()]).collect::<Vec<u8>>());
+        conn.execute("INSERT INTO api_keys (cli_id, key_name, cipher_value, updated_at) VALUES ('codex','OPENAI_API_KEY',?1,'t')", params![legacy]).unwrap();
+        assert_eq!(decrypt_key(&legacy).as_deref(), Some("sk-old-legacy-key"));
+        assert_eq!(migrate_api_keys(&conn).unwrap(), 1);
+        let after: String = conn.query_row("SELECT cipher_value FROM api_keys WHERE cli_id='codex'", [], |r| r.get(0)).unwrap();
+        assert!(after.starts_with("v2:") && after != legacy);
+        assert_eq!(get_decrypted_env_for_cli(&conn, "codex").unwrap().get("OPENAI_API_KEY").map(|s| s.as_str()), Some("sk-old-legacy-key"));
+        assert_eq!(migrate_api_keys(&conn).unwrap(), 0);
+        conn.execute("INSERT INTO api_keys (cli_id, key_name, cipher_value, updated_at) VALUES ('grok','XAI_API_KEY','###not-b64','t')", []).unwrap();
+        assert_eq!(migrate_api_keys(&conn).unwrap(), 0);
+        let kept: String = conn.query_row("SELECT cipher_value FROM api_keys WHERE cli_id='grok'", [], |r| r.get(0)).unwrap();
+        assert_eq!(kept, "###not-b64");
     }
 
     #[test]

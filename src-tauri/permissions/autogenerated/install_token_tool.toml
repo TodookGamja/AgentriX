@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-install-token-tool"
+description = "Enables the install_token_tool command without any pre-configured scope."
+commands.allow = ["install_token_tool"]
+
+[[permission]]
+identifier = "deny-install-token-tool"
+description = "Denies the install_token_tool command without any pre-configured scope."
+commands.deny = ["install_token_tool"]

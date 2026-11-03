@@ -177,6 +177,834 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Enables the acknowledge_team_mail command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-acknowledge-team-mail",
+          "markdownDescription": "Enables the acknowledge_team_mail command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the add_custom_cli command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-add-custom-cli",
+          "markdownDescription": "Enables the add_custom_cli command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the add_project_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-add-project-folder",
+          "markdownDescription": "Enables the add_project_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the add_team_member command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-add-team-member",
+          "markdownDescription": "Enables the add_team_member command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the analyze_project_workspace command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-analyze-project-workspace",
+          "markdownDescription": "Enables the analyze_project_workspace command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the app_window_close command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-app-window-close",
+          "markdownDescription": "Enables the app_window_close command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the app_window_exit command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-app-window-exit",
+          "markdownDescription": "Enables the app_window_exit command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the app_window_hide command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-app-window-hide",
+          "markdownDescription": "Enables the app_window_hide command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the app_window_is_maximized command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-app-window-is-maximized",
+          "markdownDescription": "Enables the app_window_is_maximized command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the app_window_minimize command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-app-window-minimize",
+          "markdownDescription": "Enables the app_window_minimize command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the app_window_show command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-app-window-show",
+          "markdownDescription": "Enables the app_window_show command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the app_window_start_dragging command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-app-window-start-dragging",
+          "markdownDescription": "Enables the app_window_start_dragging command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the app_window_toggle_maximize command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-app-window-toggle-maximize",
+          "markdownDescription": "Enables the app_window_toggle_maximize command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the apply_item_to_cli command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-apply-item-to-cli",
+          "markdownDescription": "Enables the apply_item_to_cli command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the check_app_update command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-check-app-update",
+          "markdownDescription": "Enables the check_app_update command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the check_npm_cli_updates command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-check-npm-cli-updates",
+          "markdownDescription": "Enables the check_npm_cli_updates command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the check_plugin_updates command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-check-plugin-updates",
+          "markdownDescription": "Enables the check_plugin_updates command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the check_token_tools command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-check-token-tools",
+          "markdownDescription": "Enables the check_token_tools command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the delete_api_key command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-api-key",
+          "markdownDescription": "Enables the delete_api_key command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the delete_custom_cli command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-custom-cli",
+          "markdownDescription": "Enables the delete_custom_cli command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the delete_project_agent command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-project-agent",
+          "markdownDescription": "Enables the delete_project_agent command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the delete_project_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-project-folder",
+          "markdownDescription": "Enables the delete_project_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the delete_team_member command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-team-member",
+          "markdownDescription": "Enables the delete_team_member command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the detect_clis command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-detect-clis",
+          "markdownDescription": "Enables the detect_clis command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_api_keys command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-api-keys",
+          "markdownDescription": "Enables the get_api_keys command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_cli_effort_options command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-cli-effort-options",
+          "markdownDescription": "Enables the get_cli_effort_options command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_config_backups command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-config-backups",
+          "markdownDescription": "Enables the get_config_backups command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_detected_cli_credentials command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-detected-cli-credentials",
+          "markdownDescription": "Enables the get_detected_cli_credentials command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_project_agents command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-project-agents",
+          "markdownDescription": "Enables the get_project_agents command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_project_blackboard command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-project-blackboard",
+          "markdownDescription": "Enables the get_project_blackboard command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_project_deep_context command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-project-deep-context",
+          "markdownDescription": "Enables the get_project_deep_context command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_project_folders command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-project-folders",
+          "markdownDescription": "Enables the get_project_folders command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_registry_items command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-registry-items",
+          "markdownDescription": "Enables the get_registry_items command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_session_context command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-session-context",
+          "markdownDescription": "Enables the get_session_context command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_session_paste_mode command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-session-paste-mode",
+          "markdownDescription": "Enables the get_session_paste_mode command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_session_quiet_since command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-session-quiet-since",
+          "markdownDescription": "Enables the get_session_quiet_since command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_team_members command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-team-members",
+          "markdownDescription": "Enables the get_team_members command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_usage_dashboard command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-usage-dashboard",
+          "markdownDescription": "Enables the get_usage_dashboard command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the install_npm_cli_update command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-install-npm-cli-update",
+          "markdownDescription": "Enables the install_npm_cli_update command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the install_token_tool command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-install-token-tool",
+          "markdownDescription": "Enables the install_token_tool command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_cli_models command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-cli-models",
+          "markdownDescription": "Enables the list_cli_models command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_directory_entries command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-directory-entries",
+          "markdownDescription": "Enables the list_directory_entries command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the log_delivery_stage command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-log-delivery-stage",
+          "markdownDescription": "Enables the log_delivery_stage command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_external_url command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-external-url",
+          "markdownDescription": "Enables the open_external_url command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the perform_in_app_update command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-perform-in-app-update",
+          "markdownDescription": "Enables the perform_in_app_update command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the pick_project_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-pick-project-folder",
+          "markdownDescription": "Enables the pick_project_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the read_file_as_base64 command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-read-file-as-base64",
+          "markdownDescription": "Enables the read_file_as_base64 command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the read_session_output command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-read-session-output",
+          "markdownDescription": "Enables the read_session_output command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the request_with_detected_credential command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-request-with-detected-credential",
+          "markdownDescription": "Enables the request_with_detected_credential command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the reset_app_data command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-reset-app-data",
+          "markdownDescription": "Enables the reset_app_data command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the resize_session command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-resize-session",
+          "markdownDescription": "Enables the resize_session command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the route_team_mail command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-route-team-mail",
+          "markdownDescription": "Enables the route_team_mail command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the run_cli_deep_analysis command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-run-cli-deep-analysis",
+          "markdownDescription": "Enables the run_cli_deep_analysis command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the save_api_key command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-save-api-key",
+          "markdownDescription": "Enables the save_api_key command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the save_clipboard_image command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-save-clipboard-image",
+          "markdownDescription": "Enables the save_clipboard_image command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the save_project_blackboard command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-save-project-blackboard",
+          "markdownDescription": "Enables the save_project_blackboard command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the save_session_handoff command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-save-session-handoff",
+          "markdownDescription": "Enables the save_session_handoff command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the scan_local_extensions command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-scan-local-extensions",
+          "markdownDescription": "Enables the scan_local_extensions command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the seed_project_agents_preset command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-seed-project-agents-preset",
+          "markdownDescription": "Enables the seed_project_agents_preset command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_app_theme_mode command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-app-theme-mode",
+          "markdownDescription": "Enables the set_app_theme_mode command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the start_session command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-start-session",
+          "markdownDescription": "Enables the start_session command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the stop_session command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-stop-session",
+          "markdownDescription": "Enables the stop_session command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the sync_usage_logs command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-sync-usage-logs",
+          "markdownDescription": "Enables the sync_usage_logs command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the toggle_registry_item command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-toggle-registry-item",
+          "markdownDescription": "Enables the toggle_registry_item command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the trust_project_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-trust-project-folder",
+          "markdownDescription": "Enables the trust_project_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the update_plugin command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-update-plugin",
+          "markdownDescription": "Enables the update_plugin command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the upsert_project_agent command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-upsert-project-agent",
+          "markdownDescription": "Enables the upsert_project_agent command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the upsert_registry_item command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-upsert-registry-item",
+          "markdownDescription": "Enables the upsert_registry_item command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the write_to_session command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-write-to-session",
+          "markdownDescription": "Enables the write_to_session command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the acknowledge_team_mail command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-acknowledge-team-mail",
+          "markdownDescription": "Denies the acknowledge_team_mail command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the add_custom_cli command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-add-custom-cli",
+          "markdownDescription": "Denies the add_custom_cli command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the add_project_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-add-project-folder",
+          "markdownDescription": "Denies the add_project_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the add_team_member command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-add-team-member",
+          "markdownDescription": "Denies the add_team_member command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the analyze_project_workspace command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-analyze-project-workspace",
+          "markdownDescription": "Denies the analyze_project_workspace command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the app_window_close command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-app-window-close",
+          "markdownDescription": "Denies the app_window_close command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the app_window_exit command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-app-window-exit",
+          "markdownDescription": "Denies the app_window_exit command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the app_window_hide command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-app-window-hide",
+          "markdownDescription": "Denies the app_window_hide command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the app_window_is_maximized command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-app-window-is-maximized",
+          "markdownDescription": "Denies the app_window_is_maximized command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the app_window_minimize command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-app-window-minimize",
+          "markdownDescription": "Denies the app_window_minimize command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the app_window_show command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-app-window-show",
+          "markdownDescription": "Denies the app_window_show command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the app_window_start_dragging command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-app-window-start-dragging",
+          "markdownDescription": "Denies the app_window_start_dragging command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the app_window_toggle_maximize command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-app-window-toggle-maximize",
+          "markdownDescription": "Denies the app_window_toggle_maximize command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the apply_item_to_cli command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-apply-item-to-cli",
+          "markdownDescription": "Denies the apply_item_to_cli command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the check_app_update command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-check-app-update",
+          "markdownDescription": "Denies the check_app_update command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the check_npm_cli_updates command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-check-npm-cli-updates",
+          "markdownDescription": "Denies the check_npm_cli_updates command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the check_plugin_updates command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-check-plugin-updates",
+          "markdownDescription": "Denies the check_plugin_updates command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the check_token_tools command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-check-token-tools",
+          "markdownDescription": "Denies the check_token_tools command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the delete_api_key command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-api-key",
+          "markdownDescription": "Denies the delete_api_key command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the delete_custom_cli command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-custom-cli",
+          "markdownDescription": "Denies the delete_custom_cli command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the delete_project_agent command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-project-agent",
+          "markdownDescription": "Denies the delete_project_agent command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the delete_project_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-project-folder",
+          "markdownDescription": "Denies the delete_project_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the delete_team_member command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-team-member",
+          "markdownDescription": "Denies the delete_team_member command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the detect_clis command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-detect-clis",
+          "markdownDescription": "Denies the detect_clis command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_api_keys command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-api-keys",
+          "markdownDescription": "Denies the get_api_keys command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_cli_effort_options command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-cli-effort-options",
+          "markdownDescription": "Denies the get_cli_effort_options command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_config_backups command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-config-backups",
+          "markdownDescription": "Denies the get_config_backups command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_detected_cli_credentials command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-detected-cli-credentials",
+          "markdownDescription": "Denies the get_detected_cli_credentials command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_project_agents command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-project-agents",
+          "markdownDescription": "Denies the get_project_agents command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_project_blackboard command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-project-blackboard",
+          "markdownDescription": "Denies the get_project_blackboard command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_project_deep_context command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-project-deep-context",
+          "markdownDescription": "Denies the get_project_deep_context command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_project_folders command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-project-folders",
+          "markdownDescription": "Denies the get_project_folders command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_registry_items command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-registry-items",
+          "markdownDescription": "Denies the get_registry_items command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_session_context command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-session-context",
+          "markdownDescription": "Denies the get_session_context command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_session_paste_mode command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-session-paste-mode",
+          "markdownDescription": "Denies the get_session_paste_mode command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_session_quiet_since command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-session-quiet-since",
+          "markdownDescription": "Denies the get_session_quiet_since command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_team_members command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-team-members",
+          "markdownDescription": "Denies the get_team_members command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_usage_dashboard command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-usage-dashboard",
+          "markdownDescription": "Denies the get_usage_dashboard command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the install_npm_cli_update command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-install-npm-cli-update",
+          "markdownDescription": "Denies the install_npm_cli_update command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the install_token_tool command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-install-token-tool",
+          "markdownDescription": "Denies the install_token_tool command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_cli_models command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-cli-models",
+          "markdownDescription": "Denies the list_cli_models command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_directory_entries command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-directory-entries",
+          "markdownDescription": "Denies the list_directory_entries command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the log_delivery_stage command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-log-delivery-stage",
+          "markdownDescription": "Denies the log_delivery_stage command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_external_url command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-external-url",
+          "markdownDescription": "Denies the open_external_url command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the perform_in_app_update command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-perform-in-app-update",
+          "markdownDescription": "Denies the perform_in_app_update command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the pick_project_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-pick-project-folder",
+          "markdownDescription": "Denies the pick_project_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the read_file_as_base64 command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-read-file-as-base64",
+          "markdownDescription": "Denies the read_file_as_base64 command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the read_session_output command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-read-session-output",
+          "markdownDescription": "Denies the read_session_output command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the request_with_detected_credential command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-request-with-detected-credential",
+          "markdownDescription": "Denies the request_with_detected_credential command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the reset_app_data command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-reset-app-data",
+          "markdownDescription": "Denies the reset_app_data command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the resize_session command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-resize-session",
+          "markdownDescription": "Denies the resize_session command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the route_team_mail command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-route-team-mail",
+          "markdownDescription": "Denies the route_team_mail command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the run_cli_deep_analysis command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-run-cli-deep-analysis",
+          "markdownDescription": "Denies the run_cli_deep_analysis command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the save_api_key command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-save-api-key",
+          "markdownDescription": "Denies the save_api_key command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the save_clipboard_image command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-save-clipboard-image",
+          "markdownDescription": "Denies the save_clipboard_image command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the save_project_blackboard command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-save-project-blackboard",
+          "markdownDescription": "Denies the save_project_blackboard command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the save_session_handoff command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-save-session-handoff",
+          "markdownDescription": "Denies the save_session_handoff command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the scan_local_extensions command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-scan-local-extensions",
+          "markdownDescription": "Denies the scan_local_extensions command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the seed_project_agents_preset command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-seed-project-agents-preset",
+          "markdownDescription": "Denies the seed_project_agents_preset command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_app_theme_mode command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-app-theme-mode",
+          "markdownDescription": "Denies the set_app_theme_mode command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the start_session command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-start-session",
+          "markdownDescription": "Denies the start_session command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the stop_session command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-stop-session",
+          "markdownDescription": "Denies the stop_session command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the sync_usage_logs command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-sync-usage-logs",
+          "markdownDescription": "Denies the sync_usage_logs command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the toggle_registry_item command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-toggle-registry-item",
+          "markdownDescription": "Denies the toggle_registry_item command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the trust_project_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-trust-project-folder",
+          "markdownDescription": "Denies the trust_project_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the update_plugin command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-update-plugin",
+          "markdownDescription": "Denies the update_plugin command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the upsert_project_agent command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-upsert-project-agent",
+          "markdownDescription": "Denies the upsert_project_agent command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the upsert_registry_item command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-upsert-registry-item",
+          "markdownDescription": "Denies the upsert_registry_item command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the write_to_session command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-write-to-session",
+          "markdownDescription": "Denies the write_to_session command without any pre-configured scope."
+        },
+        {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",
           "type": "string",
           "const": "core:default",

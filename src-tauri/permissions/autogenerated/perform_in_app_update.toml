@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-perform-in-app-update"
+description = "Enables the perform_in_app_update command without any pre-configured scope."
+commands.allow = ["perform_in_app_update"]
+
+[[permission]]
+identifier = "deny-perform-in-app-update"
+description = "Denies the perform_in_app_update command without any pre-configured scope."
+commands.deny = ["perform_in_app_update"]

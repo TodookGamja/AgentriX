@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-delete-project-agent"
+description = "Enables the delete_project_agent command without any pre-configured scope."
+commands.allow = ["delete_project_agent"]
+
+[[permission]]
+identifier = "deny-delete-project-agent"
+description = "Denies the delete_project_agent command without any pre-configured scope."
+commands.deny = ["delete_project_agent"]

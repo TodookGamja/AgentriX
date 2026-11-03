@@ -10,6 +10,47 @@ vm.runInNewContext(js, { exports: api });
 
 const it = (id, source, extra = {}) => ({ id, source, preview: id, payload: id, createdAt: 1, ...extra });
 
+test("queue drain sends orphaned heads in order and releases a blocked reservation", async () => {
+  const source = ts.createSourceFile("App.tsx", fs.readFileSync("src/App.tsx", "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  let effect;
+  function visit(node) {
+    if (ts.isCallExpression(node) && node.expression.getText(source) === "useEffect" && node.arguments[0]?.getText(source).includes("nextQueueItem(")) effect = node.arguments[0].getText(source);
+    ts.forEachChild(node, visit);
+  }
+  visit(source);
+  assert.ok(effect);
+  const session = { id: "session", agentId: "a", cwd: "project" };
+  const handled = [];
+  const state = { queues: { a: [it("report:T1:worker", "report"), it("mail:m1", "mail"), it("assign:T2", "assign"), it("user1", "user")] },
+    remove: (key, id) => { state.queues[key] = state.queues[key].filter((item) => item.id !== id); }, markHandled: (id) => handled.push(id) };
+  let tick, reservation, blocked = true, duplicate = false;
+  const sent = [];
+  const sandbox = { module: { exports: null }, console, Date,
+    useAppStore: { getState: () => ({ sessions: [session] }) }, useSessionQueue: { getState: () => state },
+    queueKey: () => "a", nextQueueItem: api.nextQueueItem, queueReservation: api.queueReservation,
+    apiRouteTeamMail: async () => [], hasTaskResultMail: () => duplicate,
+    reserveTeamMailDelivery: (value) => { if (reservation) return false; reservation = value; return true; },
+    removeTeamMailDelivery: () => { reservation = undefined; }, saveTeamMailDelivery: (value) => { reservation = value; },
+    getLastSubmission: () => 1, sendBlockReasonRef: { current: {} },
+    sendToIdleTeamSession: async (_s, _payload, item) => {
+      if (blocked) { blocked = false; return false; }
+      sent.push(item.id); state.remove("a", item.id); return true;
+    }, window: { setInterval: (callback) => { tick = callback; return 1; }, clearInterval: () => {} } };
+  vm.runInNewContext(ts.transpileModule(`module.exports = ${effect}`, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, sandbox);
+  sandbox.module.exports();
+  await tick();
+  assert.equal(reservation, undefined);
+  for (let i = 0; i < 4; i++) { await tick(); reservation = undefined; }
+  assert.deepEqual(sent, ["report:T1:worker", "mail:m1", "assign:T2", "user1"]);
+  assert.equal(state.queues.a.length, 0);
+  state.queues.a = [it("report:T3:worker", "report"), it("mail:m3", "mail")];
+  duplicate = true;
+  await tick();
+  assert.deepEqual(handled, ["a|report:T3:worker"]);
+  await tick();
+  assert.equal(sent.at(-1), "mail:m3");
+});
+
 test("queue: auto items dedupe by id, user items drain one at a time and a stuck head blocks the rest", () => {
   let q = api.upsertItem({}, "a", it("assign:T1", "assign", { reason: "응답 중" }));
   q = api.upsertItem(q, "a", it("assign:T1", "assign", { reason: "입력창 대기" }));
@@ -60,4 +101,21 @@ test("T7: 자동 항목 수동 처리 — 게이트가 resolved를 소비해 재
   // 스토어: resolve = 항목 제거 + resolved 등록
   const st = fs.readFileSync("src/lib/sessionQueueStore.ts", "utf8");
   assert.match(st, /resolve: \(sid, id\) => set\([\s\S]*?removeItem[\s\S]*?`\$\{sid\}\|\$\{id\}`/);
+});
+
+test("T51: 보드 ✅가 된 assign·PM이 결과 메일을 받은 report는 stuck head여도 정리되고 뒤 항목이 head가 된다", () => {
+  const stuck = { stuck: true, reason: "입력창에 멈춤: 전달 결과 미확인" };
+  let q = {};
+  for (const x of [it("assign:T46", "assign", stuck), it("report:T9:forge", "report", stuck), it("assign:T50", "assign", { reason: "앞 전달 대기" }), it("assign:T47", "assign", stuck)]) q = api.upsertItem(q, "prism", x);
+  const ids = api.settledAutoIds(q.prism, new Set(["T46"]), (t, r) => t === "T9" && r === "forge");
+  assert.equal(JSON.stringify(ids), JSON.stringify(["assign:T46", "report:T9:forge"])); // 🔥 T47(stuck)은 증거 없어 유지
+  for (const id of ids) q = api.removeItem(q, "prism", id);
+  assert.equal(q.prism[0].id, "assign:T50"); // 뒤 항목이 head
+  assert.equal(q.prism[1].stuck, true);
+  // 단위 밖 배선: 대시 tick이 보드 done + 결과 메일로 정리하고 deliveryGate 대기도 푼다
+  const src = require("node:fs").readFileSync("src/App.tsx", "utf8");
+  const blk = src.slice(src.indexOf("교착 해소: 보드 ✅가 된 assign"), src.indexOf("교착 해소: 보드 ✅가 된 assign") + 1800);
+  assert.match(blk, /settledAutoIds\(/);
+  assert.match(blk, /removeTeamMailDelivery\(project, s\.agentId/);
+  assert.match(blk, /delete pendingDeliveryRef\.current\[s\.id\]/);
 });

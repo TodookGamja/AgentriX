@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-check-token-tools"
+description = "Enables the check_token_tools command without any pre-configured scope."
+commands.allow = ["check_token_tools"]
+
+[[permission]]
+identifier = "deny-check-token-tools"
+description = "Denies the check_token_tools command without any pre-configured scope."
+commands.deny = ["check_token_tools"]

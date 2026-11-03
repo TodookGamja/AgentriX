@@ -5,6 +5,16 @@ export interface BoardTask {
   status: "start" | "done" | "wait";
 }
 
+export function hasTaskResultMail(mails: { from: string; to: string; subject: string; body: string }[], taskId: string, agentId: string, pmId: string): boolean {
+  return mails.some((mail) => {
+    const text = `${mail.subject} ${mail.body}`;
+    return mail.from === agentId && mail.to === pmId && Boolean(text.match(/[A-Za-z0-9_]+/g)?.some((word) => word === taskId)) &&
+      /완료|결과|\b(?:complete[ds]?|result)\b/i.test(text) &&
+      !/미완료|미완성|미해결|미처리|불가|실패|질문|문의|요청|\b(?:incomplete|failed|question|request)\b/i.test(mail.subject) &&
+      !/완료(?:하지|하지는|하지를|하지는\s+못|하지\s+못|할\s+수\s+없)|완료\s*(?:안\s*됨|못)|\bnot\s+complete/i.test(mail.body);
+  });
+}
+
 export function boardTaskColumn(input: { status: BoardTask["status"]; manual: boolean; approval?: string; confirmed: boolean; live: boolean; queued: boolean }): "approval" | "waiting" | "running" | "done" | "rejected" {
   if (input.status === "done") return "done";
   if (input.status === "wait") return "waiting";

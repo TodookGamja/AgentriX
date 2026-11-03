@@ -16,8 +16,8 @@ test('Cursor working state survives spinner changes and ends after two seconds a
   assert.equal(state.completedAt, undefined);
   state = cursorTurnFromLines(['→'], state, 6999);
   assert.equal(state.completedAt, undefined);
-  state = cursorTurnFromLines(['→'], state, 7000);
-  assert.equal(state.completedAt, 7000);
+  state = cursorTurnFromLines(['→'], state, 11000, 8000);
+  assert.equal(state.completedAt, 11000);
   assert.ok(state.completedAt - 6000 < 10000);
   assert.equal(cursorTurnBusy(['Working', 'ctrl+c to stop']), true);
 });
@@ -28,8 +28,19 @@ test('one missing frame followed by work resets the two-poll requirement', () =>
   state = cursorTurnFromLines(['ctrl+c to stop'], state, 2500);
   state = cursorTurnFromLines(['→'], state, 3000);
   assert.equal(state.completedAt, undefined);
+  state = cursorTurnFromLines(['→'], state, 8000, 5000);
+  assert.equal(state.completedAt, 8000);
+});
+
+test('Cursor approval prompt remains busy until it disappears', () => {
+  let state = cursorTurnFromLines(['Approval required', 'Allow'], undefined, 1000);
+  state = cursorTurnFromLines(['Approval required', 'Allow'], state, 3000);
+  assert.equal(state.completedAt, undefined);
   state = cursorTurnFromLines(['→'], state, 4000);
-  assert.equal(state.completedAt, 4000);
+  state = cursorTurnFromLines(['→'], state, 9000, 6000);
+  assert.equal(state.completedAt, 9000);
+  assert.equal(cursorTurnBusy(['Run this command', 'Allow']), true);
+  assert.equal(cursorTurnBusy(['Approval noted']), false);
 });
 
 test('only a new pasted record with an empty input confirms a submission', () => {
@@ -61,9 +72,23 @@ test('completed Cursor turn releases the queued item within ten seconds', () => 
   const { nextQueueItem } = load('src/lib/sessionQueue.ts');
   let turn = cursorTurnFromLines(['ctrl+c to stop'], undefined, 1000);
   turn = cursorTurnFromLines(['→'], turn, 2000);
-  turn = cursorTurnFromLines(['→'], turn, 3000);
+  turn = cursorTurnFromLines(['→'], turn, 7000, 4000);
   const item = { id: 'mail:1', source: 'mail', payload: 'hello\r', preview: 'hello', createdAt: 1000 };
-  assert.equal(deliveryGate({ at: 900, started: true }, turn.completedAt > 900, 0, 4000), 'proceed');
+  assert.equal(deliveryGate({ at: 900, started: true }, turn.completedAt > 900, 0, 7000), 'proceed');
   assert.equal(nextQueueItem([item]).id, 'mail:1');
   assert.ok(turn.completedAt - 2000 < 10000);
+});
+
+test('tool gaps and fresh output prevent completion', () => {
+  let turn = cursorTurnFromLines(['running', '→'], undefined, 1000);
+  turn = cursorTurnFromLines(['→'], turn, 2000);
+  turn = cursorTurnFromLines(['→'], turn, 4000, null);
+  assert.equal(turn.completedAt, undefined);
+  turn = cursorTurnFromLines(['→'], turn, 7000, 5000);
+  assert.equal(turn.completedAt, undefined);
+  turn = cursorTurnFromLines(['→'], turn, 8000, 5000);
+  assert.equal(turn.completedAt, 8000);
+  turn = cursorTurnFromLines(['→'], turn, 9000, undefined, true);
+  assert.equal(turn.completedAt, undefined);
+  assert.equal(cursorTurnBusy(['approval allow', '', '', '', '', '→']), false);
 });

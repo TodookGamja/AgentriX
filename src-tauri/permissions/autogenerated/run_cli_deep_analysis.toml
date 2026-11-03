@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-run-cli-deep-analysis"
+description = "Enables the run_cli_deep_analysis command without any pre-configured scope."
+commands.allow = ["run_cli_deep_analysis"]
+
+[[permission]]
+identifier = "deny-run-cli-deep-analysis"
+description = "Denies the run_cli_deep_analysis command without any pre-configured scope."
+commands.deny = ["run_cli_deep_analysis"]

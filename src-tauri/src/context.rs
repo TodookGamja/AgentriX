@@ -67,12 +67,20 @@ fn claude(projects: &Path, session_id: &str) -> Option<ContextUsage> {
     Some(ContextUsage { tokens, window: None, source: file.to_string_lossy().into(), completed_at: claude_completion(&content), started_at: turn_started(&content, "claude") })
 }
 
+fn claude_local_user(v: &Value) -> bool {
+    v.get("isMeta").and_then(Value::as_bool) == Some(true)
+        || v.get("isCompactSummary").and_then(Value::as_bool) == Some(true)
+        || v.get("isVisibleInTranscriptOnly").and_then(Value::as_bool) == Some(true)
+        || v.pointer("/message/content").and_then(Value::as_str).is_some_and(|content|
+            ["<command-name>", "<local-command-stdout>", "<local-command-caveat>"].iter().any(|tag| content.starts_with(tag)))
+}
+
 fn turn_started(content: &str, cli: &str) -> Option<i64> {
     content.lines().rev().find_map(|line| {
         let v: Value = serde_json::from_str(line).ok()?;
         if v.get("isSidechain").and_then(Value::as_bool) == Some(true) { return None; }
         let started = if cli == "claude" {
-            v.get("type").and_then(Value::as_str) == Some("user") && v.get("isMeta").and_then(Value::as_bool) != Some(true)
+            v.get("type").and_then(Value::as_str) == Some("user") && !claude_local_user(&v)
         } else {
             v.get("type").and_then(Value::as_str) == Some("event_msg") && matches!(v.pointer("/payload/type").and_then(Value::as_str), Some("user_message" | "task_started"))
         };
@@ -81,13 +89,20 @@ fn turn_started(content: &str, cli: &str) -> Option<i64> {
 }
 
 fn claude_completion(content: &str) -> Option<i64> {
+    let mut local_output_at = None;
     for line in content.lines().rev() {
         let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
         if v.get("isSidechain").and_then(Value::as_bool) == Some(true) { continue; }
         match v.get("type").and_then(Value::as_str) {
+            Some("user") if claude_local_user(&v) => {
+                if local_output_at.is_none() && v.pointer("/message/content").and_then(Value::as_str).is_some_and(|text| text.starts_with("<local-command-stdout>")) {
+                    local_output_at = v.get("timestamp").and_then(Value::as_str).and_then(parse_ts).map(|t| t.timestamp_millis());
+                }
+            }
             Some("user") => return None,
             Some("assistant") => return (v.pointer("/message/stop_reason").and_then(Value::as_str) == Some("end_turn"))
-                .then(|| v.get("timestamp").and_then(Value::as_str).and_then(parse_ts).map(|t| t.timestamp_millis())).flatten(),
+                .then(|| v.get("timestamp").and_then(Value::as_str).and_then(parse_ts).map(|t| t.timestamp_millis()))
+                .flatten().map(|completed| local_output_at.map_or(completed, |local| completed.max(local))),
             _ => {}
         }
     }
@@ -288,6 +303,26 @@ fn opencode(db: &Path, cwd: &str, started: DateTime<Utc>, claimed: &[String]) ->
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn claude_local_commands_preserve_a_completed_turn_but_not_a_running_turn() {
+        let user = r#"{"timestamp":"2026-11-02T02:00:00Z","type":"user","message":{"content":"real request"}}"#;
+        let completed = r#"{"timestamp":"2026-11-02T02:00:01Z","type":"assistant","message":{"stop_reason":"end_turn"}}"#;
+        let running = r#"{"timestamp":"2026-11-02T02:00:01Z","type":"assistant","message":{"stop_reason":"tool_use"}}"#;
+        let caveat = r#"{"timestamp":"2026-11-02T02:00:02Z","type":"user","isMeta":true,"message":{"content":"<local-command-caveat>"}}"#;
+        let summary = r#"{"timestamp":"2026-11-02T02:00:04Z","type":"user","isCompactSummary":true,"isVisibleInTranscriptOnly":true,"message":{"content":"summary"}}"#;
+        let output = r#"{"timestamp":"2026-11-02T02:00:05Z","type":"user","message":{"content":"<local-command-stdout>done"}}"#;
+        let boundary = r#"{"timestamp":"2026-11-02T02:00:06Z","type":"system","subtype":"compact_boundary"}"#;
+        for command in ["compact", "clear", "model"] {
+            let cmd = serde_json::json!({"timestamp":"2026-11-02T02:00:03Z", "type":"user", "message":{"content":format!("<command-name>/{command}</command-name>")}}).to_string();
+            let content = [user, completed, caveat, &cmd, summary, output, boundary].join("\n");
+            let started = super::turn_started(&content, "claude").unwrap();
+            let ended = super::claude_completion(&content).unwrap();
+            assert!(started < ended);
+            assert_eq!(ended, super::parse_ts("2026-11-02T02:00:05Z").unwrap().timestamp_millis());
+            let active = [user, running, caveat, &cmd, summary, output, boundary].join("\n");
+            assert!(super::claude_completion(&active).is_none());
+        }
+    }
     #[test]
     fn turn_start_uses_user_or_task_event_without_sidechains() {
         let codex = r#"{"timestamp":"2026-11-02T02:00:00Z","type":"event_msg","payload":{"type":"user_message"}}"#;
