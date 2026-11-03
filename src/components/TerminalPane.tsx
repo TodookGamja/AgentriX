@@ -30,6 +30,7 @@ import {
 } from "../lib/tauriBridge";import { FilePickerModal } from "./FilePickerModal";
 import { isTerminalReport, shouldResizePty } from "../lib/terminalReplay";
 import { getRoleState, ROLE_STATE_EVENT } from "../lib/handoffRelay";
+import { readCursorTurn, registerTerminalScreen } from "../lib/cursorScreen";
 import { useSessionQueue, queueKey } from "../lib/sessionQueueStore";
 import { useAppStore } from "../lib/store";
 import { hasPendingSessionInput } from "../lib/inputHistory";
@@ -373,6 +374,11 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     term.open(container);
 
     termRef.current = term;
+    const unregisterCursorScreen = ["cursor", "codex"].includes(session.cliId) ? registerTerminalScreen(session.id, () => {
+      const buffer = term.buffer.active;
+      const start = buffer.baseY + Math.max(0, term.rows - 10);
+      return Array.from({ length: Math.min(term.rows, 10) }, (_, i) => buffer.getLine(start + i)?.translateToString(true) ?? "");
+    }) : () => {};
     fitAddonRef.current = fitAddon;
     // 재마운트 시 버퍼 재생이 기본 80열로 그려져 줄이 겹치지 않도록, 보이는 상태면 재생 전에 크기부터 맞춘다.
     if (container.clientWidth > 0) {
@@ -406,10 +412,10 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
         cursorRef.current = chunk.nextCursor;        if (chunk.data && chunk.data.length > 0) {
           // 스크롤을 강제로 내리지 않는다: 맨 아래에 있으면 xterm이 알아서 따라가고, 위로 올려 둔 경우엔 그대로 둔다.
           if (replayed) {
-            term.write(chunk.data);
+            term.write(chunk.data, () => { if (session.cliId === "cursor") readCursorTurn(session.id); });
             onOutputChunkRef.current?.(session.id, chunk.data);
           } else {
-            term.write(chunk.data, () => { replaying = false; });
+            term.write(chunk.data, () => { replaying = false; if (session.cliId === "cursor") readCursorTurn(session.id); });
           }
           replayed = true;
         } else if (!replayed) {
@@ -474,6 +480,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       resizeObserver.disconnect();
       container.removeEventListener("paste", handlePaste);
       dataDisposable.dispose();
+      unregisterCursorScreen();
       term.dispose();
     };
   }, [session.id]);

@@ -9,14 +9,15 @@ export function enterReady(sentAt: number, lastOutput: number | null, now: numbe
 // 길거나 여러 줄인 본문은 bracketed paste(ESC[200~…ESC[201~)로 감싸 붙여넣기 경계를 명시한다.
 // codex는 경계 없이 본문 뒤에 온 \r을 입력창 줄바꿈으로 삼킨다. 짧은 한 줄 입력은 지원 안 하는 CLI를 위해 그대로 둔다.
 // enabled = 백엔드(get_session_paste_mode)가 알려 준 세션의 마지막 ESC[?2004h/l 상태. 켠 세션에만 감싸고 미수신·끔은 현행(무래핑).
-export function pasteWrap(body: string, enabled: boolean): string {
-  if (!enabled) return body;
+export function pasteWrap(body: string, enabled: boolean | null, cliId?: string): string {
+  if (!enabled && cliId !== "codex") return body;
   return body.length >= 200 || body.includes("\n") ? `\x1b[200~${body}\x1b[201~` : body;
 }
 
 // Enter 전송 뒤 출력이 전혀 없으면 \r이 삼켜진 것으로 보고 재전송한다.
 // codex는 \r을 삼켜도 화면을 다시 그려 출력이 생기므로, Enter 이후 출력에 붙여넣기 칩이 남아 있어도 삼켜진 것으로 본다.
-export function submissionStarted(output: string, logStarted: boolean | null): boolean {
+export function submissionStarted(output: string, logStarted: boolean | null, pastePending = false): boolean {
+  if (pastePending) return false;
   if (logStarted !== null) return logStarted;
   if (output.includes("\x1b]7501;state=working")) return true;
   const text = output.replace(/\x1b\[\d*C/g, " ").replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");

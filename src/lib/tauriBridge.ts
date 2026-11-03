@@ -14,6 +14,7 @@ import { collabProtocol } from "./blackboardDispatch";
 import { useAppStore } from "./store";
 import { enterReady, needsEnterRetry, pasteWrap, queueSessionWrite, submissionStarted } from "./sessionWriteQueue";
 import type { DeliveryAttempt } from "./deliveryAttempt";
+import { codexPastePending, CursorBusyError, cursorPastedSubmission, cursorTurnBusy, readTerminalScreen } from "./cursorScreen";
 import type {
   ApiKeyStatus,
   ApplyResult,
@@ -362,9 +363,13 @@ export async function apiWriteToSession(sessionId: string, data: string, injecte
           return;
         }
       const sentAt = Date.now();
+      const cursorBefore = session?.cliId === "cursor" ? readTerminalScreen(sessionId) : null;
         const pasteMode = await invoke<boolean | null>("get_session_paste_mode", { sessionId }).catch(() => null);
+      const cursorAtWrite = session?.cliId === "cursor" ? readTerminalScreen(sessionId) : null;
+      if (cursorAtWrite && cursorTurnBusy(cursorAtWrite)) throw new CursorBusyError();
+      if (verify && getUserInputVersion(sessionId) !== inputVersion) throw new Error("사용자 입력으로 전달이 중단되었습니다.");
       verify?.attempt?.commit();
-        const wrapped = pasteWrap(body, pasteMode === true);
+      const wrapped = pasteWrap(body, pasteMode, session?.cliId);
       await invoke("write_to_session", { sessionId, data: wrapped });
       bodyWritten = true;
       verify?.attempt?.check();
@@ -401,7 +406,12 @@ export async function apiWriteToSession(sessionId: string, data: string, injecte
           const chunk = endCursor === null ? null : await invoke<PtyOutputChunk>("read_session_output", { sessionId, cursor: endCursor }).catch(() => null);
           const output = chunk?.data ?? "";
           if (attempt === 0 && chunk && endCursor !== null) outputBytes = Math.max(0, chunk.nextCursor - endCursor);
-          confirmed = submissionStarted(output, await verify.hasStarted().catch(() => false));
+          const cursorNow = session?.cliId === "cursor" ? readTerminalScreen(sessionId) : null;
+          const cursorConfirmed = cursorBefore !== null && cursorNow !== null &&
+            ((!cursorTurnBusy(cursorBefore) && cursorTurnBusy(cursorNow)) || cursorPastedSubmission(cursorNow, cursorBefore));
+          const logStarted = await verify.hasStarted().catch(() => false);
+          const codexScreen = session?.cliId === "codex" ? readTerminalScreen(sessionId) : null;
+          confirmed = cursorConfirmed || (session?.cliId === "cursor" ? logStarted === true : submissionStarted(output, logStarted, codexScreen !== null && codexPastePending(codexScreen)));
           verify.attempt?.check();
           if (!needsEnterRetry(confirmed, getUserInputVersion(sessionId) !== inputVersion) || attempt === 2) break;
           if (getUserInputVersion(sessionId) !== inputVersion) break;

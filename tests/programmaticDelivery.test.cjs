@@ -4,7 +4,7 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 const ts = require("typescript");
 
-function setup() {
+function setup(pasteMode = true) {
   const session = { id: "resumed", agentId: "agent-1", cliId: "codex", cwd: "project", startedAt: "2026-11-02T00:00:00Z", rolePrompt: "역할 지침", roleInSystem: false };
   const writes = [];
   let enters = 0;
@@ -12,7 +12,7 @@ function setup() {
   const invoke = async (name, args) => {
     if (name === "get_project_agents") return [{ id: session.agentId, name: "Forge", roleTitle: "Engineer", rolePrompt: session.rolePrompt, autoBrief: true }];
     if (name === "get_session_context") return { source: "log", startedAt: enters >= 2 ? 200 : 100 };
-    if (name === "get_session_paste_mode") return true;
+    if (name === "get_session_paste_mode") return pasteMode;
     if (name === "get_session_quiet_since") return Date.now();
     if (name === "read_session_output") return { data: "prompt redraw", nextCursor: 0 };
     if (name === "write_to_session") { writes.push(args.data); if (args.data === "\r") enters++; return; }
@@ -33,11 +33,35 @@ function setup() {
   };
   load("src/lib/handoffRelay.ts", "./handoffRelay");
   load("src/lib/blackboardDispatch.ts", "./blackboardDispatch");
+  load("src/lib/cursorScreen.ts", "./cursorScreen");
   load("src/lib/sessionWriteQueue.ts", "./sessionWriteQueue");
   modules["./sessionWriteQueue"].enterReady = () => true;
   const bridge = load("src/lib/tauriBridge.ts", "./tauriBridge");
-  return { bridge, writes, session, role: modules["./handoffRelay"] };
+  return { bridge, writes, session, role: modules["./handoffRelay"], screen: modules["./cursorScreen"] };
 }
+
+test("Codex paste retries Enter without repeating body when a rendered chip remains", async () => {
+  for (const mode of [false, null]) {
+    const { bridge, writes, session, screen } = setup(mode);
+    session.roleInSystem = true;
+    screen.registerTerminalScreen(session.id, () => writes.filter((v) => v === "\r").length < 2 ? ["› [Pasted Content 300 chars]"] : ["›"]);
+    let confirmed = false;
+    await bridge.apiWriteToSession(session.id, `${"a".repeat(300)}\r`, true, { hasStarted: async () => true, onResult: (v) => { confirmed = v; } });
+    assert.equal(confirmed, true);
+    assert.equal(writes.filter((v) => v === "\r").length, 2);
+    assert.equal(writes.filter((v) => v.includes("a".repeat(300))).length, 1);
+    assert.match(writes[0], /^\x1b\[200~/);
+  }
+});
+
+test("Cursor checks rendered busy state immediately before writing", async () => {
+  const { bridge, writes, session, screen } = setup();
+  session.cliId = "cursor";
+  session.roleInSystem = true;
+  screen.registerTerminalScreen(session.id, () => ["Working", "ctrl+c to stop"]);
+  await assert.rejects(bridge.apiWriteToSession(session.id, "task\r", true, { hasStarted: async () => false, onResult() {} }), /응답 중/);
+  assert.deepEqual(writes, []);
+});
 
 test("automatic role submission skips when another delivery already consumed the role", async () => {
   const { bridge, writes, session, role } = setup();
@@ -135,6 +159,7 @@ test("failed write restores role prefix for the next mail", async () => {
   };
   load("src/lib/handoffRelay.ts", "./handoffRelay");
   load("src/lib/blackboardDispatch.ts", "./blackboardDispatch");
+  load("src/lib/cursorScreen.ts", "./cursorScreen");
   load("src/lib/sessionWriteQueue.ts", "./sessionWriteQueue");
   modules["./sessionWriteQueue"].enterReady = () => true;
   const bridge = load("src/lib/tauriBridge.ts", "./tauriBridge");

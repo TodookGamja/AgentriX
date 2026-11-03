@@ -47,6 +47,8 @@ test("paste wrapping and submission evidence", () => {
   const { pasteWrap, needsEnterRetry, submissionStarted } = moduleExports;
   const long = "가".repeat(650);
   assert.equal(pasteWrap(long, false), long);
+  assert.equal(pasteWrap(long, false, "codex"), `\x1b[200~${long}\x1b[201~`);
+  assert.equal(pasteWrap(long, null, "codex"), `\x1b[200~${long}\x1b[201~`);
   assert.equal(pasteWrap(long, true), `\x1b[200~${long}\x1b[201~`);
   assert.equal(pasteWrap("a\nb", true), "\x1b[200~a\nb\x1b[201~");
   assert.equal(pasteWrap("short", true), "short");
@@ -56,6 +58,9 @@ test("paste wrapping and submission evidence", () => {
   assert.equal(submissionStarted("\x1b]7501;state=working:app=codex", null), true);
   assert.equal(submissionStarted("esc\x1b[1Cto\x1b[1Cinterrupt", null), true);
   assert.equal(submissionStarted("redrawn input", null), false);
+  assert.equal(needsEnterRetry(submissionStarted("new turn", true, true), false), true);
+  assert.equal(needsEnterRetry(submissionStarted("new turn", true, false), false), false);
+  assert.equal(needsEnterRetry(submissionStarted("new turn", true, true), true), false);
 });
 
 test("apiWriteToSession asks the backend for paste mode, writes the body, then Enter separately; no frontend tracker left", () => {

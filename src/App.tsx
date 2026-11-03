@@ -115,6 +115,7 @@ import { findApproval, getApprovalMode, setDispatchNote, upsertApproval } from "
 import { countNewChars } from "./lib/tokenEstimate";
 import { deliveryGate, logTurnStillBusy, tabIsActive, type PendingDelivery } from "./lib/deliveryGate";
 import { DeliveryAttempt, withDeliveryDeadline } from "./lib/deliveryAttempt";
+import { CursorBusyError, readTerminalScreen, readCursorTurn } from "./lib/cursorScreen";
 import { useSessionQueue, queueKey } from "./lib/sessionQueueStore";
 import { nextUserItem, previewOf, type QueueSource } from "./lib/sessionQueue";
 import { forgetSessionInput, getLastSubmission, getSubmissionVersion, getSessionInputHistory, hasPendingSessionInput, setInstructionKeyResolver } from "./lib/inputHistory";
@@ -405,6 +406,12 @@ export const App: React.FC = () => {
         showToast("AgentriX가 최신 버전으로 성공적으로 업데이트되었습니다! 🎉", "success");
       }
     } catch {}
+  }, []);
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      for (const session of useAppStore.getState().sessions) if (session.cliId === "cursor") readCursorTurn(session.id);
+    }, 1000);
+    return () => window.clearInterval(id);
   }, []);
 
   // 인앱 다운로드 실시간 프로그레스 이벤트 리스너
@@ -1354,9 +1361,13 @@ ${recentSnippet || "진행 내역 기록 없음"}
   const [busySessionIds, setBusySessionIds] = useState<string>("");
   useEffect(() => {
     const tick = async () => {
-      const ids = useAppStore.getState().sessions.map((s) => s.id);
+      const sessions = useAppStore.getState().sessions;
+      const ids = sessions.map((s) => s.id);
       const quiet = await Promise.all(ids.map((id) => apiGetSessionQuietSince(id).catch(() => 0)));
-      setBusySessionIds(ids.filter((id, i) => tabIsActive(quiet[i], tabTurnRef.current[id])).join(","));
+      setBusySessionIds(ids.filter((id, i) => {
+        const turn = sessions[i].cliId === "cursor" ? readCursorTurn(id) : undefined;
+        return turn ? !turn.completedAt : tabIsActive(quiet[i], tabTurnRef.current[id]);
+      }).join(","));
     };
     void tick();
     const id = window.setInterval(tick, 3000);
@@ -2038,6 +2049,11 @@ ${recentSnippet || "진행 내역 기록 없음"}
   // ponytail: claude는 권한 확인처럼 조용히 멈춘 상태를 턴 종료로 오인하지 않게 30초 무출력일 때만 대체, 오판이 보이면 로그 매칭을 고칠 것
   // 한 번도 제출받지 않은 새 세션(출근 브리핑 턴 없음, v1.0.5~)은 진행 중인 턴이 있을 수 없으므로 30초 규칙 없이 출력이 멈추면 바로 받는다.
   const getTurnContext = async (session: typeof currentProjectSessions[number], claimed: string[]) => {
+    if (session.cliId === "cursor") {
+      const turn = readCursorTurn(session.id);
+      if (turn) return { tokens: 0, window: null, source: `cursor-screen:${session.id}`, ...turn };
+      if (readTerminalScreen(session.id) && getLastSubmission(session.id) > 0) return null;
+    }
     const ctx = await apiGetSessionContext(session, claimed).catch(() => null);
     const lastSubmit = getLastSubmission(session.id);
     if (ctx?.completedAt && ctx.completedAt > lastSubmit) return ctx;
@@ -2122,6 +2138,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
       const baseline = "startedAt" in ctx ? ctx.startedAt ?? 0 : 0;
       await apiWriteToSession(session.id, prompt, true, {
         hasStarted: async () => {
+          if (ctx.source.startsWith("cursor-screen:")) return (readCursorTurn(session.id)?.startedAt ?? 0) > baseline;
           if (ctx.source.startsWith("pty:")) return null;
           const current = await apiGetSessionContext(session, claimed);
           return Boolean(current && current.source === ctx.source && (current.startedAt ?? 0) > baseline);
@@ -2137,6 +2154,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
       return confirmed || blocked("입력창에 멈춤: 전달의 제출을 확인하지 못했습니다");
       }, 15_000);
     } catch (error) {
+      if (error instanceof CursorBusyError) return blocked("팀원이 응답 중(턴 종료 신호 대기)");
       if (!attempt.cancelled) throw error;
       if (attempt.committed) {
         pendingDeliveryRef.current[session.id] = { at: Date.now(), started: false, retriedAt: Date.now(), unconfirmed: true };
