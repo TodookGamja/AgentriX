@@ -124,5 +124,5 @@ test("T6: App sendToIdleTeamSessionRaw 공통 경로 — 락 사유·pending 가
   assert.match(app, /sendToIdleTeamSession\([\s\S]{0,500}source: "assign"/);
   assert.match(app, /sendToIdleTeamSession\([\s\S]{0,500}source: "report"/);
   const bridge = fs.readFileSync(path.join(ROOT, "src/lib/tauriBridge.ts"), "utf8");
-  assert.match(bridge, /recordSessionInput\(sessionId, data, injected\)/);
+  assert.match(bridge, /recordSessionInput\(sessionId, data, injected, false\)/);
 });

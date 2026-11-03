@@ -1351,6 +1351,18 @@ async fn list_cli_models(cli_id: String) -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
+fn log_delivery_stage(session_id: String, attempt_id: String, stage: String, elapsed_ms: u64) {
+    use std::io::Write;
+    let Some(root) = dirs::data_dir() else { return };
+    let dir = root.join("AI_CLI_Manager");
+    if std::fs::create_dir_all(&dir).is_err() { return; }
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("delivery.log")) {
+        let clean = |s: &str| s.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').take(100).collect::<String>();
+        let _ = writeln!(file, "{} session={} attempt={} stage={} elapsed_ms={}", chrono::Utc::now().to_rfc3339(), clean(&session_id), clean(&attempt_id), clean(&stage), elapsed_ms);
+    }
+}
+
+#[tauri::command]
 async fn write_to_session(
     state: State<'_, AppState>,
     session_id: String,
@@ -2177,6 +2189,7 @@ fn main() {
             request_with_detected_credential,
             run_cli_deep_analysis,
             start_session,
+            log_delivery_stage,
             write_to_session,
             resize_session,
             read_session_output,

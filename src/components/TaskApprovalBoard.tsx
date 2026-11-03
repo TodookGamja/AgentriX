@@ -1,6 +1,9 @@
 import React, { useEffect, useState } from "react";
 import { apiGetProjectBlackboard } from "../lib/tauriBridge";
-import { boardTaskTitle, parseBoardTasks, shortTaskTitle } from "../lib/blackboardDispatch";
+import { boardTaskColumn, boardTaskTitle, parseBoardTasks, shortTaskTitle } from "../lib/blackboardDispatch";
+import { getTeamMailDeliveries } from "../lib/teamMailDelivery";
+import { useSessionQueue } from "../lib/sessionQueueStore";
+import { useAppStore } from "../lib/store";
 import {
   getApprovalMode,
   getApprovals,
@@ -18,6 +21,7 @@ interface Card {
   taskId: string;
   agentId: string;
   title: string;
+  waitReason?: string;
 }
 
 interface TaskApprovalBoardProps {
@@ -30,7 +34,7 @@ export const TaskApprovalBoard: React.FC<TaskApprovalBoardProps> = ({ projectPat
   const [mode, setMode] = useState(() => getApprovalMode(projectPath));
   const [approvals, setApprovals] = useState<TaskApproval[]>([]);
   const [notes, setNotes] = useState<Record<string, string>>({});
-  const [cards, setCards] = useState<(Card & { status: "start" | "done" })[]>([]);
+  const [cards, setCards] = useState<(Card & { status: "start" | "done" | "wait"; confirmed: boolean; live: boolean; queued: boolean; waitReason: string })[]>([]);
   const [rejecting, setRejecting] = useState<string | null>(null);
   const [reason, setReason] = useState("");
   const [showAllDone, setShowAllDone] = useState(false);
@@ -44,11 +48,22 @@ export const TaskApprovalBoard: React.FC<TaskApprovalBoardProps> = ({ projectPat
       try {
         const board = await apiGetProjectBlackboard(projectPath);
         const names = Object.fromEntries(agents.map((a) => [a.id, a.name]));
-        const tasks = parseBoardTasks(board, agents.map((a) => a.id), names);
+        const tasks = parseBoardTasks(board, agents.map((a) => a.id), names, true);
+        const deliveries = getTeamMailDeliveries().filter((d) => d.project === projectPath);
+        const { queues, handled } = useSessionQueue.getState();
+        const sessions = useAppStore.getState().sessions;
+        const sent: string[] = JSON.parse(localStorage.getItem(`agentrix_bb_dispatched:${projectPath}`) || "[]");
         // 같은 작업이 착수→완료로 두 번 나오면 마지막 상태만 사용
         const last = new Map(tasks.map((t) => [`${t.taskId}:${t.agentId}`, t]));
         if (!stopped) {
-          setCards([...last.values()].map((t) => ({ ...t, title: boardTaskTitle(board, t.taskId) })));
+          setCards([...last.values()].map((t) => {
+            const queue = queues[t.agentId]?.find((item) => item.id === `assign:${t.taskId}`);
+            const delivery = deliveries.find((d) => d.agentId === t.agentId && d.kind === "task" && d.id === t.taskId);
+            const live = sessions.some((s) => s.cwd === projectPath && s.agentId === t.agentId && s.status === "running");
+            const confirmed = !handled.includes(`${t.agentId}|assign:${t.taskId}`) && (Boolean(delivery && !delivery.unconfirmed) || sent.includes(`${t.taskId}:start:${t.agentId}`));
+            const waitReason = t.status === "wait" ? "작업표에서 대기 중" : queue?.reason || (!live ? "담당 세션이 없습니다" : delivery?.unconfirmed ? "전달 결과 미확인" : "전달 대기");
+            return { ...t, title: boardTaskTitle(board, t.taskId), confirmed, live, queued: Boolean(queue), waitReason };
+          }));
         }
       } catch {
         /* 작업표가 아직 없으면 빈 보드 */
@@ -72,12 +87,12 @@ export const TaskApprovalBoard: React.FC<TaskApprovalBoardProps> = ({ projectPat
   };
 
   const manual = mode === "manual";
-  const pending = cards.filter((c) => c.status === "start" && manual && (!statusOf(c) || statusOf(c) === "pending"));
-  const rejected = cards.filter((c) => c.status === "start" && statusOf(c) === "rejected");
-  const running = cards.filter(
-    (c) => c.status === "start" && !pending.includes(c) && !rejected.includes(c)
-  );
-  const doneAll = cards.filter((c) => c.status === "done");
+  const kindOf = (c: typeof cards[number]) => boardTaskColumn({ ...c, manual, approval: statusOf(c) });
+  const pending = cards.filter((c) => kindOf(c) === "approval");
+  const waiting = cards.filter((c) => kindOf(c) === "waiting");
+  const rejected = cards.filter((c) => kindOf(c) === "rejected");
+  const running = cards.filter((c) => kindOf(c) === "running");
+  const doneAll = cards.filter((c) => kindOf(c) === "done");
   const { shown: done, hidden: hiddenDone } = recentDone(doneAll, showAllDone);
 
   const column = (title: string, tone: string, items: Card[], actions?: (c: Card) => React.ReactNode, total = items.length, footer?: React.ReactNode) => (
@@ -103,6 +118,11 @@ export const TaskApprovalBoard: React.FC<TaskApprovalBoardProps> = ({ projectPat
           {tone.includes("sky") && notes[c.taskId] && (
             <div className={`text-[11px] break-all line-clamp-2 ${notes[c.taskId].startsWith("전달됨") ? "text-sky-300/80" : "text-amber-300/80"}`}>
               {notes[c.taskId]}
+            </div>
+          )}
+          {tone.includes("indigo") && (
+            <div className="text-[11px] break-all line-clamp-2 text-indigo-300/80">
+              {notes[c.taskId]?.startsWith("대기:") ? notes[c.taskId] : c.waitReason}
             </div>
           )}
           {tone.includes("rose") && (
@@ -141,7 +161,7 @@ export const TaskApprovalBoard: React.FC<TaskApprovalBoardProps> = ({ projectPat
         </button>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 md:grid-rows-[minmax(0,1fr)] gap-3 flex-1 min-h-0">
+      <div className="grid grid-cols-1 md:grid-cols-5 md:grid-rows-[minmax(0,1fr)] gap-3 flex-1 min-h-0">
         {column("승인 대기", "text-amber-300", pending, (c) =>
           rejecting === `${c.taskId}:${c.agentId}` ? (
             <div className="space-y-1.5">
@@ -177,6 +197,7 @@ export const TaskApprovalBoard: React.FC<TaskApprovalBoardProps> = ({ projectPat
             </div>
           )
         )}
+        {column("대기", "text-indigo-300", waiting)}
         {column("진행 중", "text-sky-300", running)}
         {column("완료", "text-emerald-300", done, undefined, doneAll.length, (hiddenDone > 0 || showAllDone) && doneAll.length > 5 ? (
           <button onClick={() => setShowAllDone((v) => !v)} className={`w-full px-2 py-1 rounded bg-slate-800 text-slate-300 text-[11px] ${FOCUS}`}>

@@ -21,7 +21,7 @@ function setup() {
   const modules = {
     "@tauri-apps/api/core": { invoke },
     "@tauri-apps/api/event": {},
-    "./inputHistory": { getUserInputVersion: () => inputVersion, recordSessionInput: (_id, _data, injected) => { if (!injected) inputVersion++; } },
+    "./inputHistory": { getUserInputVersion: () => inputVersion, recordSessionSubmission: () => {}, recordSessionInput: (_id, _data, injected) => { if (!injected) inputVersion++; } },
     "./store": { useAppStore: { getState: () => ({ sessions: [session] }) } },
   };
   const load = (path, name) => {
@@ -123,7 +123,7 @@ test("failed write restores role prefix for the next mail", async () => {
   const modules = {
     "@tauri-apps/api/core": { invoke },
     "@tauri-apps/api/event": {},
-    "./inputHistory": { getUserInputVersion: () => inputVersion, recordSessionInput: (_id, _data, injected) => { if (!injected) inputVersion++; } },
+    "./inputHistory": { getUserInputVersion: () => inputVersion, recordSessionSubmission: () => {}, recordSessionInput: (_id, _data, injected) => { if (!injected) inputVersion++; } },
     "./store": { useAppStore: { getState: () => ({ sessions: [session] }) } },
   };
   const load = (path, name) => {
@@ -192,4 +192,12 @@ test("T23: App auto-brief tick and relay guards wire onlyPendingRole + roleInSys
   assert.match(app, /!session\.roleInSystem/);
   assert.match(app, /!newSession\.roleInSystem/);
   assert.match(app, /workRestarted\(\)/);
+});
+
+test("T23: workRestarted aborts relay before and after start_session; role prefix only on surviving session", () => {
+  const app = fs.readFileSync("src/App.tsx", "utf8");
+  assert.match(app, /if \(workRestarted\(\)\) \{ relayedSessionsRef\.current\.delete\(sessionId\); return; \}/);
+  assert.match(app, /if \(workRestarted\(\)\) \{\s*await apiStopSession\(newSession\.id\);/s);
+  assert.match(app, /markRolePrefix\(newSession\.id/);
+  assert.match(app, /markHandoffHint\(newSession\.id\)/);
 });

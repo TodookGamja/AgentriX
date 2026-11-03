@@ -2,7 +2,15 @@
 export interface BoardTask {
   taskId: string;
   agentId: string;
-  status: "start" | "done";
+  status: "start" | "done" | "wait";
+}
+
+export function boardTaskColumn(input: { status: BoardTask["status"]; manual: boolean; approval?: string; confirmed: boolean; live: boolean; queued: boolean }): "approval" | "waiting" | "running" | "done" | "rejected" {
+  if (input.status === "done") return "done";
+  if (input.status === "wait") return "waiting";
+  if (input.approval === "rejected") return "rejected";
+  if (input.manual && (!input.approval || input.approval === "pending")) return "approval";
+  return input.confirmed && input.live && !input.queued ? "running" : "waiting";
 }
 
 // 담당 칸의 팀원 이름으로 ID 찾기 (이름이 서로 포함 관계면 가장 긴 이름 우선, 동점이면 모호하므로 매칭 안 함)
@@ -22,7 +30,7 @@ export function statusKind(status: string): "start" | "done" | null {
   return /🔥|착수|in-progress/i.test(m[0]) ? "start" : /⏳|대기/.test(m[0]) ? null : "done";
 }
 
-export function parseBoardTasks(board: string, agentIds: string[], names?: Record<string, string>): BoardTask[] {
+export function parseBoardTasks(board: string, agentIds: string[], names?: Record<string, string>, includeWaiting = false): BoardTask[] {
   const tasks: BoardTask[] = [];
   const lines = board.split(/\r?\n/);
   let statusColIdx = -1;
@@ -61,7 +69,7 @@ export function parseBoardTasks(board: string, agentIds: string[], names?: Recor
       ? cells[statusColIdx]
       : ([...cells].reverse().find((c) => c) ?? "");
 
-    const kind = statusKind(status);
+    const kind = statusKind(status) ?? (includeWaiting && /⏳|대기/.test(status) ? "wait" : null);
     if (!kind) continue;
 
     const targetCell = roleColIdx > 0 && roleColIdx < cells.length ? cells[roleColIdx] : (cells[3] ?? "");

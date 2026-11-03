@@ -4,6 +4,7 @@ export interface TeamMailDelivery {
   project: string;
   sessionId: string;
   submittedAt: number;
+  unconfirmed?: boolean;
   kind?: "task" | "report" | "goal";
   payload?: string;
 }
@@ -23,20 +24,27 @@ export function saveTeamMailDelivery(delivery: TeamMailDelivery): void {
   localStorage.setItem(key, JSON.stringify([...remaining, delivery]));
 }
 
+export function reserveTeamMailDelivery(delivery: TeamMailDelivery): boolean {
+  const existing = getTeamMailDeliveries();
+  if (existing.some((d) => d.project === delivery.project && d.agentId === delivery.agentId)) return false;
+  localStorage.setItem(key, JSON.stringify([...existing, delivery]));
+  return true;
+}
+
 export function removeTeamMailDelivery(project: string, agentId: string, id: string, kind?: "task" | "report" | "goal"): void {
   localStorage.setItem(key, JSON.stringify(getTeamMailDeliveries().filter((d) => !(d.project === project && d.agentId === agentId && d.id === id && d.kind === kind))));
 }
 
 export function pruneStaleMailDeliveries(project: string, liveSessionIds: string[]): void {
   const all = getTeamMailDeliveries();
-  const keep = all.filter((d) => d.project !== project || d.kind !== undefined || liveSessionIds.includes(d.sessionId));
+  const keep = all.filter((d) => d.project !== project || d.kind !== undefined || d.unconfirmed || liveSessionIds.includes(d.sessionId));
   if (keep.length !== all.length) localStorage.setItem(key, JSON.stringify(keep));
 }
 
 // 받은 세션이 이미 사라진 task/report 기록 제거 (goal은 세션 없이 보관되므로 제외). 제거한 기록 수 반환
 export function pruneStaleDeliveries(project: string, liveSessionIds: string[]): number {
   const all = getTeamMailDeliveries();
-  const keep = all.filter((d) => d.project !== project || d.kind === "goal" || liveSessionIds.includes(d.sessionId));
+  const keep = all.filter((d) => d.project !== project || d.kind === "goal" || d.unconfirmed || liveSessionIds.includes(d.sessionId));
   if (keep.length !== all.length) localStorage.setItem(key, JSON.stringify(keep));
   return all.length - keep.length;
 }

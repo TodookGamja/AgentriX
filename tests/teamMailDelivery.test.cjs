@@ -11,6 +11,28 @@ const localStorage = { getItem: (key) => values.get(key) ?? null, setItem: (key,
 const api = {};
 vm.runInNewContext(js, { exports: api, localStorage, JSON, Array });
 
+test("task and mail cannot reserve the same agent concurrently", () => {
+  values.clear();
+  const task = { project: "p", agentId: "a", id: "task", sessionId: "s", submittedAt: 1, kind: "task", unconfirmed: true };
+  assert.equal(api.reserveTeamMailDelivery(task), true);
+  assert.equal(api.reserveTeamMailDelivery({ ...task, id: "mail", kind: undefined }), false);
+  assert.equal(api.reserveTeamMailDelivery({ ...task, agentId: "other" }), true);
+  assert.equal(api.getTeamMailDeliveries().length, 2);
+  values.clear();
+});
+
+test("unconfirmed task, mail and report survive session replacement", () => {
+  values.clear();
+  for (const kind of [undefined, "task", "report"]) {
+    const item = { project: "p", agentId: String(kind), id: "1", sessionId: "old", submittedAt: 1, kind, unconfirmed: true };
+    api.saveTeamMailDelivery(item);
+  }
+  api.pruneStaleMailDeliveries("p", ["new"]);
+  api.pruneStaleDeliveries("p", ["new"]);
+  assert.equal(api.getTeamMailDeliveries().length, 3);
+  values.clear();
+});
+
 test("retains in-flight deliveries across reloads and removes only the selected delivery", () => {
   const first = { project: "one", agentId: "a", id: "m", sessionId: "s", submittedAt: 1 };
   const second = { ...first, project: "two" };

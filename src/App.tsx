@@ -110,10 +110,11 @@ import { MarkdownLite } from "./components/MarkdownLite";
 import { FolderPickerModal } from "./components/FolderPickerModal";
 import { AgentrixLogo } from "./components/AgentrixLogo";
 import { boardProtocol, collabProtocol, forgetEndedStarts, mailProtocol, parseBoardTasks } from "./lib/blackboardDispatch";
-import { getTeamMailDeliveries, pruneStaleDeliveries, pruneStaleMailDeliveries, removeTeamMailDelivery, saveTeamMailDelivery, shouldRedeliver } from "./lib/teamMailDelivery";
+import { getTeamMailDeliveries, pruneStaleDeliveries, pruneStaleMailDeliveries, removeTeamMailDelivery, reserveTeamMailDelivery, saveTeamMailDelivery } from "./lib/teamMailDelivery";
 import { findApproval, getApprovalMode, setDispatchNote, upsertApproval } from "./lib/taskApproval";
 import { countNewChars } from "./lib/tokenEstimate";
-import { deliveryGate, logTurnStillBusy, type PendingDelivery } from "./lib/deliveryGate";
+import { deliveryGate, logTurnStillBusy, tabIsActive, type PendingDelivery } from "./lib/deliveryGate";
+import { DeliveryAttempt, withDeliveryDeadline } from "./lib/deliveryAttempt";
 import { useSessionQueue, queueKey } from "./lib/sessionQueueStore";
 import { nextUserItem, previewOf, type QueueSource } from "./lib/sessionQueue";
 import { forgetSessionInput, getLastSubmission, getSubmissionVersion, getSessionInputHistory, hasPendingSessionInput, setInstructionKeyResolver } from "./lib/inputHistory";
@@ -773,6 +774,7 @@ export const App: React.FC = () => {
   const compactAttemptedRef = useRef<Set<string>>(new Set());
   const realContextSessionsRef = useRef<Set<string>>(new Set());
   const contextSourceRef = useRef<Record<string, string>>({});
+  const tabTurnRef = useRef<Record<string, { startedAt?: number | null; completedAt?: number | null }>>({});
   const staleContextRef = useRef<Record<string, number>>({});
 
   const handleSaveTokenOptConfig = (cfg: TokenOptimizationConfig) => {
@@ -1328,7 +1330,8 @@ ${recentSnippet || "진행 내역 기록 없음"}
           .filter(([id]) => id !== s.id)
           .map(([, src]) => src);
         const ctx = await apiGetSessionContext(s, claimed).catch(() => null);
-        if (!ctx) continue;
+        if (!ctx) { delete tabTurnRef.current[s.id]; continue; }
+        tabTurnRef.current[s.id] = ctx;
         contextSourceRef.current[s.id] = ctx.source;
         realContextSessionsRef.current.add(s.id);
         // /compact 직후엔 로그의 마지막 값이 압축 전 수치 그대로라, 새 호출로 값이 바뀔 때까지 무시 (안 그러면 곧장 새 세션으로 넘어감)
@@ -1353,7 +1356,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
     const tick = async () => {
       const ids = useAppStore.getState().sessions.map((s) => s.id);
       const quiet = await Promise.all(ids.map((id) => apiGetSessionQuietSince(id).catch(() => 0)));
-      setBusySessionIds(ids.filter((_, i) => quiet[i] === null).join(","));
+      setBusySessionIds(ids.filter((id, i) => tabIsActive(quiet[i], tabTurnRef.current[id])).join(","));
     };
     void tick();
     const id = window.setInterval(tick, 3000);
@@ -2054,13 +2057,25 @@ ${recentSnippet || "진행 내역 기록 없음"}
     const q = useSessionQueue.getState();
     const key = queueKey(session);
     // 사용자가 대기열에서 직접 보내거나 버린 자동 항목: 다시 보내지 않고 '전달 완료'로 넘겨 호출부가 평소처럼 마무리하게 한다
-    if (meta && q.resolved.has(`${key}|${meta.id}`)) {
-      q.resolved.delete(`${key}|${meta.id}`);
-      q.remove(key, meta.id);
-      delete queueSeenRef.current[`${key}|${meta.id}`];
-      return true;
+    if (meta && (q.resolved.includes(`${key}|${meta.id}`) || q.handled.includes(`${key}|${meta.id}`))) {
+      sendBlockReasonRef.current[session.id] = "수동 처리 결과 반영 중";
+      return false;
     }
-    const ok = await sendToIdleTeamSessionRaw(session, prompt);
+    if (meta) {
+      const existing = q.queues[key]?.find((item) => item.id === meta.id);
+      if (existing?.stuck) { sendBlockReasonRef.current[session.id] = existing.reason ?? "입력창에 멈춤: 전달 결과 미확인"; return false; }
+      q.upsert(key, { ...meta, payload: prompt, createdAt: Date.now(), reason: "앞 전달 대기" });
+      if (useSessionQueue.getState().queues[key]?.[0]?.id !== meta.id) {
+        sendBlockReasonRef.current[session.id] = "앞 전달 대기";
+        return false;
+      }
+    }
+    let ok: boolean;
+    try { ok = await sendToIdleTeamSessionRaw(session, prompt); }
+    catch (err) {
+      if (meta) q.upsert(key, { ...meta, payload: prompt, createdAt: Date.now(), reason: "입력창에 멈춤: 전달 결과 미확인", stuck: true });
+      throw err;
+    }
     if (!meta) return ok;
     if (ok) {
       q.remove(key, meta.id);
@@ -2075,18 +2090,23 @@ ${recentSnippet || "진행 내역 기록 없음"}
   const sendToIdleTeamSessionRaw = async (session: typeof currentProjectSessions[number], prompt: string, onlyPendingRole = false): Promise<boolean> => {
     if (teamDeliveryLocksRef.current.has(session.id)) { sendBlockReasonRef.current[session.id] = "앞 전달 처리 중"; return false; }
     teamDeliveryLocksRef.current.add(session.id);
+    const attempt = new DeliveryAttempt(session.id, crypto.randomUUID());
+    const blocked = (why: string) => ((sendBlockReasonRef.current[session.id] = why), false);
     try {
-      const blocked = (why: string) => ((sendBlockReasonRef.current[session.id] = why), false);
+      return await withDeliveryDeadline(attempt, async () => {
       if (hasPendingSessionInput(session.id)) return blocked("입력창에 30초 안에 친 글이 남아 있음");
       if (optimizationRunningRef.current.has(session.id)) return blocked("세션 최적화 중");
       const claimed = Object.entries(contextSourceRef.current).filter(([id]) => id !== session.id).map(([, src]) => src);
+      attempt.step("turn");
       const ctx = await getTurnContext(session, claimed);
+      attempt.check();
       if (!ctx?.completedAt || ctx.completedAt <= getLastSubmission(session.id)) return blocked("팀원이 응답 중(턴 종료 신호 대기)");
       if (hasPendingSessionInput(session.id)) return blocked("입력창에 30초 안에 친 글이 남아 있음");
       if (!useAppStore.getState().sessions.some((s) => s.id === session.id)) return false;
       const pending = pendingDeliveryRef.current[session.id];
       const logBased = !ctx.source.startsWith("pty:");
       const quiet = pending ? await apiGetSessionQuietSince(session.id).catch(() => 0) : 0;
+      attempt.check();
       const action = deliveryGate(pending, logBased && ctx.completedAt > (pending?.at ?? 0), quiet, Date.now());
       if (action === "resend") {
         pendingDeliveryRef.current[session.id] = { ...pending!, retriedAt: Date.now() };
@@ -2109,11 +2129,22 @@ ${recentSnippet || "진행 내역 기록 없음"}
         onResult: (result) => { confirmed = result; },
         onlyPendingRole,
         onSkip: () => { skipped = true; },
+        attempt,
       });
+      attempt.check();
       if (skipped) return true;
       pendingDeliveryRef.current[session.id] = { at: getLastSubmission(session.id), started: confirmed, retriedAt: Date.now(), unconfirmed: !confirmed };
       return confirmed || blocked("입력창에 멈춤: 전달의 제출을 확인하지 못했습니다");
+      }, 15_000);
+    } catch (error) {
+      if (!attempt.cancelled) throw error;
+      if (attempt.committed) {
+        pendingDeliveryRef.current[session.id] = { at: Date.now(), started: false, retriedAt: Date.now(), unconfirmed: true };
+        return blocked("입력창에 멈춤: 전달의 제출을 확인하지 못했습니다");
+      }
+      return blocked("전달 준비 시간 초과");
     } finally {
+      attempt.step("release");
       teamDeliveryLocksRef.current.delete(session.id);
     }
   };
@@ -2170,22 +2201,40 @@ ${recentSnippet || "진행 내역 기록 없음"}
           if (stopped || !session.agentId) continue;
           try {
           const deliveries = getTeamMailDeliveries().filter((d) => d.project === project && d.agentId === session.agentId);
+          for (const queued of messages.filter((m) => m.to === session.agentId)) {
+            const id = `mail:${queued.id}`;
+            const key = queueKey(session);
+            const reserved = deliveries.find((d) => !d.kind && d.id === queued.id);
+            if ((reserved && !reserved.unconfirmed) || useSessionQueue.getState().resolved.includes(`${key}|${id}`) || useSessionQueue.getState().handled.includes(`${key}|${id}`)) continue;
+            const sender = agents.find((a) => a.id === queued.from)?.name ?? queued.from;
+            useSessionQueue.getState().upsert(key, {
+              id, source: "mail", preview: `${sender}: ${queued.subject.replace(/\s+/g, " ")}`, createdAt: Date.now(), reason: reserved ? "입력창에 멈춤: 전달 결과 미확인" : "앞 전달 대기", stuck: Boolean(reserved),
+              payload: `[팀 메시지: ${sender}] 메일 ID: ${queued.id}. 이미 처리한 ID면 다시 처리하지 마세요. 제목: ${queued.subject.replace(/[\r\n]+/g, " ")} 내용: ${queued.body.replace(/[\r\n]+/g, " ")} ${mailProtocol(session.agentId, agents)}\r`,
+            });
+          }
           if (deliveries.some((d) => d.kind)) continue;
           const pending = deliveries.find((d) => !d.kind);
           if (pending && pending.sessionId !== session.id) continue;
-          const message = messages.find((m) => m.to === session.agentId && (!pending || m.id === pending.id));
+          const message = messages.find((m) => m.to === session.agentId && (pending ? m.id === pending.id : !useSessionQueue.getState().resolved.includes(`${queueKey(session)}|mail:${m.id}`) && !useSessionQueue.getState().handled.includes(`${queueKey(session)}|mail:${m.id}`)));
           if (pending && !message) {
-            removeTeamMailDelivery(project, pending.agentId, pending.id);
+            if (!pending.unconfirmed) removeTeamMailDelivery(project, pending.agentId, pending.id);
             continue;
           }
           if (!pending && !message) continue;
           const claimed = Object.entries(contextSourceRef.current).filter(([id]) => id !== session.id).map(([, src]) => src);
           const ctx = await getTurnContext(session, claimed);
+          if (pending?.unconfirmed && ctx && "startedAt" in ctx && ctx.startedAt && ctx.startedAt > pending.submittedAt) {
+            pending.unconfirmed = false;
+            saveTeamMailDelivery(pending);
+            useSessionQueue.getState().remove(queueKey(session), `mail:${pending.id}`);
+          }
           if (!ctx?.completedAt || ctx.completedAt <= getLastSubmission(session.id)) continue;
           contextSourceRef.current[session.id] = ctx.source;
           if (pending) {
+            if (pending.unconfirmed && (!("startedAt" in ctx) || !ctx.startedAt || ctx.startedAt <= pending.submittedAt)) continue;
             if (ctx.completedAt <= pending.submittedAt) continue;
             await apiAcknowledgeTeamMail(pending.project, pending.agentId, pending.id);
+            if (pending.unconfirmed) useSessionQueue.getState().remove(queueKey(session), `mail:${pending.id}`);
             removeTeamMailDelivery(pending.project, pending.agentId, pending.id);
             continue;
           }
@@ -2193,20 +2242,19 @@ ${recentSnippet || "진행 내역 기록 없음"}
           if (getTeamMailDeliveries().some((d) => d.project === project && d.agentId === session.agentId)) continue;
           const sender = agents.find((a) => a.id === message.from)?.name ?? message.from;
           const prompt = `[팀 메시지: ${sender}] 메일 ID: ${message.id}. 이미 처리한 ID면 다시 처리하지 마세요. 제목: ${message.subject.replace(/[\r\n]+/g, " ")} 내용: ${message.body.replace(/[\r\n]+/g, " ")} ${mailProtocol(session.agentId, agents)}\r`;
-          const delivery = { id: message.id, agentId: session.agentId, project, sessionId: session.id, submittedAt: Date.now() };
-          saveTeamMailDelivery(delivery);
+            const delivery = { id: message.id, agentId: session.agentId, project, sessionId: session.id, submittedAt: Date.now(), unconfirmed: true };
+            if (!reserveTeamMailDelivery(delivery)) continue;
           let sent: boolean;
           try {
             sent = await sendToIdleTeamSession(session, prompt, { id: `mail:${message.id}`, source: "mail", preview: `${sender}: ${message.subject.replace(/\s+/g, " ")}` });
           } catch (err) {
-            removeTeamMailDelivery(project, session.agentId, message.id);
             throw err;
           }
           if (!sent) {
-            removeTeamMailDelivery(project, session.agentId, message.id);
+              if (sendBlockReasonRef.current[session.id] !== "입력창에 멈춤: 전달의 제출을 확인하지 못했습니다") removeTeamMailDelivery(project, session.agentId, message.id);
             continue;
           }
-          saveTeamMailDelivery({ ...delivery, submittedAt: getLastSubmission(session.id) });
+            saveTeamMailDelivery({ ...delivery, submittedAt: getLastSubmission(session.id), unconfirmed: false });
           } catch (err) {
             console.error("Team mail delivery failed", project, session.id, err);
           }
@@ -2227,12 +2275,50 @@ ${recentSnippet || "진행 내역 기록 없음"}
   }, []);
   // 사용자 대기열 자동 꺼내기: 세션이 유휴이고 앞 전달의 턴 시작이 확인되면(관문) 맨 앞 1건만 제출. 멈춤 항목은 뒤를 막는다
   useEffect(() => {
+    let running = false;
+    const tick = async () => {
+      if (running) return;
+      running = true;
+      try {
+        for (const session of useAppStore.getState().sessions) {
+          if (!session.agentId) continue;
+          const prefix = `${queueKey(session)}|`;
+          const resolvedKey = useSessionQueue.getState().resolved.find((key) => key.startsWith(prefix));
+          if (!resolvedKey) continue;
+          const id = resolvedKey.slice(prefix.length);
+          const kind = id.startsWith("assign:") ? "task" : id.startsWith("report:") ? "report" : id.startsWith("mail:") ? undefined : "other";
+          if (kind === "other") { useSessionQueue.getState().clearResolved(resolvedKey); continue; }
+          const itemId = id.slice(id.indexOf(":") + 1);
+          const delivery = getTeamMailDeliveries().find((d) => d.project === session.cwd && d.agentId === session.agentId && d.id === itemId && d.kind === kind);
+          if (!kind) {
+            await apiAcknowledgeTeamMail(session.cwd, session.agentId, itemId);
+          } else {
+            const storeKey = `agentrix_bb_dispatched:${session.cwd}`;
+            const sent: string[] = JSON.parse(localStorage.getItem(storeKey) || "[]");
+            if (!Array.isArray(sent) || !sent.every((item) => typeof item === "string")) throw new Error("Invalid dispatch record");
+            const separator = itemId.indexOf(":");
+            const marker = kind === "task" ? `${itemId}:start:${session.agentId}` : `${itemId.slice(0, separator)}:done:${itemId.slice(separator + 1)}`;
+            localStorage.setItem(storeKey, JSON.stringify([...new Set([...sent, marker])]));
+          }
+          if (delivery) {
+            removeTeamMailDelivery(delivery.project, delivery.agentId, delivery.id, delivery.kind);
+            delete pendingDeliveryRef.current[session.id];
+          }
+          useSessionQueue.getState().markHandled(resolvedKey);
+        }
+      } catch (err) { console.error("Unconfirmed delivery resolution failed", err); }
+      finally { running = false; }
+    };
+    const id = window.setInterval(tick, 3000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  useEffect(() => {
     let busy = false;
     const tick = async () => {
       if (busy) return;
       busy = true;
       try {
-        useSessionQueue.getState().dropStale((key, id) => Date.now() - (queueSeenRef.current[`${key}|${id}`] ?? 0) < 15_000);
         for (const s of useAppStore.getState().sessions) {
           const item = nextUserItem(useSessionQueue.getState().queues[queueKey(s)]);
           if (item) await sendToIdleTeamSession(s, item.payload, { id: item.id, source: "user", preview: item.preview });
@@ -2305,6 +2391,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
       for (const delivery of getTeamMailDeliveries().filter((d) => d.project === project && d.kind)) {
         const session = projSessions.find((s) => s.id === delivery.sessionId && s.agentId === delivery.agentId);
         if (!session) {
+          if (delivery.unconfirmed) continue;
           // 받은 세션이 종료·재시작되면 완료 신호가 영영 오지 않아 같은 팀원의 다음 작업까지 막힘 → 기록을 버리고 새 세션에 다시 전달
           // 단 완료 보고는 이미 처리됐을 수 있어 다시 보내면 중복 보고가 되므로 전달 완료로 표시하고 버린다
           if (delivery.kind === "report") {
@@ -2316,21 +2403,18 @@ ${recentSnippet || "진행 내역 기록 없음"}
         }
         const claimed = Object.entries(contextSourceRef.current).filter(([id]) => id !== session.id).map(([, src]) => src);
         const ctx = await getTurnContext(session, claimed);
+        if (delivery.unconfirmed && ctx && "startedAt" in ctx && ctx.startedAt && ctx.startedAt > delivery.submittedAt) {
+          delivery.unconfirmed = false;
+          saveTeamMailDelivery(delivery);
+          useSessionQueue.getState().remove(queueKey(session), delivery.kind === "task" ? `assign:${delivery.id}` : `report:${delivery.id}`);
+          if (delivery.kind === "task") {
+            sent.add(`${delivery.id}:start:${delivery.agentId}`);
+            localStorage.setItem(storeKey, JSON.stringify([...sent]));
+          }
+        }
+        if (delivery.unconfirmed && (!ctx || !("startedAt" in ctx) || !ctx.startedAt || ctx.startedAt <= delivery.submittedAt)) continue;
         if (!ctx?.completedAt || ctx.completedAt <= delivery.submittedAt || ctx.completedAt <= getLastSubmission(session.id)) {
           const waitMin = Math.floor((Date.now() - delivery.submittedAt) / 60_000);
-          // 전달 2분 뒤에도 그 뒤로 출력이 전혀 없으면(입력이 먹히지 않음) 기록을 지워 재전달, 최대 3회
-          // ponytail: 입력창에 배정문이 남은 경우는 sendToIdleTeamSession이 막으므로 사용자가 지워야 함
-          if (delivery.kind === "task") {
-            const quiet = await apiGetSessionQuietSince(session.id).catch(() => null);
-            const retryKey = `agentrix_delivery_retries:${project}:${delivery.id}`;
-            const retries = Number(localStorage.getItem(retryKey) || 0);
-            if (shouldRedeliver(waitMin, quiet, delivery.submittedAt, retries)) {
-              localStorage.setItem(retryKey, String(retries + 1));
-              removeTeamMailDelivery(project, delivery.agentId, delivery.id, "task");
-              setDispatchNote(project, delivery.id, `응답 없음 ${waitMin}분 · 재전달 ${retries + 1}/3`);
-              continue;
-            }
-          }
           if (delivery.kind === "task" && waitMin >= 5) {
             setDispatchNote(project, delivery.id, `전달 ${new Date(delivery.submittedAt).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })} · ${waitMin}분째 완료 신호 없음`);
           }
@@ -2344,6 +2428,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
           sent.add(`${delivery.id}:start:${delivery.agentId}`);
         }
         localStorage.setItem(storeKey, JSON.stringify([...sent]));
+        if (delivery.unconfirmed) useSessionQueue.getState().remove(queueKey(session), delivery.kind === "task" ? `assign:${delivery.id}` : `report:${delivery.id}`);
         removeTeamMailDelivery(project, delivery.agentId, delivery.id, delivery.kind);
       }
       pruneStaleDeliveries(project, projSessions.map((s) => s.id)); // 재출근으로 세션이 바뀐 묵은 기록이 새 배정을 막지 않게 정리
@@ -2354,6 +2439,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
       if (tasks.length > 0) forgetEndedStarts(sent, tasks);
       const doneTasks: typeof tasks = [];
       for (const t of tasks) {
+        if (t.status === "wait") continue;
         const key = `${t.taskId}:${t.status}:${t.agentId}`;
         if (sent.has(key)) continue;
         // 수동 승인 모드: 사용자가 승인한 작업만 전달, 반려는 사유를 PM에게 알리고 종료
@@ -2377,6 +2463,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
         }
         if (t.status === "done") {
           if (!pmSession) continue;
+          if (useSessionQueue.getState().handled.includes(`${queueKey(pmSession)}|report:${t.taskId}:${t.agentId}`)) continue;
           if (getTeamMailDeliveries().some((d) => d.project === project && d.agentId === t.agentId && d.id === t.taskId && d.kind === "task")) continue;
           doneTasks.push(t);
           continue;
@@ -2386,8 +2473,15 @@ ${recentSnippet || "진행 내역 기록 없음"}
           setDispatchNote(project, t.taskId, "대기: 담당 팀원 세션이 없음 (출근 필요)");
           continue;
         }
+        if (useSessionQueue.getState().handled.includes(`${queueKey(target)}|assign:${t.taskId}`)) continue;
         const busy = getTeamMailDeliveries().find((d) => d.project === project && d.agentId === t.agentId);
         if (busy) {
+            if ((busy.id !== t.taskId || busy.unconfirmed) && !useSessionQueue.getState().resolved.includes(`${queueKey(target)}|assign:${t.taskId}`) && !useSessionQueue.getState().handled.includes(`${queueKey(target)}|assign:${t.taskId}`)) {
+              useSessionQueue.getState().upsert(queueKey(target), {
+                id: `assign:${t.taskId}`, source: "assign", preview: `${t.taskId} 작업 배정`, createdAt: Date.now(), reason: busy.id === t.taskId ? "입력창에 멈춤: 전달 결과 미확인" : "앞 전달 대기", stuck: busy.id === t.taskId,
+                payload: `[PM 배정] .ai-agents/BLACKBOARD.md 작업표의 ${t.taskId} 작업을 수행하세요. 완료하면 해당 행의 상태를 ✅ 완료로 바꾸고 결과를 한 줄 메모로 남기세요. BLACKBOARD.md는 셸 명령이 아닌 파일 편집 도구로 수정하세요(한글 깨짐 방지). ${mailProtocol(t.agentId, agents)}\r`,
+              });
+            }
           if (busy.id !== t.taskId) setDispatchNote(project, t.taskId, busy.kind === "task" ? `대기: 앞 작업(${busy.id.split(":")[0]}) 처리 중` : "대기: 앞 메일 처리 중");
           else {
             const hhmm = new Date(busy.submittedAt).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
@@ -2397,31 +2491,40 @@ ${recentSnippet || "진행 내역 기록 없음"}
           continue;
         }
         try {
-          const delivery = { id: t.taskId, agentId: t.agentId, project, sessionId: target.id, submittedAt: Date.now(), kind: "task" as const };
-          saveTeamMailDelivery(delivery);
+            const delivery = { id: t.taskId, agentId: t.agentId, project, sessionId: target.id, submittedAt: Date.now(), kind: "task" as const, unconfirmed: true };
+            if (!reserveTeamMailDelivery(delivery)) continue;
           if (!await sendToIdleTeamSession(
             target,
             `[PM 배정] .ai-agents/BLACKBOARD.md 작업표의 ${t.taskId} 작업을 수행하세요. 완료하면 해당 행의 상태를 ✅ 완료로 바꾸고 결과를 한 줄 메모로 남기세요. BLACKBOARD.md는 셸 명령이 아닌 파일 편집 도구로 수정하세요(한글 깨짐 방지). ${mailProtocol(t.agentId, agents)}\r`,
             { id: `assign:${t.taskId}`, source: "assign", preview: `${t.taskId} 작업 배정` }
           )) {
-            removeTeamMailDelivery(project, t.agentId, t.taskId, "task");
+              if (sendBlockReasonRef.current[target.id] !== "입력창에 멈춤: 전달의 제출을 확인하지 못했습니다") removeTeamMailDelivery(project, t.agentId, t.taskId, "task");
             setDispatchNote(project, t.taskId, `대기: ${sendBlockReasonRef.current[target.id] ?? "전달 조건 미충족"}`);
             continue;
           }
-          saveTeamMailDelivery({ ...delivery, submittedAt: getLastSubmission(target.id) });
+            saveTeamMailDelivery({ ...delivery, submittedAt: getLastSubmission(target.id), unconfirmed: false });
+            sent.add(`${t.taskId}:start:${t.agentId}`);
+            localStorage.setItem(storeKey, JSON.stringify([...sent]));
           setDispatchNote(project, t.taskId, `전달됨 ${new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}`);
           showToast(`📋 ${t.taskId} → '${target.name}' 자동 배정`, "info");
         } catch {}
       }
-      if (pmSession?.agentId && doneTasks.length > 0 && !getTeamMailDeliveries().some((d) => d.project === project && d.agentId === pmSession.agentId)) {
+        if (pmSession?.agentId) for (const task of doneTasks) {
+          const id = `report:${task.taskId}:${task.agentId}`;
+          const key = queueKey(pmSession);
+          const reserved = getTeamMailDeliveries().find((d) => d.project === project && d.agentId === pmSession.agentId && d.kind === "report" && d.id === `${task.taskId}:${task.agentId}`);
+          if (useSessionQueue.getState().resolved.includes(`${key}|${id}`) || useSessionQueue.getState().handled.includes(`${key}|${id}`) || (reserved && !reserved.unconfirmed)) continue;
+          useSessionQueue.getState().upsert(key, { id, source: "report", preview: `${task.taskId} 완료 보고`, createdAt: Date.now(), reason: reserved ? "입력창에 멈춤: 전달 결과 미확인" : "앞 전달 대기", stuck: Boolean(reserved), payload: `[완료 보고] ${task.taskId} 작업이 완료되었습니다. .ai-agents/BLACKBOARD.md를 확인하고 다음 작업을 배정하거나 최종 보고하세요.\r` });
+        }
+        if (pmSession?.agentId && doneTasks.length > 0 && !getTeamMailDeliveries().some((d) => d.project === project && d.agentId === pmSession.agentId)) {
         try {
           const task = doneTasks[0];
-          const delivery = { id: `${task.taskId}:${task.agentId}`, agentId: pmSession.agentId, project, sessionId: pmSession.id, submittedAt: Date.now(), kind: "report" as const };
-          saveTeamMailDelivery(delivery);
+            const delivery = { id: `${task.taskId}:${task.agentId}`, agentId: pmSession.agentId, project, sessionId: pmSession.id, submittedAt: Date.now(), kind: "report" as const, unconfirmed: true };
+            if (!reserveTeamMailDelivery(delivery)) continue;
           if (await sendToIdleTeamSession(pmSession, `[완료 보고] ${task.taskId} 작업이 완료되었습니다. .ai-agents/BLACKBOARD.md를 확인하고 다음 작업을 배정하거나 최종 보고하세요.\r`, { id: `report:${task.taskId}:${task.agentId}`, source: "report", preview: `${task.taskId} 완료 보고` })) {
-            saveTeamMailDelivery({ ...delivery, submittedAt: getLastSubmission(pmSession.id) });
+              saveTeamMailDelivery({ ...delivery, submittedAt: getLastSubmission(pmSession.id), unconfirmed: false });
           } else {
-            removeTeamMailDelivery(project, delivery.agentId, delivery.id, "report");
+              if (sendBlockReasonRef.current[pmSession.id] !== "입력창에 멈춤: 전달의 제출을 확인하지 못했습니다") removeTeamMailDelivery(project, delivery.agentId, delivery.id, "report");
           }
         } catch {}
       }

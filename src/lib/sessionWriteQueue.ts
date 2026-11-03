@@ -28,9 +28,10 @@ export function needsEnterRetry(started: boolean, userChanged: boolean): boolean
 
 const tails =new Map<string, Promise<void>>();
 
-export function queueSessionWrite(sessionId: string, write: () => Promise<void>): Promise<void> {
+export function queueSessionWrite(sessionId: string, write: () => Promise<void>, cancelled?: Promise<void>): Promise<void> {
   const previous = tails.get(sessionId) ?? Promise.resolve();
-  const next = previous.catch(() => {}).then(write);
+  const operation = previous.catch(() => {}).then(write);
+  const next = cancelled ? Promise.race([operation, cancelled.then(() => { throw new Error("delivery attempt cancelled"); })]) : operation;
   tails.set(sessionId, next);
   void next.finally(() => {
     if (tails.get(sessionId) === next) tails.delete(sessionId);

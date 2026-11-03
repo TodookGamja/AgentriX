@@ -8,11 +8,12 @@ export async function apiInstallNpmCliUpdate(packageName: string): Promise<void>
   return invoke("install_npm_cli_update", { package: packageName });
 }
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
-import { getUserInputVersion, recordSessionInput } from "./inputHistory";
+import { getUserInputVersion, recordSessionInput, recordSessionSubmission } from "./inputHistory";
 import { applyHandoffHint, getRoleState, markRolePrefix, restoreHandoffHint } from "./handoffRelay";
 import { collabProtocol } from "./blackboardDispatch";
 import { useAppStore } from "./store";
 import { enterReady, needsEnterRetry, pasteWrap, queueSessionWrite, submissionStarted } from "./sessionWriteQueue";
+import type { DeliveryAttempt } from "./deliveryAttempt";
 import type {
   ApiKeyStatus,
   ApplyResult,
@@ -302,10 +303,15 @@ export async function apiStartSession(
   };
 }
 
-export async function apiWriteToSession(sessionId: string, data: string, injected = false, verify?: { hasStarted: () => Promise<boolean | null>; onResult: (confirmed: boolean) => void; onlyPendingRole?: boolean; onSkip?: () => void }, roleBriefing = false): Promise<void> {
-  recordSessionInput(sessionId, data, injected);
+export class SubmissionUnconfirmedError extends Error {
+  constructor() { super("보냈지만 제출을 확인하지 못했습니다."); this.name = "SubmissionUnconfirmedError"; }
+}
+
+export async function apiWriteToSession(sessionId: string, data: string, injected = false, verify?: { hasStarted: () => Promise<boolean | null>; onResult: (confirmed: boolean) => void; onlyPendingRole?: boolean; onSkip?: () => void; attempt?: DeliveryAttempt }, roleBriefing = false): Promise<void> {
+  recordSessionInput(sessionId, data, injected, false);
   const inputVersion = getUserInputVersion(sessionId);
   return queueSessionWrite(sessionId, async () => {
+    verify?.attempt?.check();
     const session = useAppStore.getState().sessions.find((s) => s.id === sessionId);
     if (verify?.onlyPendingRole && getRoleState(sessionId) !== "pending") {
       verify.onSkip?.();
@@ -320,12 +326,14 @@ export async function apiWriteToSession(sessionId: string, data: string, injecte
       }
     }
     const original = data;
+    verify?.attempt?.check();
     const roleWasPending = getRoleState(sessionId) === "pending";
     data = applyHandoffHint(sessionId, data);
     const prefix = data !== original ? data.slice(0, data.length - original.length) : "";
     const roleText = session?.rolePrompt?.replace(/[\r\n]+/g, " ").trim();
     if (roleBriefing && roleWasPending && roleText && prefix.includes(roleText)) data = prefix.replace(roleText, "") + original;
     let restored = false;
+    let bodyWritten = false;
     const restore = () => { if (!restored && prefix) { restoreHandoffHint(sessionId, prefix, roleWasPending); restored = true; } };
     try {
   if (isTauriRuntime()) {
@@ -355,18 +363,23 @@ export async function apiWriteToSession(sessionId: string, data: string, injecte
         }
       const sentAt = Date.now();
         const pasteMode = await invoke<boolean | null>("get_session_paste_mode", { sessionId }).catch(() => null);
+      verify?.attempt?.commit();
         const wrapped = pasteWrap(body, pasteMode === true);
       await invoke("write_to_session", { sessionId, data: wrapped });
+      bodyWritten = true;
+      verify?.attempt?.check();
       const lines = body.split("\n").length;
       const minWait = Math.min(1500, 200 + body.length + (lines > 1 ? 300 : 0));
       for (;;) {
         await new Promise((r) => setTimeout(r, 50));
         // quietMs 0 = 마지막 출력 시각
         const last = await invoke<number | null>("get_session_quiet_since", { sessionId, quietMs: 0 }).catch(() => null);
+        verify?.attempt?.check();
         if (enterReady(sentAt, last, Date.now(), minWait)) break;
       }
       // Enter 직전 출력 끝 위치: 이후 출력만 보고 삼켜짐을 판정 (커서가 끝을 넘으면 nextCursor = 현재 끝)
       const endCursor = await invoke<PtyOutputChunk>("read_session_output", { sessionId, cursor: Number.MAX_SAFE_INTEGER }).then((c) => c.nextCursor).catch(() => null);
+      verify?.attempt?.check();
       if (verify && getUserInputVersion(sessionId) !== inputVersion) {
         console.info(`[team-delivery] session=${sessionId} paste_mode=${pasteMode} write_at=${sentAt} enter_at=none output_bytes_2s=0 confirmed=false retries=0`);
         restore(); verify.onResult(false);
@@ -374,8 +387,12 @@ export async function apiWriteToSession(sessionId: string, data: string, injecte
         return;
       }
       const enterAt = Date.now();
+      verify?.attempt?.step("submit");
       await invoke("write_to_session", { sessionId, data: "\r" });
+      recordSessionSubmission(sessionId);
+      verify?.attempt?.check();
       if (verify) {
+        verify.attempt?.step("confirm");
         let confirmed = false;
         let retries = 0;
         let outputBytes = 0;
@@ -385,6 +402,7 @@ export async function apiWriteToSession(sessionId: string, data: string, injecte
           const output = chunk?.data ?? "";
           if (attempt === 0 && chunk && endCursor !== null) outputBytes = Math.max(0, chunk.nextCursor - endCursor);
           confirmed = submissionStarted(output, await verify.hasStarted().catch(() => false));
+          verify.attempt?.check();
           if (!needsEnterRetry(confirmed, getUserInputVersion(sessionId) !== inputVersion) || attempt === 2) break;
           if (getUserInputVersion(sessionId) !== inputVersion) break;
           await invoke("write_to_session", { sessionId, data: "\r" });
@@ -397,13 +415,17 @@ export async function apiWriteToSession(sessionId: string, data: string, injecte
       }
       return;
     }
-    return invoke("write_to_session", { sessionId, data });
+    await invoke("write_to_session", { sessionId, data });
+    if (/[\r\n]/.test(data)) recordSessionSubmission(sessionId);
+    return;
   }
   const prev = fallbackBuffers.get(sessionId) ?? "";
+  verify?.attempt?.commit();
   fallbackBuffers.set(sessionId, prev + data);
+  if (/[\r\n]/.test(data)) recordSessionSubmission(sessionId);
   fallbackListeners.forEach((cb) => cb({ sessionId, data }));
-    } catch (error) { restore(); throw error; }
-  });
+    } catch (error) { restore(); if (bodyWritten) throw new SubmissionUnconfirmedError(); throw error; }
+  }, verify?.attempt?.cancelledPromise);
 }
 
 export interface TeamMail {

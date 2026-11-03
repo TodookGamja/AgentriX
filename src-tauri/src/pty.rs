@@ -218,6 +218,7 @@ impl PtyManager {
             && !agent.role_prompt.trim().is_empty()
             && collab_protocol.as_deref().is_some_and(|s| !s.trim().is_empty())
             && initial_command.is_none()
+            && resume_session_id.is_none()
             && (npm_script.is_some() || cli_def.resolved_binary.as_deref().is_some_and(|binary| {
                 Path::new(binary).extension().is_some_and(|ext| ext.eq_ignore_ascii_case("exe"))
             }))
@@ -572,7 +573,7 @@ fn codex_role_config(role: &str) -> Option<String> {
         } else {
             write!(value, "\\U{:08X}", ch as u32).ok()?;
         }
-        // Long roles use the confirmed PTY submission path to avoid Windows limits.
+        // 16,000 encoded bytes passed a Windows PowerShell-to-Node probe; longer roles use PTY submission.
         if value.len() > 16_000 { return None; }
     }
     value.push_str("\\\"");
@@ -765,6 +766,89 @@ fn build_platform_command(
 #[cfg(test)]
 mod tests {
     #[test]
+    #[ignore = "Cursor startup probe without model request"]
+    fn cursor_startup_probe() {
+        use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+        use std::io::Read;
+        use std::sync::mpsc;
+        use std::time::Duration;
+        let binary = crate::cli::home_dir().join("AppData").join("Local").join("cursor-agent").join("agent.cmd");
+        let pair = native_pty_system().openpty(PtySize { rows: 30, cols: 110, pixel_width: 0, pixel_height: 0 }).unwrap();
+        let mut reader = pair.master.try_clone_reader().unwrap();
+        let mut command = CommandBuilder::new("cmd.exe");
+        command.args(["/d", "/c", &binary.to_string_lossy()]);
+        command.cwd(crate::cli::safe_helper_cwd());
+        let mut child = pair.slave.spawn_command(command).unwrap();
+        drop(pair.slave);
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || { let mut bytes = [0u8; 256]; if let Ok(n) = reader.read(&mut bytes) { let _ = tx.send(bytes[..n].to_vec()); } });
+        let bytes = rx.recv_timeout(Duration::from_secs(8)).unwrap_or_default();
+        let masked: Vec<_> = bytes.iter().take(16).map(|b| match b { 0x1b => "ESC", b'\r' => "CR", b'\n' => "LF", 0..=31 => "CTRL", _ => "redacted" }).collect();
+        println!("startup bytes={} first={masked:?}", bytes.len());
+        let trace_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join(".ai-agents").join("cursor_startup_probe.txt");
+        std::fs::write(trace_path, format!("startup bytes={} first={masked:?} cursor_position_query={}", bytes.len(), bytes == b"\x1b[6n")).unwrap();
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    #[test]
+    #[ignore = "live Cursor model request"]
+    fn cursor_turn_signal_live_smoke() {
+        use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+        use std::io::{Read, Write};
+        use std::sync::mpsc;
+        use std::time::{Duration, Instant};
+
+        let binary = crate::cli::home_dir().join("AppData").join("Local").join("cursor-agent").join("agent.cmd");
+        assert!(binary.is_file(), "Cursor agent executable not found");
+        let pair = native_pty_system().openpty(PtySize { rows: 30, cols: 110, pixel_width: 0, pixel_height: 0 }).unwrap();
+        let mut reader = pair.master.try_clone_reader().unwrap();
+        let mut writer = pair.master.take_writer().unwrap();
+        let mut command = CommandBuilder::new("cmd.exe");
+        command.args(["/d", "/c", &binary.to_string_lossy()]);
+        command.cwd(crate::cli::safe_helper_cwd());
+        let mut child = pair.slave.spawn_command(command).unwrap();
+        drop(pair.slave);
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut buf = [0; 8192];
+            while let Ok(n) = reader.read(&mut buf) {
+                if n == 0 || tx.send(buf[..n].to_vec()).is_err() { break; }
+            }
+        });
+        let started = Instant::now();
+        let mut sent = false;
+        let mut cursor_replied = false;
+        let mut all = Vec::new();
+        let mut trace = Vec::new();
+        while started.elapsed() < Duration::from_secs(35) {
+            if !sent && started.elapsed() >= Duration::from_secs(6) {
+                writer.write_all(b"Reply with OK only").unwrap();
+                std::thread::sleep(Duration::from_millis(400));
+                writer.write_all(b"\r").unwrap();
+                sent = true;
+            }
+            if let Ok(bytes) = rx.recv_timeout(Duration::from_millis(200)) {
+                let value = String::from_utf8_lossy(&bytes).to_lowercase();
+                let matches: Vec<_> = ["thinking", "working", "generating", "esc to interrupt", "esc to cancel", "ctrl+c", "stop", "completed", "finished", "reply with ok only", "type a message", "ask anything", "follow-up", "send", "press enter", "ready", "tab", "agent", "model", "plan", "build", "error"].into_iter().filter(|word| value.contains(word)).collect();
+                if sent { trace.push(format!("t={}ms bytes={} markers={matches:?}", started.elapsed().as_millis(), bytes.len())); }
+                all.extend_from_slice(&bytes);
+                if !cursor_replied && all.windows(4).any(|seq| seq == b"\x1b[6n") {
+                    writer.write_all(b"\x1b[1;1R").unwrap();
+                    cursor_replied = true;
+                    trace.push(format!("t={}ms cursor_position_query=answered", started.elapsed().as_millis()));
+                }
+            }
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+        trace.push(format!("total_bytes={} prompt_sent={sent}", all.len()));
+        let trace_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join(".ai-agents").join("cursor_turn_signal_trace.txt");
+        std::fs::write(trace_path, trace.join("\n")).unwrap();
+        println!("{}", trace.join("\n"));
+        assert!(sent && cursor_replied && all.len() > 4, "Cursor did not reach the interactive screen");
+    }
+    #[test]
     fn prompt_probe_skips_headroom_wrappers() {
         assert!(!super::supports_claude_prompt_file(r"C:\tools\hclaude.cmd"));
         assert!(!super::supports_claude_prompt_file(r"C:\tools\HCodex.exe"));
@@ -815,6 +899,8 @@ mod tests {
         let config = codex_role_config("a \"'\n한😀").unwrap();
         assert_eq!(config, "developer_instructions=\\\"\\u0061\\u0020\\u0022\\u0027\\u000A\\uD55C\\U0001F600\\\"");
         assert!(codex_role_config(&"a".repeat(3000)).is_none());
+        assert!(codex_role_config(&"a".repeat(2662)).is_some());
+        assert!(codex_role_config(&"a".repeat(2663)).is_none());
     }
 
     #[test]

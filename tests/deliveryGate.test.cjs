@@ -8,6 +8,13 @@ const js = ts.transpileModule(fs.readFileSync("src/lib/deliveryGate.ts", "utf8")
 const api = {};
 vm.runInNewContext(js, { exports: api });
 
+test("tabs stay active for observed log turns or recent output and stop when idle", () => {
+  assert.equal(api.tabIsActive(null, undefined), true);
+  assert.equal(api.tabIsActive(100, { startedAt: 120, completedAt: null }), true);
+  assert.equal(api.tabIsActive(100, { startedAt: 120, completedAt: 130 }), false);
+  assert.equal(api.tabIsActive(100, undefined), false);
+});
+
 test("a running or ambiguous Codex turn cannot be treated as idle on silence", () => {
   assert.equal(api.logTurnStillBusy("codex", { startedAt: 100, completedAt: null }), true);
   assert.equal(api.logTurnStillBusy("codex", { startedAt: 100, completedAt: 200 }), false);

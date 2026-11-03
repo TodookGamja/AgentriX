@@ -48,11 +48,13 @@ function saveHistory(sessionId: string, hist: string[]): void {
 
 // injected=true: 프로그램 주입(역할 브리핑·팀 메일·배정문·핸드오프 안내)은 턴 추적만 갱신하고 지시 이력·입력 버퍼에는 넣지 않는다
 // (안 그러면 릴레이 때 브리핑·메일이 '직전 세션이 받은 지시'로 핸드오프 파일에 실려 새 세션 토큰만 늘어남)
-export function recordSessionInput(sessionId: string, data: string, injected = false): void {
-  if (/[\r\n]/.test(data)) {
-    lastSubmission.set(sessionId, Date.now());
-    submissionVersion.set(sessionId, getSubmissionVersion(sessionId) + 1);
-  }
+export function recordSessionSubmission(sessionId: string): void {
+  lastSubmission.set(sessionId, Date.now());
+  submissionVersion.set(sessionId, getSubmissionVersion(sessionId) + 1);
+}
+
+export function recordSessionInput(sessionId: string, data: string, injected = false, trackSubmission = true): void {
+  if (trackSubmission && /[\r\n]/.test(data)) recordSessionSubmission(sessionId);
   if (injected) return;
   // 포커스(\x1b[I/O)·마우스(\x1b[<..M) 보고처럼 제어 시퀀스뿐인 자동 응답은 사용자 타이핑이 아니므로 타이머도 버퍼도 건드리지 않는다
   // OSC(\x1b]11;rgb:..) 색상 질의 응답, 커서 위치 보고(\x1b[r;cR)도 TUI 질의에 xterm이 자동으로 보내는 것이다

@@ -201,3 +201,26 @@ test("T23: restart/relay race keeps prior session pending; new session sends ROL
   assert.equal(api.getRoleState("old"), "pending");
   assert.deepEqual(api.remapSplitSlotsAfterRelay(["old", "peer"], "old", "relay"), ["relay", "peer"]);
 });
+
+test("T23: duplicate markRolePrefix coalesces into one pending prefix before first submit", () => {
+  api.markRolePrefix("dup", "ROLE-A ");
+  api.markRolePrefix("dup", "ROLE-B ");
+  assert.equal(api.getRoleState("dup"), "pending");
+  assert.equal(api.applyHandoffHint("dup", "go\r"), "ROLE-A ROLE-B go\r");
+  assert.equal(api.getRoleState("dup"), "sent");
+  assert.equal(api.applyHandoffHint("dup", "again\r"), "again\r");
+});
+
+test("T26: Codex resume does not inject developer instructions", () => {
+  const pty = fs.readFileSync("src-tauri/src/pty.rs", "utf8");
+  const start = pty.indexOf("let codex_role = if saved");
+  assert.notEqual(start, -1);
+  const after = pty.slice(start, start + 900);
+  const condEnd = after.search(/else\s*\{\s*None\s*\}/);
+  assert.notEqual(condEnd, -1);
+  const cond = after.slice(0, condEnd);
+  assert.match(cond, /initial_command\.is_none\(\)/);
+  assert.match(cond, /agent\.auto_brief/);
+  assert.match(cond, /resume_session_id\.is_none\(\)/);
+  assert.match(pty, /configure_codex_resume\(&mut cli_def, resume_session_id/);
+});

@@ -26,6 +26,7 @@ import {
   apiResizeSession,
   apiSaveClipboardImage,
   apiWriteToSession,
+  SubmissionUnconfirmedError,
 } from "../lib/tauriBridge";import { FilePickerModal } from "./FilePickerModal";
 import { isTerminalReport, shouldResizePty } from "../lib/terminalReplay";
 import { getRoleState, ROLE_STATE_EVENT } from "../lib/handoffRelay";
@@ -99,6 +100,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
   onTriggerRelay,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const sendingQueueRef = useRef(new Set<string>());
   // 폴링 루프는 마운트 시 한 번만 만들어지므로 최신 콜백을 ref로 참조 (stale closure 방지)
   const onOutputChunkRef = useRef(onOutputChunk);
   onOutputChunkRef.current = onOutputChunk;
@@ -562,15 +564,22 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     setPromptText("");
   };
   const sendQueuedNow = async (id: string, payload: string, auto = false) => {
+    if (sendingQueueRef.current.has(id) || useSessionQueue.getState().queues[qKey]?.find((item) => item.id === id)?.unconfirmed) return;
     // 자동 항목은 입력창·턴 관문을 건너뛰므로 쓰다 만 글이 있으면 먼저 확인
     if (auto && hasPendingSessionInput(session.id) && !window.confirm("입력창에 쓰던 글이 있습니다. 그 뒤에 붙어 전달될 수 있어요. 그래도 지금 보낼까요?")) return;
+    sendingQueueRef.current.add(id);
+    const queuedItem = useSessionQueue.getState().queues[qKey]?.find((item) => item.id === id);
+    if (queuedItem) useSessionQueue.getState().upsert(qKey, { ...queuedItem, stuck: true, reason: "수동 전송 중" });
     try {
       await apiWriteToSession(session.id, payload, true);
     } catch (error) {
       const item = useSessionQueue.getState().queues[qKey]?.find((entry) => entry.id === id);
-      if (item) useSessionQueue.getState().upsert(qKey, { ...item, stuck: true, reason: "제출 확인 실패" });
-      useAppStore.getState().showToast(String(error), "error");
+      const unconfirmed = error instanceof SubmissionUnconfirmedError;
+      if (item) useSessionQueue.getState().upsert(qKey, { ...item, stuck: true, unconfirmed, reason: unconfirmed ? "전송됨 · 확인 안 됨" : "쓰기 실패" });
+      useAppStore.getState().showToast(unconfirmed ? "보냈지만 제출을 확인하지 못했습니다. 터미널을 확인해 주세요." : String(error), "error");
       return;
+    } finally {
+      sendingQueueRef.current.delete(id);
     }
     if (auto) useSessionQueue.getState().resolve(qKey, id); else useSessionQueue.getState().remove(qKey, id);
     if (onActivity) onActivity();
@@ -915,7 +924,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
                 <span className="flex-1 min-w-0 truncate text-slate-200" title={it.payload || it.preview}>{it.preview}</span>
                 {(it.stuck || it.reason) && (
                   <span className={`shrink-0 max-w-[40%] truncate text-[10px] ${it.stuck ? "text-amber-400 font-semibold" : "text-slate-400"}`} title={it.reason}>
-                    {it.stuck ? "멈춤" : it.reason}
+                  {it.unconfirmed ? "전송됨 · 확인 안 됨" : it.stuck ? "멈춤" : it.reason}
                   </span>
                 )}
                 {(
@@ -924,7 +933,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
                     <button type="button" disabled={i === 0} onClick={() => useSessionQueue.getState().move(qKey, it.id, -1)} className="p-0.5 rounded text-slate-400 hover:text-slate-100 disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500" title="위로" aria-label="위로"><ChevronUp className="w-3 h-3" /></button>
                     <button type="button" disabled={i === queued.length - 1} onClick={() => useSessionQueue.getState().move(qKey, it.id, 1)} className="p-0.5 rounded text-slate-400 hover:text-slate-100 disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500" title="아래로" aria-label="아래로"><ChevronDown className="w-3 h-3" /></button>
                     </>}
-                    <button type="button" onClick={() => sendQueuedNow(it.id, it.payload, it.source !== "user")} className="px-1.5 py-0.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300" title="대기를 건너뛰고 지금 바로 입력">지금 보내기</button>
+                    <button type="button" disabled={it.unconfirmed} onClick={() => sendQueuedNow(it.id, it.payload, it.source !== "user")} className="px-1.5 py-0.5 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-[10px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300" title={it.unconfirmed ? "터미널에서 제출 여부를 확인해 주세요" : "대기를 건너뛰고 지금 바로 입력"}>지금 보내기</button>
                     <button type="button" onClick={() => (it.source === "user" ? useSessionQueue.getState().remove(qKey, it.id) : useSessionQueue.getState().resolve(qKey, it.id))} className="p-0.5 rounded text-slate-400 hover:text-rose-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500" title={it.source === "user" ? "삭제" : "버리기(다시 대기열에 생기지 않음)"} aria-label="버리기"><X className="w-3 h-3" /></button>
                   </span>
                 )}

@@ -11,6 +11,10 @@ export interface PendingDelivery {
 }
 export type GateAction = "proceed" | "resend" | "wait" | "stuck";
 
+export function tabIsActive(quietSince: number | null, ctx: { startedAt?: number | null; completedAt?: number | null } | undefined): boolean {
+  return quietSince === null || Boolean(ctx?.startedAt && ctx.startedAt > (ctx.completedAt ?? 0));
+}
+
 export function logTurnStillBusy(cliId: string, ctx: { startedAt?: number | null; completedAt?: number | null } | null): boolean {
   if (!ctx) return false;
   if (ctx.startedAt && !ctx.completedAt) return true;

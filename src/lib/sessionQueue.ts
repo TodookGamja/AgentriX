@@ -9,6 +9,7 @@ export interface QueueItem {
   createdAt: number;
   reason?: string; // 아직 못 들어간 사유(게이트 메시지)
   stuck?: boolean; // 입력창 제출 실패로 멈춤 → 다음 항목 보류
+  unconfirmed?: boolean; // 본문을 썼지만 제출 확인 실패: 자동 및 수동 재전송 금지
 }
 export type QueueMap = Record<string, QueueItem[]>;
 
@@ -23,9 +24,10 @@ export function upsertItem(map: QueueMap, sid: string, item: QueueItem): QueueMa
   const i = list.findIndex((x) => x.id === item.id);
   if (i < 0) return { ...map, [sid]: [...list, item] };
   const cur = list[i];
-  if (cur.reason === item.reason && cur.stuck === item.stuck) return map;
+  if (cur.unconfirmed) return map;
+  if (cur.reason === item.reason && cur.stuck === item.stuck && cur.unconfirmed === item.unconfirmed) return map;
   const next = list.slice();
-  next[i] = { ...cur, reason: item.reason, stuck: item.stuck };
+  next[i] = { ...cur, reason: item.reason, stuck: item.stuck, unconfirmed: item.unconfirmed };
   return { ...map, [sid]: next };
 }
 
@@ -51,9 +53,13 @@ export function moveItem(map: QueueMap, sid: string, id: string, dir: -1 | 1): Q
 }
 
 // 지금 꺼낼 사용자 항목: 맨 앞 사용자 항목 1건. 앞 항목이 멈춤(stuck)이면 보류
+export function nextQueueItem(list: QueueItem[] | undefined): QueueItem | undefined {
+  return list?.[0];
+}
+
 export function nextUserItem(list: QueueItem[] | undefined): QueueItem | undefined {
-  const first = list?.find((x) => x.source === "user");
-  return first && !first.stuck ? first : undefined;
+  const first = nextQueueItem(list);
+  return first?.source === "user" && !first.stuck ? first : undefined;
 }
 
 // 자동 항목(배정/메일/보고) 정리: isFresh(key,id)가 아닌 것을 제거. 사용자 항목은 앱 재시작 후에도 남긴다
