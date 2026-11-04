@@ -122,3 +122,12 @@ test("T1793692464223_1: PM 지침에 통합·취소 상태 표기 안내", () =>
   const s = fs.readFileSync("src/lib/blackboardDispatch.ts", "utf8");
   assert.ok(s.includes('"통합 → <ID>" 또는 "취소"'));
 });
+
+test("T1793776116339_10: 팀 메일·PM 배정 전달문에 outbox 경로·형식·명단·중복 안내 꼬리말이 없고 화면 대조 머리말은 유지", () => {
+  const m = api.teamMailText("PM", "M1", "제목", "내용\n줄"), a = api.assignText("T_1");
+  assert.equal(m, "[팀 메시지: PM] 메일 ID: M1. 제목: 제목 내용: 내용 줄\r");
+  for (const t of [m, a]) for (const bad of ["outbox", "JSON", "수신 가능한", "이미 처리한 ID"]) assert.ok(!t.includes(bad), bad);
+  assert.ok(a.startsWith("[PM 배정] .ai-agents/BLACKBOARD.md 작업표의 T_1 작업") && a.endsWith("\r"));
+  const app = fs.readFileSync("src/App.tsx", "utf8");
+  assert.ok(!app.includes("mailProtocol(session.agentId") && !app.includes("mailProtocol(t.agentId"));
+});

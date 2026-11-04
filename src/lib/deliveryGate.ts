@@ -27,7 +27,7 @@ export function logTurnStillBusy(cliId: string, ctx: { startedAt?: number | null
 export function claudeIdleFallback(cliId: string, ctx: { startedAt?: number | null; completedAt?: number | null } | null, lines: string[], quietSince: number | null, now = Date.now()): boolean {
   if (cliId !== "claude" || !ctx?.startedAt || ctx.completedAt || quietSince === null || quietSince < ctx.startedAt || now - quietSince < 30_000) return false;
   const tail = lines.filter((line) => line.trim() && !/^[\s─━┄┈-]+$/.test(line)).slice(-2);
-  return tail.length === 2 && /^\s*❯\s*$/.test(tail[0]) && /^\s*[⏵▶»›❯]*\s*(?:bypass permissions on|accept edits on)\b/i.test(tail[1]);
+  return tail.length === 2 && /^\s*❯\s*$/.test(tail[0]) && (/^\s*[⏵▶»›❯]*\s*(?:bypass permissions on|accept edits on)\b/i.test(tail[1]) || /^\s*\?\s+for shortcuts\b/i.test(tail[1]));
 }
 
 export function codexInterruptedIdle(cliId: string, ctx: { startedAt?: number | null; completedAt?: number | null } | null, lines: string[], quietSince: number | null, now = Date.now()): boolean {

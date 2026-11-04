@@ -112,7 +112,7 @@ import { AiDeepTeamModal } from "./components/AiDeepTeamModal";
 import { MarkdownLite } from "./components/MarkdownLite";
 import { FolderPickerModal } from "./components/FolderPickerModal";
 import { AgentrixLogo } from "./components/AgentrixLogo";
-import { boardProtocol, collabProtocol, confirmedResultMail, forgetEndedStarts, keepRecentStarts, mailProtocol, parseBoardTasks } from "./lib/blackboardDispatch";
+import { boardProtocol, collabProtocol, confirmedResultMail, forgetEndedStarts, keepRecentStarts, assignText, mailProtocol, parseBoardTasks, teamMailText } from "./lib/blackboardDispatch";
 import { getTeamMailDeliveries, pruneStaleDeliveries, pruneStaleMailDeliveries, removeTeamMailDelivery, reserveTeamMailDelivery, saveTeamMailDelivery } from "./lib/teamMailDelivery";
 import { clearDispatchNotes, findApproval, getApprovalMode, getDispatchNotes, setDispatchNote, upsertApproval } from "./lib/taskApproval";
 import { countNewChars } from "./lib/tokenEstimate";
@@ -2377,7 +2377,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
             const sender = agents.find((a) => a.id === queued.from)?.name ?? queued.from;
             useSessionQueue.getState().upsert(key, {
               id, source: "mail", preview: `${sender}: ${queued.subject.replace(/\s+/g, " ")}`, createdAt: Date.now(), reason: reserved ? "입력창에 멈춤: 전달 결과 미확인" : "앞 전달 대기", stuck: Boolean(reserved),
-              payload: `[팀 메시지: ${sender}] 메일 ID: ${queued.id}. 이미 처리한 ID면 다시 처리하지 마세요. 제목: ${queued.subject.replace(/[\r\n]+/g, " ")} 내용: ${queued.body.replace(/[\r\n]+/g, " ")} ${mailProtocol(session.agentId, agents)}\r`,
+              payload: teamMailText(sender, queued.id, queued.subject, queued.body),
             });
           }
           if (deliveries.some((d) => d.kind)) continue;
@@ -2412,7 +2412,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
           if (!message || stopped) continue;
           if (getTeamMailDeliveries().some((d) => d.project === project && d.agentId === session.agentId)) continue;
           const sender = agents.find((a) => a.id === message.from)?.name ?? message.from;
-          const prompt = `[팀 메시지: ${sender}] 메일 ID: ${message.id}. 이미 처리한 ID면 다시 처리하지 마세요. 제목: ${message.subject.replace(/[\r\n]+/g, " ")} 내용: ${message.body.replace(/[\r\n]+/g, " ")} ${mailProtocol(session.agentId, agents)}\r`;
+          const prompt = teamMailText(sender, message.id, message.subject, message.body);
             const delivery = { id: message.id, agentId: session.agentId, project, sessionId: session.id, submittedAt: Date.now(), unconfirmed: true };
             if (!reserveTeamMailDelivery(delivery)) continue;
           let sent: boolean;
@@ -2741,7 +2741,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
             if ((busy.id !== t.taskId || busy.unconfirmed) && !useSessionQueue.getState().resolved.includes(`${queueKey(target)}|assign:${t.taskId}`) && !useSessionQueue.getState().handled.includes(`${queueKey(target)}|assign:${t.taskId}`)) {
               useSessionQueue.getState().upsert(queueKey(target), {
                 id: `assign:${t.taskId}`, source: "assign", preview: `${t.taskId} 작업 배정`, createdAt: Date.now(), reason: busy.id === t.taskId ? "입력창에 멈춤: 전달 결과 미확인" : "앞 전달 대기", stuck: busy.id === t.taskId,
-                payload: `[PM 배정] .ai-agents/BLACKBOARD.md 작업표의 ${t.taskId} 작업을 수행하세요. 완료하면 해당 행의 상태를 ✅ 완료로 바꾸고 결과를 한 줄 메모로 남기세요. BLACKBOARD.md는 셸 명령이 아닌 파일 편집 도구로 수정하세요(한글 깨짐 방지). ${mailProtocol(t.agentId, agents)}\r`,
+                payload: assignText(t.taskId),
               });
             }
           if (busy.id !== t.taskId) setDispatchNote(project, t.taskId, busy.kind === "task" ? `대기: 앞 작업(${busy.id.split(":")[0]}) 처리 중` : "대기: 앞 메일 처리 중");
@@ -2757,7 +2757,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
             if (!reserveTeamMailDelivery(delivery)) continue;
           if (!await sendToIdleTeamSession(
             target,
-            `[PM 배정] .ai-agents/BLACKBOARD.md 작업표의 ${t.taskId} 작업을 수행하세요. 완료하면 해당 행의 상태를 ✅ 완료로 바꾸고 결과를 한 줄 메모로 남기세요. BLACKBOARD.md는 셸 명령이 아닌 파일 편집 도구로 수정하세요(한글 깨짐 방지). ${mailProtocol(t.agentId, agents)}\r`,
+            assignText(t.taskId),
             { id: `assign:${t.taskId}`, source: "assign", preview: `${t.taskId} 작업 배정` }
           )) {
               if (sendBlockReasonRef.current[target.id] !== SUBMISSION_UNCONFIRMED_REASON) removeTeamMailDelivery(project, t.agentId, t.taskId, "task");

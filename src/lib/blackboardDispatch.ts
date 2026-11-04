@@ -203,6 +203,16 @@ export function mailProtocol(agentId: string, agents: { id: string; name: string
   return `[팀 메시지] 팀원에게 요청, 질문, 결과를 보내려면 .ai-agents/agents/${agentId}/outbox/에 고유한 이름의 JSON 파일을 파일 편집 도구로 작성하세요. 형식: {"to":"수신 팀원 이름","subject":"제목","body":"내용"}. 임시 파일을 작성한 다음 .json으로 이름을 바꾸세요. 앱이 수신 팀원에게 전달합니다. 팀원은 이름으로 부르세요. 수신 가능한 팀원: ${roster}. ${isPmName(agentId, agents) ? "요청에는 답변하세요. 결과를 받으면 답장하지 말고 .ai-agents/BLACKBOARD.md를 확인해 다음 작업을 배정하거나 모두 끝났으면 최종 보고하세요." : "요청에는 답변하고, 결과 통보에는 불필요한 답장을 하지 마세요."}`;
 }
 
+// 팀 메일·PM 배정 전달문: 규칙(outbox 경로·형식·명단)은 세션 시작 때 역할 지침으로 이미 전달되므로 메시지마다 붙이지 않는다.
+// 화면 대조(sessionQueue.deliveredByScreen)가 쓰는 머리말("메일 ID: <id>", "[PM 배정] … 작업표의 <id> 작업")은 유지.
+export function teamMailText(sender: string, id: string, subject: string, body: string): string {
+  const one = (v: string) => v.replace(/[\r\n]+/g, " ");
+  return `[팀 메시지: ${sender}] 메일 ID: ${id}. 제목: ${one(subject)} 내용: ${one(body)}\r`;
+}
+export function assignText(taskId: string): string {
+  return `[PM 배정] .ai-agents/BLACKBOARD.md 작업표의 ${taskId} 작업을 수행하세요. 완료하면 해당 행의 상태를 ✅ 완료로 바꾸고 결과를 한 줄 메모로 남기세요.\r`;
+}
+
 // App.tsx의 PM 판별과 같은 기준(이름·역할에 PM/리더)
 function isPmName(agentId: string, agents: { id: string; name: string; roleTitle: string }[]): boolean {
   const me = agents.find((a) => a.id === agentId);

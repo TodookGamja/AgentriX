@@ -262,7 +262,14 @@ fn claude_completion(content: &str) -> Option<i64> {
                     local_output_at = v.get("timestamp").and_then(Value::as_str).and_then(parse_ts).map(|t| t.timestamp_millis());
                 }
             }
-            Some("user") => return None,
+        Some("user") if v.pointer("/message/content").and_then(Value::as_array).is_some_and(|blocks| blocks.iter().any(|block| {
+            block.get("text").and_then(Value::as_str) == Some("[Request interrupted by user]")
+                || (block.get("type").and_then(Value::as_str) == Some("tool_result")
+                    && block.get("content").and_then(Value::as_str).is_some_and(|text| text.to_ascii_lowercase().contains("interrupted")))
+        })) => {
+            return v.get("timestamp").and_then(Value::as_str).and_then(parse_ts).map(|t| t.timestamp_millis());
+        }
+        Some("user") => return None,
             Some("assistant") => return (v.pointer("/message/stop_reason").and_then(Value::as_str) == Some("end_turn"))
                 .then(|| v.get("timestamp").and_then(Value::as_str).and_then(parse_ts).map(|t| t.timestamp_millis()))
                 .flatten().map(|completed| local_output_at.map_or(completed, |local| completed.max(local))),
@@ -652,6 +659,16 @@ mod tests {
         assert_eq!(opencode_completion(&opencode, 1), Some(123));
         assert_eq!(opencode_completion(&opencode, 2), None);
         assert_eq!(opencode_completion(&serde_json::json!({"role":"assistant","finish":"tool-calls","time":{"completed":123}}), 1), None);
+    }
+
+    #[test]
+    fn claude_interrupted_turn_completes_but_a_later_user_input_does_not() {
+        let interrupted = r#"{"timestamp":"2026-11-04T07:48:52.567Z","type":"user","message":{"content":[{"type":"text","text":"[Request interrupted by user]"}]}}"#;
+        assert_eq!(claude_completion(interrupted), parse_ts("2026-11-04T07:48:52.567Z").map(|t| t.timestamp_millis()));
+        let tool_interrupted = r#"{"timestamp":"2026-11-04T07:48:53Z","type":"user","message":{"content":[{"type":"tool_result","content":"Tool execution interrupted"}]}}"#;
+        assert_eq!(claude_completion(tool_interrupted), parse_ts("2026-11-04T07:48:53Z").map(|t| t.timestamp_millis()));
+        let after_new_input = format!("{interrupted}\n{{\"timestamp\":\"2026-11-04T07:49:00Z\",\"type\":\"user\",\"message\":{{\"content\":[{{\"type\":\"text\",\"text\":\"continue\"}}]}}}}");
+        assert_eq!(claude_completion(&after_new_input), None);
     }
 
     #[test]

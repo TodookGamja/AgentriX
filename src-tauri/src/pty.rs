@@ -247,14 +247,20 @@ impl PtyManager {
     let role_in_system = if let Some(ref agent) = agent_meta {
             let saved = crate::db::sync_agent_files_on_disk(agent, collab_protocol.as_deref());
         let npm_script = cli_def.resolved_binary.as_deref().and_then(npm_codex_script);
+        let wrapped_codex = supports_codex_wrapper_role(initial_command.as_deref(), cli_def.wrapper_binary.as_deref(), resume_session_id.as_deref());
+        let startup_role = if saved && agent.auto_brief && !agent.role_prompt.trim().is_empty()
+            && collab_protocol.as_deref().is_some_and(|s| !s.trim().is_empty()) {
+            let path = Path::new(&agent.project_path).join(".ai-agents").join("agents").join(&agent.id).join("ROLE.md");
+            std::fs::read_to_string(path).ok().and_then(|role| startup_role_args(&cli_def.id, initial_command.as_deref(), cli_def.wrapper_binary.as_deref(), resume_session_id.as_deref(), &role))
+        } else { None };
         let codex_role = if saved
             && cli_def.id == "codex"
             && agent.auto_brief
             && !agent.role_prompt.trim().is_empty()
             && collab_protocol.as_deref().is_some_and(|s| !s.trim().is_empty())
-            && initial_command.is_none()
+            && (initial_command.is_none() || wrapped_codex)
             && resume_session_id.is_none()
-            && (npm_script.is_some() || cli_def.resolved_binary.as_deref().is_some_and(|binary| {
+            && (wrapped_codex || npm_script.is_some() || cli_def.resolved_binary.as_deref().is_some_and(|binary| {
                 Path::new(binary).extension().is_some_and(|ext| ext.eq_ignore_ascii_case("exe"))
             }))
         {
@@ -263,8 +269,11 @@ impl PtyManager {
         } else {
             None
         };
-        if let Some(config) = codex_role {
-            if let Some(script) = npm_script {
+        if let Some(args) = startup_role {
+            cli_def.args.extend(args);
+            true
+        } else if let Some(config) = codex_role {
+            if let Some(script) = npm_script.filter(|_| !wrapped_codex) {
                 let sibling_node = Path::new(cli_def.resolved_binary.as_deref().unwrap_or_default())
                     .parent().map(|dir| dir.join("node.exe"));
                 cli_def.resolved_binary = Some(sibling_node.filter(|path| path.is_file())
@@ -609,6 +618,34 @@ fn configure_claude_session(cli: &mut CliDefinition, resume_id: Option<String>) 
 
 fn ps_escape_single_quoted(input: &str) -> String {
     input.replace('\'', "''")
+}
+
+fn supports_codex_wrapper_role(command: Option<&str>, wrapper: Option<&str>, resume_id: Option<&str>) -> bool {
+    command == Some("__WRAPPER__") && resume_id.is_none() && wrapper
+        .and_then(|path| Path::new(path).file_stem())
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("hcodex") || name.eq_ignore_ascii_case("headroom"))
+}
+
+fn startup_role_args(cli: &str, command: Option<&str>, wrapper: Option<&str>, resume_id: Option<&str>, role: &str) -> Option<Vec<String>> {
+    let agy_wrapper = cli == "antigravity" && command == Some("__WRAPPER__") && wrapper
+        .and_then(|path| Path::new(path).file_stem()).and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("hagy"));
+    if (command.is_some() && !agy_wrapper) || resume_id.is_some() || role.trim().is_empty() || role.contains('\0') || role.encode_utf16().count() > 8000 { return None; }
+    let mut escaped = String::new();
+    let mut slashes = 0;
+    for c in role.chars() {
+        if c == '\\' { slashes += 1; continue; }
+        escaped.extend(std::iter::repeat('\\').take(if c == '"' { 2 * slashes + 1 } else { slashes }));
+        slashes = 0;
+        escaped.push(c);
+    }
+    escaped.extend(std::iter::repeat('\\').take(2 * slashes));
+    match cli {
+        "antigravity" => Some(vec!["--prompt-interactive".into(), escaped]),
+        "cursor" => Some(vec![escaped]),
+        _ => None,
+    }
 }
 
 fn codex_role_config(role: &str) -> Option<String> {
@@ -960,6 +997,28 @@ mod tests {
     }
 
     #[test]
+    fn codex_role_allows_only_verified_wrappers_and_new_sessions() {
+        assert!(supports_codex_wrapper_role(Some("__WRAPPER__"), Some("C:\\tools\\hcodex.cmd"), None));
+        assert!(supports_codex_wrapper_role(Some("__WRAPPER__"), Some("C:\\tools\\headroom.exe"), None));
+        assert!(!supports_codex_wrapper_role(Some("__WRAPPER__"), Some("C:\\tools\\other.cmd"), None));
+        assert!(!supports_codex_wrapper_role(Some("__WRAPPER__"), Some("C:\\tools\\hcodex.cmd"), Some("resumed")));
+        assert!(!supports_codex_wrapper_role(Some("echo custom"), Some("C:\\tools\\headroom.exe"), None));
+    }
+
+    #[test]
+    fn startup_role_arguments_are_limited_to_new_supported_sessions() {
+        let role = "역할 'A'\n협업 지침";
+        assert_eq!(startup_role_args("antigravity", None, None, None, role), Some(vec!["--prompt-interactive".into(), role.into()]));
+        assert_eq!(startup_role_args("cursor", None, None, None, role), Some(vec![role.into()]));
+        assert!(startup_role_args("antigravity", Some("__WRAPPER__"), Some("C:\\tools\\hagy.cmd"), None, role).is_some());
+        assert!(startup_role_args("claude", None, None, None, role).is_none());
+        assert!(startup_role_args("cursor", Some("__WRAPPER__"), Some("hcursor.cmd"), None, role).is_none());
+        assert!(startup_role_args("antigravity", None, None, Some("resumed"), role).is_none());
+        assert!(startup_role_args("antigravity", None, None, None, &"가".repeat(9000)).is_none());
+        assert_eq!(startup_role_args("cursor", None, None, None, "role \"A\" C:\\tmp").unwrap()[0], "role \\\"A\\\" C:\\tmp");
+    }
+
+    #[test]
     fn npm_codex_script_only_accepts_the_standard_installed_wrapper() {
         let dir = std::env::temp_dir().join(format!("agentrix-codex-{}", Uuid::new_v4()));
         let script = dir.join("node_modules").join("@openai").join("codex").join("bin").join("codex.js");
@@ -1135,11 +1194,13 @@ mod tests {
         let mut cli = crate::cli::builtin_clis().into_iter().find(|c| c.id == "codex").unwrap();
         cli.resolved_binary = Some("C:\\tools\\codex.cmd".into());
         cli.wrapper_binary = Some("C:\\tools\\headroom.exe".into());
-        cli.args = vec!["--sandbox".into(), "workspace-write".into()];
+        let role = codex_role_config("isolated role").unwrap();
+        cli.args = vec!["--sandbox".into(), "workspace-write".into(), "-c".into(), role.clone()];
         let (cmd, _) = build_platform_command(&cli, Some("__WRAPPER__"), "C:\\project", None, false);
         let script = cmd.get_argv().last().unwrap().to_string_lossy();
         assert!(script.contains("'C:\\tools\\headroom.exe' wrap 'codex' --port 8788 --"));
         assert!(script.contains("'--sandbox' 'workspace-write'"));
+        assert!(script.contains(&format!("'-c' '{role}'")));
         assert!(!script.contains("wrap 'C:\\tools\\codex.cmd'"));
     }
 
