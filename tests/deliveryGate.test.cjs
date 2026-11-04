@@ -8,6 +8,14 @@ const js = ts.transpileModule(fs.readFileSync("src/lib/deliveryGate.ts", "utf8")
 const api = {};
 vm.runInNewContext(js, { exports: api });
 
+test("agy first prompt requires an empty input and its shortcuts footer", () => {
+  assert.equal(typeof api.agyFirstPromptReady, "function");
+  assert.equal(api.agyFirstPromptReady(["Antigravity CLI 1.5.0", "›", "────", "? for shortcuts"]), true);
+  assert.equal(api.agyFirstPromptReady(["Antigravity CLI 1.5.0", "› unfinished", "? for shortcuts"]), false);
+  assert.equal(api.agyFirstPromptReady(["Antigravity CLI 1.5.0", "›", "working"]), false);
+  assert.equal(api.agyFirstPromptReady(["›", "? for shortcuts", "working"]), false);
+});
+
 test("tabs stay active for observed log turns or recent output and stop when idle", () => {
   assert.equal(api.tabIsActive(null, undefined), true);
   assert.equal(api.tabIsActive(100, { startedAt: 120, completedAt: null }), true);

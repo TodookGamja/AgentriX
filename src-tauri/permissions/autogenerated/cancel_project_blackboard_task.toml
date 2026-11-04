@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-cancel-project-blackboard-task"
+description = "Enables the cancel_project_blackboard_task command without any pre-configured scope."
+commands.allow = ["cancel_project_blackboard_task"]
+
+[[permission]]
+identifier = "deny-cancel-project-blackboard-task"
+description = "Denies the cancel_project_blackboard_task command without any pre-configured scope."
+commands.deny = ["cancel_project_blackboard_task"]

@@ -9,6 +9,18 @@ const js = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind
 const api = {};
 vm.runInNewContext(js, { exports: api });
 
+test("late evidence consumes only the matching restored role prefix", () => {
+  assert.equal(typeof api.confirmRestoredPrefix, "function");
+  api.markRolePrefix("late-agy", "ROLE ");
+  const delivered = api.applyHandoffHint("late-agy", "task\r");
+  api.restoreHandoffHint("late-agy", "ROLE ", true);
+  assert.equal(api.confirmRestoredPrefix("late-agy", "different"), false);
+  assert.equal(api.getRoleState("late-agy"), "pending");
+  assert.equal(api.confirmRestoredPrefix("late-agy", delivered), true);
+  assert.equal(api.getRoleState("late-agy"), "sent");
+  assert.equal(api.applyHandoffHint("late-agy", "next\r"), "next\r");
+});
+
 test("role prefix: pending until first submitted input, then sent", () => {
   api.markRolePrefix("r1", "ROLE ");
   assert.equal(api.getRoleState("r1"), "pending");

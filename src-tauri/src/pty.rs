@@ -67,10 +67,42 @@ pub struct PtyOutputChunk {
 pub struct PtySession {
     pub info: SessionInfo,
     pub resumed_cli_id: Option<String>,
+    input_seen: bool,
     pub master: Box<dyn MasterPty + Send>,
     pub writer: Box<dyn Write + Send>,
     pub child: Box<dyn Child + Send + Sync>,
     pub output_buffer: Arc<Mutex<OutputBuffer>>,
+}
+
+fn is_terminal_control_only(data: &[u8]) -> bool {
+    let mut i = 0;
+    while i < data.len() {
+        if data.get(i) != Some(&0x1b) { return false; }
+        i += 1;
+        match data.get(i) {
+            Some(b'[') => {
+                i += 1;
+                let start = i;
+                while data.get(i).is_some_and(|b| (0x20..=0x3f).contains(b)) { i += 1; }
+                let Some(&end) = data.get(i) else { return false; };
+                if !(0x40..=0x7e).contains(&end) || (end == b'~' && &data[start..i] == b"200") { return false; }
+                i += 1;
+            }
+            Some(b']') => {
+                i += 1;
+                loop {
+                    match data.get(i) {
+                        Some(0x07) => { i += 1; break; }
+                        Some(0x1b) if data.get(i + 1) == Some(&b'\\') => { i += 2; break; }
+                        Some(0x1b) | None => return false,
+                        _ => i += 1,
+                    }
+                }
+            }
+            _ => return false,
+        }
+    }
+    true
 }
 
 /// 출력 버퍼. 커서는 세션 시작부터의 절대 바이트 위치라서 앞부분을 잘라내도 커서가 어긋나지 않는다.
@@ -390,6 +422,7 @@ impl PtyManager {
         let session = PtySession {
             info: info.clone(),
             resumed_cli_id,
+            input_seen: initial_command.as_deref().is_some_and(|s| s != "__WRAPPER__"),
             master: pair.master,
             writer,
             child,
@@ -426,6 +459,10 @@ impl PtyManager {
             .get_mut(session_id)
             .ok_or_else(|| "세션을 찾을 수 없습니다.".to_string())?;
 
+        if !data.is_empty() && !is_terminal_control_only(data) {
+            session.input_seen = true;
+        }
+
         let mut bytes = data.to_vec();
         // ConPTY 표준 키 입력 처리:
         // 터미널 입력에서 엔터(Enter)는 항상 단일 CR(0x0D, '\r')이어야 합니다.
@@ -444,6 +481,12 @@ impl PtyManager {
             .map_err(|e| format!("세션 쓰기 오류: {}", e))?;
         let _ = session.writer.flush();
         Ok(session.info.cli_id.clone())
+    }
+
+    pub fn is_pristine_antigravity(&self, session_id: &str) -> bool {
+        self.sessions.lock().ok().and_then(|sessions| sessions.get(session_id).map(|session|
+            session.info.cli_id == "antigravity" && !session.info.resumed && !session.input_seen
+        )).unwrap_or(false)
     }
 
     pub fn resize_session(&self, session_id: &str, cols: u16, rows: u16) -> Result<(), String> {
@@ -769,6 +812,15 @@ fn build_platform_command(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn first_input_tracking_ignores_only_complete_terminal_controls() {
+        assert!(super::is_terminal_control_only(b"\x1b[1;2R\x1b[?1;2c"));
+        assert!(super::is_terminal_control_only(b"\x1b]11;rgb:ffff/ffff/ffff\x07"));
+        assert!(!super::is_terminal_control_only(b"\x1b[1Dtyped"));
+        assert!(!super::is_terminal_control_only(b"\x1b[200~hello\x1b[201~"));
+        assert!(!super::is_terminal_control_only(b"\r"));
+    }
+
     #[test]
     #[ignore = "Cursor startup probe without model request"]
     fn cursor_startup_probe() {

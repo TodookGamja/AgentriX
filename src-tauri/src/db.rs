@@ -671,6 +671,49 @@ pub fn save_project_blackboard(project_path: &str, content: &str) -> Result<()> 
     Ok(())
 }
 
+pub fn cancel_project_blackboard_task(project_path: &str, task_id: &str) -> Result<()> {
+    let norm = normalize_project_path(project_path);
+    if norm.is_empty() || is_forbidden_system_dir(&norm) || task_id.trim().is_empty() {
+        anyhow::bail!("유효한 프로젝트 또는 작업 ID가 아닙니다.");
+    }
+    let path = Path::new(&norm).join(".ai-agents").join("BLACKBOARD.md");
+    let board = std::fs::read_to_string(&path)?;
+    let mut status_idx = None;
+    let mut matches = Vec::new();
+    let mut offset = 0;
+    for line in board.split_inclusive('\n') {
+        let raw = line.trim_end_matches(['\r', '\n']);
+        if raw.trim_start().starts_with('|') {
+            let cells: Vec<&str> = raw.split('|').collect();
+            if let Some(idx) = cells.iter().position(|cell| cell.trim() == "상태" || cell.trim().eq_ignore_ascii_case("status")) {
+                status_idx = Some(idx);
+            } else if cells.get(1).is_some_and(|cell| cell.trim() == task_id) {
+                let idx = status_idx.ok_or_else(|| anyhow::anyhow!("상태 열을 찾을 수 없습니다."))?;
+                if idx == 0 || idx >= cells.len() - 1 { anyhow::bail!("상태 열이 잘못되었습니다."); }
+                let start = cells[..idx].iter().map(|cell| cell.len() + 1).sum::<usize>();
+                matches.push((offset + start, offset + start + cells[idx].len(), cells[idx]));
+            }
+        }
+        offset += line.len();
+    }
+    if matches.len() != 1 { anyhow::bail!("작업 행이 없거나 중복됩니다."); }
+    let (start, end, status) = matches[0];
+    let status = status.trim_start_matches(|c: char| c.is_whitespace() || "*_~`>-".contains(c)).to_lowercase();
+    if ["✅", "완료", "done", "통합", "취소", "merged", "canceled", "cancelled"].iter().any(|s| status.starts_with(s)) {
+        anyhow::bail!("이미 완료 또는 취소된 작업입니다.");
+    }
+    let mut updated = board.clone();
+    updated.replace_range(start..end, " 취소 사용자 작업판에서 취소 ");
+    let temp = path.with_file_name(format!("BLACKBOARD.{}.tmp", uuid::Uuid::new_v4()));
+    let result = (|| -> Result<()> {
+        std::fs::write(&temp, updated)?;
+        std::fs::rename(&temp, &path)?;
+        Ok(())
+    })();
+    if result.is_err() { let _ = std::fs::remove_file(&temp); }
+    result
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectDeepContext {
@@ -2125,6 +2168,24 @@ pub fn reset_all_user_data(conn: &Connection) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cancel_blackboard_preserves_other_rows_and_rejects_missing_or_duplicate_ids() {
+        let project = std::env::temp_dir().join(format!("agentrix-board-{}", uuid::Uuid::new_v4()));
+        let dir = project.join(".ai-agents");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("BLACKBOARD.md");
+        let before = "# 한글\r\n| ID | 제목 | 상태 |\r\n| --- | --- | --- |\r\n| T1 | 대상 | 🔥 착수 |\r\n| T10 | 다른 팀원 수정 | ⏳ 대기 |\r\n";
+        std::fs::write(&path, before).unwrap();
+        super::cancel_project_blackboard_task(project.to_str().unwrap(), "T1").unwrap();
+        let expected = before.replace("| T1 | 대상 | 🔥 착수 |", "| T1 | 대상 | 취소 사용자 작업판에서 취소 |");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), expected);
+        assert!(super::cancel_project_blackboard_task(project.to_str().unwrap(), "missing").is_err());
+        std::fs::write(&path, format!("{before}| T1 | 중복 | 🔥 착수 |\r\n")).unwrap();
+        let duplicate = std::fs::read(&path).unwrap();
+        assert!(super::cancel_project_blackboard_task(project.to_str().unwrap(), "T1").is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), duplicate);
+        std::fs::remove_dir_all(project).unwrap();
+    }
     #[test]
     fn effort_migration_preserves_agents_and_legacy_updates() {
         let conn = Connection::open_in_memory().unwrap();

@@ -115,7 +115,7 @@ import { boardProtocol, collabProtocol, confirmedResultMail, forgetEndedStarts, 
 import { getTeamMailDeliveries, pruneStaleDeliveries, pruneStaleMailDeliveries, removeTeamMailDelivery, reserveTeamMailDelivery, saveTeamMailDelivery } from "./lib/teamMailDelivery";
 import { clearDispatchNotes, findApproval, getApprovalMode, getDispatchNotes, setDispatchNote, upsertApproval } from "./lib/taskApproval";
 import { countNewChars } from "./lib/tokenEstimate";
-import { deliveryGate, logTurnStillBusy, tabIsActive, type PendingDelivery } from "./lib/deliveryGate";
+import { agyFirstPromptReady, deliveryGate, logTurnStillBusy, tabIsActive, type PendingDelivery } from "./lib/deliveryGate";
 import { DeliveryAttempt, withDeliveryDeadline } from "./lib/deliveryAttempt";
 import { CursorBusyError, readTerminalScreen, readTerminalTranscript, readCursorTurn } from "./lib/cursorScreen";
 import { useSessionQueue, queueKey } from "./lib/sessionQueueStore";
@@ -130,6 +130,7 @@ import {
 } from "./lib/splitLayout";
 import {
   handoffContinuePrompt,
+  confirmRestoredPrefix,
   markHandoffHint,
   getRoleState,
   markRolePrefix,
@@ -165,6 +166,8 @@ export function getShortFolderName(pathStr?: string): string {
   return pathStr.split(/[/\\]/).filter(Boolean).pop() || pathStr;
 }
 
+// agy 첫 전달 잠금 안전망: 데드라인(30s)보다 길게 두되, 확정 못 한 채 이 시간이 지나면 풀어 뒤 agy가 영영 막히지 않게 한다
+const AGY_BOOTSTRAP_TTL_MS = 60_000;
 const SUBMISSION_UNCONFIRMED_REASON = "입력창에 멈춤: 전달의 제출을 확인하지 못했습니다";
 const EMOJI_OPTIONS = ["👑", "🛠️", "🎨", "🔍", "🤖", "🦀", "🐍", "📊", "🛡️", "⚡"];
 
@@ -2047,6 +2050,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
   const teamDeliveryLocksRef = useRef(new Set<string>());
   const sendBlockReasonRef = useRef<Record<string, string>>({}); // 전달 보류 사유(보드 카드 메모용)
   const pendingDeliveryRef = useRef<Record<string, PendingDelivery>>({}); // 직전 전달의 턴 시작 확인 대기(deliveryGate)
+  const agyBootstrapRef = useRef<{ sessionId: string; lockedAt: number; body?: string; at?: number } | null>(null);
   const startingTeamProjectsRef =useRef(new Set<string>());
   // 턴 종료 시각: CLI 로그 우선. 로그로 못 읽는 CLI(antigravity·cursor·grok, 같은 폴더 세션이 여럿이라 로그가 모호한 codex)는
   // 터미널 출력이 멈춘 시각으로 대신한다. 로그 완료 시각이 마지막 입력보다 앞서면(claude가 재개·릴레이로 옛 로그를 잡은 경우 포함)
@@ -2061,6 +2065,22 @@ ${recentSnippet || "진행 내역 기록 없음"}
     }
     const ctx = await apiGetSessionContext(session, claimed).catch(() => null);
     const lastSubmit = getLastSubmission(session.id);
+    if (session.cliId === "antigravity" && ctx?.source === "agy:no-log") {
+      if (session.resumed || lastSubmit || hasPendingSessionInput(session.id)) return null;
+      const quiet = await apiGetSessionQuietSince(session.id, 10_000).catch(() => null);
+      if (!quiet || !agyFirstPromptReady(readTerminalTranscript(session.id) ?? [])) return null;
+      return { ...ctx, completedAt: quiet };
+    }
+    if (session.cliId === "antigravity" && ctx) {
+      const bootstrap = agyBootstrapRef.current;
+      if (bootstrap?.sessionId === session.id && bootstrap.body && bootstrap.at) {
+        if (!ctx.completedAt || ctx.completedAt <= bootstrap.at || !await apiGetSessionQuietSince(session.id, 10_000).catch(() => null)) return null;
+        if (!await apiAgyMessageSubmitted(session.id, bootstrap.body, bootstrap.at, claimed, ctx.source).catch(() => false) || !confirmRestoredPrefix(session.id, bootstrap.body)) return null;
+        contextSourceRef.current[session.id] = ctx.source;
+        delete pendingDeliveryRef.current[session.id];
+        agyBootstrapRef.current = null;
+      }
+    }
     if (ctx?.completedAt && ctx.completedAt > lastSubmit) {
       if (session.cliId === "claude" && !await apiGetSessionQuietSince(session.id, 3000).catch(() => null)) return null;
       if (session.cliId === "antigravity" && !await apiGetSessionQuietSince(session.id, 10_000).catch(() => null)) return null;
@@ -2083,8 +2103,8 @@ ${recentSnippet || "진행 내역 기록 없음"}
       `${d.kind === "task" ? "assign" : d.kind === "report" ? "report" : d.kind ? "goal" : "mail"}:${d.id}` === id);
     const at = attempt?.at ?? delivery?.submittedAt;
     const source = attempt?.source ?? ctx.source;
-    if (!at || ctx.source !== source || ctx.completedAt <= at) return false;
-    return apiAgyMessageSubmitted(session.id, attempt?.body ?? item.payload, at, claimed, source).catch(() => false);
+    if (!at || (source !== "agy:no-log" && ctx.source !== source) || ctx.completedAt <= at) return false;
+    return apiAgyMessageSubmitted(session.id, attempt?.body ?? item.payload, at, claimed, ctx.source).catch(() => false);
   };
   const prevStartsRef = useRef<Record<string, ReturnType<typeof parseBoardTasks>>>({}); // 프로젝트별 지난 읽기의 🔥 행(오독 방지 2회 확인용)
   const queueSeenRef = useRef<Record<string, number>>({}); // 자동 전달 항목이 마지막으로 시도된 시각(오래되면 대기열 표시에서 제거)
@@ -2154,10 +2174,13 @@ ${recentSnippet || "진행 내역 기록 없음"}
     if (teamDeliveryLocksRef.current.has(session.id)) { sendBlockReasonRef.current[session.id] = "앞 전달 처리 중"; return false; }
     teamDeliveryLocksRef.current.add(session.id);
     const attempt = new DeliveryAttempt(session.id, crypto.randomUUID());
+    let acquiredBootstrap = false;
     // delivery.log에 막은 CLI·사유 코드·로그 시작/종료 유무를 남긴다(stage는 영숫자/-/_만 기록됨): 반복 재시도 세션의 원인 특정용
     let logSig = "";
     const blocked = (why: string) => {
       sendBlockReasonRef.current[session.id] = why;
+      // 이 세션이 쥔 agy 첫 전달 잠금은 멈춤·제출 미확인·준비 시간 초과로 확정되면 즉시 푼다(재전송 금지·예약 보존은 그대로)
+      if (agyBootstrapRef.current?.sessionId === session.id && (why.startsWith("입력창에 멈춤") || why === SUBMISSION_UNCONFIRMED_REASON || why === "전달 준비 시간 초과")) agyBootstrapRef.current = null;
       attempt.step(`blocked_${session.cliId}_${why.startsWith("팀원이 응답 중") ? "busy" : why.startsWith("입력창에 멈춤") ? "stuck" : why.startsWith("입력창에") ? "typing" : "other"}${logSig}`);
       return false;
     };
@@ -2165,6 +2188,13 @@ ${recentSnippet || "진행 내역 기록 없음"}
       return await withDeliveryDeadline(attempt, async () => {
       if (hasPendingSessionInput(session.id)) return blocked("입력창에 30초 안에 친 글이 남아 있음");
       if (optimizationRunningRef.current.has(session.id)) return blocked("세션 최적화 중");
+      const heldAgy = agyBootstrapRef.current;
+      if (heldAgy && heldAgy.sessionId !== session.id && (Date.now() - heldAgy.lockedAt > AGY_BOOTSTRAP_TTL_MS || !useAppStore.getState().sessions.some((x) => x.id === heldAgy.sessionId))) agyBootstrapRef.current = null; // TTL 초과 또는 잠금 세션 종료
+      if (session.cliId === "antigravity" && agyBootstrapRef.current && agyBootstrapRef.current.sessionId !== session.id) return blocked("앞 agy 첫 전달 확인 중");
+      if (session.cliId === "antigravity" && !getLastSubmission(session.id) && (!contextSourceRef.current[session.id] || contextSourceRef.current[session.id] === "agy:no-log") && !agyBootstrapRef.current) {
+        agyBootstrapRef.current = { sessionId: session.id, lockedAt: Date.now() };
+        acquiredBootstrap = true;
+      }
       const claimed = Object.entries(contextSourceRef.current).filter(([id]) => id !== session.id).map(([, src]) => src);
       attempt.step("turn");
       const ctx = await getTurnContext(session, claimed);
@@ -2172,6 +2202,11 @@ ${recentSnippet || "진행 내역 기록 없음"}
       if (!ctx?.completedAt || ctx.completedAt <= getLastSubmission(session.id)) {
         logSig = `_ctx${ctx ? "1" : "0"}_s${(ctx as { startedAt?: number | null } | null)?.startedAt ? "1" : "0"}_c${ctx?.completedAt ? "1" : "0"}_${(ctx?.source ?? "none").startsWith("pty:") ? "pty" : "log"}`;
         return blocked("팀원이 응답 중(턴 종료 신호 대기)");
+      }
+      if (ctx.source === "agy:no-log" && agyBootstrapRef.current?.sessionId !== session.id) return blocked("앞 agy 첫 전달 확인 중");
+      if (ctx.source !== "agy:no-log" && acquiredBootstrap) {
+        if (agyBootstrapRef.current?.sessionId === session.id) agyBootstrapRef.current = null;
+        acquiredBootstrap = false;
       }
       if (hasPendingSessionInput(session.id)) return blocked("입력창에 30초 안에 친 글이 남아 있음");
       if (!useAppStore.getState().sessions.some((s) => s.id === session.id)) return false;
@@ -2188,6 +2223,11 @@ ${recentSnippet || "진행 내역 기록 없음"}
       if (action === "wait") return blocked("앞 전달의 작업 시작 확인 중");
       if (action === "stuck") return blocked("입력창에 멈춤: 앞 전달이 제출되지 않았을 수 있음");
       delete pendingDeliveryRef.current[session.id];
+      if (ctx.source === "agy:no-log") {
+        const fresh = await apiGetSessionContext(session, claimed).catch(() => null);
+        attempt.check();
+        if (fresh?.source !== "agy:no-log" || getLastSubmission(session.id) || hasPendingSessionInput(session.id)) return blocked("첫 전달 전 세션 상태 변경");
+      }
       contextSourceRef.current[session.id] = ctx.source;
       let confirmed = false;
       let skipped = false;
@@ -2195,7 +2235,19 @@ ${recentSnippet || "진행 내역 기록 없음"}
       const baseline = "startedAt" in ctx ? ctx.startedAt ?? 0 : 0;
       await apiWriteToSession(session.id, prompt, true, {
         hasStarted: async () => {
-            if (session.cliId === "antigravity") return agyAttempt ? apiAgyMessageSubmitted(session.id, agyAttempt.body, agyAttempt.at, claimed, ctx.source).catch(() => false) : false;
+            if (session.cliId === "antigravity") {
+              if (!agyAttempt) return false;
+              const matchAt = ctx.source === "agy:no-log" ? agyBootstrapRef.current?.at ?? agyAttempt.at : agyAttempt.at;
+              const matched = await apiAgyMessageSubmitted(session.id, agyAttempt.body, matchAt, claimed, ctx.source).catch(() => false);
+              if (matched && ctx.source === "agy:no-log") {
+                const actual = await apiGetSessionContext(session, claimed).catch(() => null);
+                if (actual && actual.source !== "agy:no-log" && await apiAgyMessageSubmitted(session.id, agyAttempt.body, matchAt, claimed, actual.source).catch(() => false)) {
+                  contextSourceRef.current[session.id] = actual.source;
+                  agyBootstrapRef.current = null;
+                }
+              }
+              return matched;
+            }
           if (ctx.source.startsWith("cursor-screen:")) return (readCursorTurn(session.id)?.startedAt ?? 0) > baseline;
           if (ctx.source.startsWith("pty:")) return null;
           const current = await apiGetSessionContext(session, claimed);
@@ -2203,8 +2255,11 @@ ${recentSnippet || "진행 내역 기록 없음"}
         },
         onResult: (result) => { confirmed = result; },
         onCommit: (body, at) => {
-          if (session.cliId === "antigravity") agyAttempt = { body, at };
-          if (meta && (meta.source === "user" || session.cliId === "antigravity")) useSessionQueue.getState().recordAttempt(queueKey(session), meta.id, { sessionId: session.id, at, body, source: session.cliId === "antigravity" ? ctx.source : undefined });
+          if (session.cliId === "antigravity") {
+            agyAttempt = { body, at };
+            if (ctx.source === "agy:no-log" && agyBootstrapRef.current?.sessionId === session.id) agyBootstrapRef.current = { sessionId: session.id, lockedAt: agyBootstrapRef.current.lockedAt, body, at: agyBootstrapRef.current.at ?? at };
+          }
+          if (meta && (meta.source === "user" || session.cliId === "antigravity")) useSessionQueue.getState().recordAttempt(queueKey(session), meta.id, { sessionId: session.id, at: ctx.source === "agy:no-log" ? agyBootstrapRef.current?.at ?? at : at, body, source: session.cliId === "antigravity" ? ctx.source : undefined });
         },
         onlyPendingRole,
         onSkip: () => { skipped = true; },
@@ -2214,7 +2269,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
       if (skipped) return true;
       pendingDeliveryRef.current[session.id] = { at: getLastSubmission(session.id), started: confirmed, retriedAt: Date.now(), unconfirmed: !confirmed };
       return confirmed || blocked(SUBMISSION_UNCONFIRMED_REASON);
-      }, 15_000);
+      }, session.cliId === "antigravity" ? 30_000 : 15_000);
     } catch (error) {
       if (error instanceof CursorBusyError) return blocked("팀원이 응답 중(턴 종료 신호 대기)");
       if (!attempt.cancelled) throw error;
@@ -2225,6 +2280,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
       return blocked("전달 준비 시간 초과");
     } finally {
       attempt.step("release");
+      if (acquiredBootstrap && !attempt.committed && agyBootstrapRef.current?.sessionId === session.id) agyBootstrapRef.current = null;
       teamDeliveryLocksRef.current.delete(session.id);
     }
   };

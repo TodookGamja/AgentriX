@@ -114,6 +114,15 @@ mod submission_tests {
     #[test]
     fn antigravity_refuses_ambiguous_session_logs() {
         let root = std::env::temp_dir().join(format!("agentrix-agy-{}", uuid::Uuid::new_v4()));
+        let started = chrono::Utc::now() - chrono::Duration::minutes(1);
+        assert_eq!(antigravity(&root, started, &[]).unwrap().source, "agy:no-log");
+        std::fs::create_dir_all(&root).unwrap();
+        assert_eq!(antigravity(&root, started, &[]).unwrap().source, "agy:no-log");
+        let invalid_dir = root.join("invalid").join(".system_generated").join("logs");
+        std::fs::create_dir_all(&invalid_dir).unwrap();
+        std::fs::write(invalid_dir.join("transcript.jsonl"), "invalid log").unwrap();
+        assert!(antigravity(&root, started, &[]).is_none());
+        std::fs::remove_dir_all(root.join("invalid")).unwrap();
         let mut paths = Vec::new();
         for id in ["one", "two"] {
             let dir = root.join(id).join(".system_generated").join("logs");
@@ -123,7 +132,6 @@ mod submission_tests {
             std::fs::write(&path, line).unwrap();
             paths.push(path);
         }
-        let started = chrono::Utc::now() - chrono::Duration::seconds(1);
         assert!(antigravity(&root, started, &[]).is_none());
         let claimed = vec![paths[0].to_string_lossy().into_owned()];
         assert_eq!(antigravity(&root, started, &claimed).unwrap().source, paths[1].to_string_lossy());
@@ -389,23 +397,34 @@ pub fn unique_codex_session_id(sessions: &Path, cwd: &str, started_at: &str, sou
 /// Antigravity: brain/<uuid>/.system_generated/logs/transcript.jsonl, 로그에 작업 폴더가 없어 시작 시각으로만 매칭
 // shortcut: 로그 후보가 여러 개면 보류하며, CLI가 cwd를 기록하면 폴더로 식별한다.
 fn antigravity(brain: &Path, started: DateTime<Utc>, claimed: &[String]) -> Option<ContextUsage> {
+    match std::fs::read_dir(brain) {
+        Ok(_) => {},
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Some(ContextUsage { tokens: 0, window: None, source: "agy:no-log".into(), completed_at: None, started_at: None }),
+        Err(_) => return None,
+    }
     let mut best: Option<(DateTime<Utc>, PathBuf, String)> = None;
     let mut matches = 0;
-    for path in collect_newest_jsonl_files(brain, 4, 40, Some("transcript.jsonl")) {
-        if !touched_since(&path, started) {
-            break;
-        }
+    let mut recent = 0;
+    for entry in walkdir::WalkDir::new(brain).max_depth(4) {
+        let entry = entry.ok()?;
+        if entry.file_name() != "transcript.jsonl" { continue; }
+        let metadata = std::fs::metadata(entry.path()).ok()?;
+        if !metadata.is_file() { continue; }
+        let modified = metadata.modified().ok()?;
+        if modified < SystemTime::from(started) - Duration::from_secs(10) { continue; }
+        recent += 1;
+        if recent > 40 { return None; }
+        let path = entry.into_path();
         let src = path.to_string_lossy().to_string();
         if claimed.contains(&src) {
             continue;
         }
-        let Ok(content) = std::fs::read_to_string(&path) else { continue };
-        let Some(ts) = content
+        let content = std::fs::read_to_string(&path).ok()?;
+        let ts = content
             .lines()
             .next()
             .and_then(|l| serde_json::from_str::<Value>(l).ok())
-            .and_then(|v| v.get("created_at").and_then(|x| x.as_str()).and_then(parse_ts))
-        else { continue };
+            .and_then(|v| v.get("created_at").and_then(|x| x.as_str()).and_then(parse_ts))?;
         if ts < started - chrono::Duration::seconds(10) {
             continue;
         }
@@ -413,6 +432,9 @@ fn antigravity(brain: &Path, started: DateTime<Utc>, claimed: &[String]) -> Opti
         if best.as_ref().map(|b| ts < b.0).unwrap_or(true) {
             best = Some((ts, path, content));
         }
+    }
+    if matches == 0 {
+        return Some(ContextUsage { tokens: 0, window: None, source: "agy:no-log".into(), completed_at: None, started_at: None });
     }
     if matches != 1 { return None; }
     let (_, path, content) = best?;

@@ -191,6 +191,11 @@ export async function apiSaveProjectBlackboard(
   }
 }
 
+export async function apiCancelProjectBlackboardTask(projectPath: string, taskId: string): Promise<void> {
+  if (!isTauriRuntime() || !projectPath.trim()) throw new Error("프로젝트 작업판을 사용할 수 없습니다.");
+  return invoke("cancel_project_blackboard_task", { projectPath, taskId });
+}
+
 export async function apiSaveSessionHandoff(
   projectPath: string,
   filename: string,

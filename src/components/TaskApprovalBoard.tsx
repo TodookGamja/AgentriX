@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
-import { apiGetProjectBlackboard } from "../lib/tauriBridge";
-import { boardTaskColumn, boardTaskTitle, parseBoardTasks, shortTaskTitle } from "../lib/blackboardDispatch";
-import { getTeamMailDeliveries } from "../lib/teamMailDelivery";
+import { apiCancelProjectBlackboardTask, apiGetProjectBlackboard } from "../lib/tauriBridge";
+import { boardTaskColumn, boardTaskTitle, compareWaiting, parseBoardTasks, shortTaskTitle, type BoardTask } from "../lib/blackboardDispatch";
+import { getTeamMailDeliveries, removeTeamMailDelivery } from "../lib/teamMailDelivery";
 import { useSessionQueue } from "../lib/sessionQueueStore";
 import { useAppStore } from "../lib/store";
 import {
@@ -22,6 +22,7 @@ interface Card {
   agentId: string;
   title: string;
   waitReason?: string;
+  blockedBy?: string[];
 }
 
 interface TaskApprovalBoardProps {
@@ -34,10 +35,11 @@ export const TaskApprovalBoard: React.FC<TaskApprovalBoardProps> = ({ projectPat
   const [mode, setMode] = useState(() => getApprovalMode(projectPath));
   const [approvals, setApprovals] = useState<TaskApproval[]>([]);
   const [notes, setNotes] = useState<Record<string, string>>({});
-  const [cards, setCards] = useState<(Card & { status: "start" | "done" | "wait" | "closed"; confirmed: boolean; live: boolean; queued: boolean; waitReason: string })[]>([]);
+  const [cards, setCards] = useState<(Card & { status: BoardTask["status"]; confirmed: boolean; live: boolean; queued: boolean; waitReason: string })[]>([]);
   const [rejecting, setRejecting] = useState<string | null>(null);
   const [reason, setReason] = useState("");
   const [showAllDone, setShowAllDone] = useState(false);
+  const [tick, setTick] = useState(0); // 취소 직후 3초 폴링을 기다리지 않고 다시 읽기
 
   useEffect(() => {
     setMode(getApprovalMode(projectPath));
@@ -61,7 +63,7 @@ export const TaskApprovalBoard: React.FC<TaskApprovalBoardProps> = ({ projectPat
             const delivery = deliveries.find((d) => d.agentId === t.agentId && d.kind === "task" && d.id === t.taskId);
             const live = sessions.some((s) => s.cwd === projectPath && s.agentId === t.agentId && s.status === "running");
             const confirmed = !handled.includes(`${t.agentId}|assign:${t.taskId}`) && (Boolean(delivery && !delivery.unconfirmed) || sent.includes(`${t.taskId}:start:${t.agentId}`));
-            const waitReason = t.status === "wait" ? "작업표에서 대기 중" : queue?.reason || (!live ? "담당 세션이 없습니다" : delivery?.unconfirmed ? "전달 결과 미확인" : "전달 대기");
+            const waitReason = t.status === "invalid" ? "상태 형식 오류: 상태 칸은 ⏳/🔥/✅/통합/취소로 시작해야 합니다" : t.blockedBy?.length ? `선행 ${t.blockedBy.map((id) => id.replace(/^.*_(?=\d+$)/, "_")).join(", ")} 대기` : t.status === "wait" ? "작업표에서 대기 중" : queue?.reason || (!live ? "담당 세션이 없습니다" : delivery?.unconfirmed ? "전달 결과 미확인" : "전달 대기");
             return { ...t, title: boardTaskTitle(board, t.taskId), confirmed, live, queued: Boolean(queue), waitReason };
           }));
         }
@@ -75,7 +77,7 @@ export const TaskApprovalBoard: React.FC<TaskApprovalBoardProps> = ({ projectPat
       stopped = true;
       window.clearInterval(id);
     };
-  }, [projectPath, agents]);
+  }, [projectPath, agents, tick]);
 
   const nameOf = (agentId: string) => agents.find((a) => a.id === agentId)?.name ?? agentId;
   const statusOf = (c: Card) => approvals.find((a) => a.taskId === c.taskId && a.agentId === c.agentId)?.status;
@@ -86,10 +88,29 @@ export const TaskApprovalBoard: React.FC<TaskApprovalBoardProps> = ({ projectPat
     setReason("");
   };
 
+  // 작업표의 해당 행 상태 칸만 "취소"로 바꾸고 그 작업의 전달 대기·예약을 정리(완료 칸으로 이동, 재전달 없음)
+  const cancel = async (c: Card) => {
+    if (!window.confirm(`${c.taskId} 작업을 취소할까요?
+작업표 상태가 '취소'로 바뀌고 전달 대기가 정리됩니다.`)) return;
+    try {
+      await apiCancelProjectBlackboardTask(projectPath, c.taskId);
+      useSessionQueue.getState().remove(c.agentId, `assign:${c.taskId}`);
+      removeTeamMailDelivery(projectPath, c.agentId, c.taskId, "task");
+    } catch (e) {
+      window.alert(`취소하지 못했습니다: ${String(e)}`);
+    }
+    setTick((v) => v + 1);
+  };
+  const cancelButton = (c: Card) => (
+    <button onClick={() => void cancel(c)} className={`px-2 py-1 rounded bg-slate-800 text-slate-300 border border-slate-700 text-[11px] font-semibold ${FOCUS}`}>
+      취소
+    </button>
+  );
+
   const manual = mode === "manual";
-  const kindOf = (c: typeof cards[number]) => boardTaskColumn({ ...c, manual, approval: statusOf(c) });
+  const kindOf = (c: typeof cards[number]) => boardTaskColumn({ ...c, blocked: Boolean(c.blockedBy?.length), manual, approval: statusOf(c) });
   const pending = cards.filter((c) => kindOf(c) === "approval");
-  const waiting = cards.filter((c) => kindOf(c) === "waiting");
+  const waiting = cards.filter((c) => kindOf(c) === "waiting").sort(compareWaiting);
   const rejected = cards.filter((c) => kindOf(c) === "rejected");
   const running = cards.filter((c) => kindOf(c) === "running");
   const doneAll = cards.filter((c) => kindOf(c) === "done");
@@ -116,7 +137,7 @@ export const TaskApprovalBoard: React.FC<TaskApprovalBoardProps> = ({ projectPat
             </details>
           )}
           {tone.includes("sky") && notes[c.taskId] && (
-            <div className={`text-[11px] break-all line-clamp-2 ${notes[c.taskId].startsWith("전달됨") ? "text-sky-300/80" : "text-amber-300/80"}`}>
+            <div className={`text-[11px] break-all line-clamp-2 ${notes[c.taskId].startsWith("전달됨") || Number(notes[c.taskId].match(/(\d+)분째/)?.[1] ?? 99999) < 30 ? "text-sky-300/80" : "text-amber-300/80"}`}>
               {notes[c.taskId]}
             </div>
           )}
@@ -197,8 +218,8 @@ export const TaskApprovalBoard: React.FC<TaskApprovalBoardProps> = ({ projectPat
             </div>
           )
         )}
-        {column("대기", "text-indigo-300", waiting)}
-        {column("진행 중", "text-sky-300", running)}
+        {column("대기", "text-indigo-300", waiting, cancelButton)}
+        {column("진행 중", "text-sky-300", running, cancelButton)}
         {column("완료", "text-emerald-300", done, undefined, doneAll.length, (hiddenDone > 0 || showAllDone) && doneAll.length > 5 ? (
           <button onClick={() => setShowAllDone((v) => !v)} className={`w-full px-2 py-1 rounded bg-slate-800 text-slate-300 text-[11px] ${FOCUS}`}>
             {showAllDone ? "접기" : `이전 완료 ${hiddenDone}개 보기`}

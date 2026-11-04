@@ -2,7 +2,8 @@
 export interface BoardTask {
   taskId: string;
   agentId: string;
-  status: "start" | "done" | "wait" | "closed"; // closed: 통합·취소된 행(전달·완료 보고 없음, 작업보드에서는 완료 칸)
+  status: "start" | "done" | "wait" | "closed" | "invalid"; // closed: 통합·취소된 행(전달·완료 보고 없음, 작업보드에서는 완료 칸), invalid: 상태 칸이 표시로 시작하지 않음(작업보드에만 노출)
+  blockedBy?: string[]; // 아직 ✅/통합/취소가 아닌 선행 작업 ID (비어 있지 않으면 전달 보류)
 }
 
 export function hasTaskResultMail(mails: { from: string; to: string; subject: string; body: string }[], taskId: string, agentId: string, pmId: string): boolean {
@@ -21,9 +22,9 @@ export function confirmedResultMail(mail: { from: string; to: string; subject: s
     hasTaskResultMail([mail], t.taskId, t.agentId, pmId));
 }
 
-export function boardTaskColumn(input: { status: BoardTask["status"]; manual: boolean; approval?: string; confirmed: boolean; live: boolean; queued: boolean }): "approval" | "waiting" | "running" | "done" | "rejected" {
+export function boardTaskColumn(input: { status: BoardTask["status"]; blocked?: boolean; manual: boolean; approval?: string; confirmed: boolean; live: boolean; queued: boolean }): "approval" | "waiting" | "running" | "done" | "rejected" {
   if (input.status === "done" || input.status === "closed") return "done";
-  if (input.status === "wait") return "waiting";
+  if (input.status === "wait" || input.status === "invalid" || input.blocked) return "waiting";
   if (input.approval === "rejected") return "rejected";
   if (input.manual && (!input.approval || input.approval === "pending")) return "approval";
   return input.confirmed && input.live && !input.queued ? "running" : "waiting";
@@ -39,12 +40,49 @@ function findAgentByName(cell: string, names: Record<string, string>): string | 
   return hits.length === 1 || (hits.length > 1 && hits[0][1].length > hits[1][1].length) ? hits[0][0] : undefined;
 }
 
-// 상태 칸에서 가장 앞에 나온 표시로 판정 (완료 메모에 "⏳/🔥/✅" 같은 글이 섞여도 앞의 ✅ 완료가 우선, ⏳ 대기는 null)
+// 상태 칸은 **맨 앞 표시**만 판정(앞의 *·_·~ 장식 허용). 뒤쪽 메모에 ⏳/🔥/✅가 섞여도 영향 없음
+const STATUS_HEAD = /^[\s*_~`>-]*(⏳|대기|🔥|착수|in-progress|✅|완료|done|통합|취소|merged|cancel(?:l)?ed)/i;
+const STATUS_ANYWHERE = /⏳|대기|🔥|착수|in-progress|✅|완료|done|통합|취소|merged|cancel(?:l)?ed/i;
 export function statusKind(status: string): "start" | "done" | "closed" | null {
-  const m = status.match(/⏳|대기|🔥|착수|in-progress|✅|완료|done|통합|취소|merged|cancel(?:l)?ed/i);
+  const m = status.match(STATUS_HEAD)?.[1];
   if (!m) return null;
-  if (/통합|취소|merged|cancel/i.test(m[0])) return "closed";
-  return /🔥|착수|in-progress/i.test(m[0]) ? "start" : /⏳|대기/.test(m[0]) ? null : "done";
+  if (/통합|취소|merged|cancel/i.test(m)) return "closed";
+  return /🔥|착수|in-progress/i.test(m) ? "start" : /⏳|대기/.test(m) ? null : "done";
+}
+
+// 선행 칸의 ID들(전체 ID 또는 같은 묶음의 `_N` 약식). "—"·빈 칸은 없음
+export function prereqIds(cell: string, taskId: string): string[] {
+  const prefix = taskId.replace(/_\d+$/, "");
+  const ids = (cell.match(/[A-Za-z]+\d+\w*|_\d+/g) ?? []).map((t) => (t.startsWith("_") ? prefix + t : t));
+  return Array.from(new Set(ids)).filter((id) => id !== taskId);
+}
+
+// 대기 칸 정렬: 선행 충족 → 최신 묶음(ID 앞부분 숫자가 큰 것) → ID 뒤 번호 순
+export function compareWaiting(a: { taskId: string; blockedBy?: string[] }, b: { taskId: string; blockedBy?: string[] }): number {
+  const key = (id: string) => { const m = id.match(/(\d+)_(\d+)$/); return m ? [Number(m[1]), Number(m[2])] : [0, 0]; };
+  const [ag, an] = key(a.taskId), [bg, bn] = key(b.taskId);
+  return Number(Boolean(a.blockedBy?.length)) - Number(Boolean(b.blockedBy?.length)) || bg - ag || an - bn;
+}
+
+// 작업표에서 ID가 정확히 일치하는 (아직 ✅/통합/취소가 아닌) 행의 상태 칸만 "취소 — …"로 교체. 바꿀 행이 없으면 null
+export function cancelBoardRow(board: string, taskId: string, note = "취소 — 사용자 작업판에서 취소"): string | null {
+  const lines = board.split("\n");
+  let statusIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
+    if (!raw.trimStart().startsWith("|")) continue;
+    const cr = raw.endsWith("\r") ? "\r" : "";
+    const parts = (cr ? raw.slice(0, -1) : raw).split("|");
+    const cells = parts.map((c) => c.trim());
+    if (cells.some((c) => c === "상태" || c.toLowerCase() === "status")) { statusIdx = cells.findIndex((c) => c === "상태" || c.toLowerCase() === "status"); continue; }
+    if (cells[1] !== taskId || statusIdx <= 0 || statusIdx >= parts.length - 1) continue;
+    const kind = statusKind(cells[statusIdx]);
+    if (kind === "done" || kind === "closed") continue;
+    parts[statusIdx] = ` ${note} `;
+    lines[i] = parts.join("|") + cr;
+    return lines.join("\n");
+  }
+  return null;
 }
 
 export function parseBoardTasks(board: string, agentIds: string[], names?: Record<string, string>, includeWaiting = false): BoardTask[] {
@@ -52,6 +90,9 @@ export function parseBoardTasks(board: string, agentIds: string[], names?: Recor
   const lines = board.split(/\r?\n/);
   let statusColIdx = -1;
   let roleColIdx = -1;
+  let prereqColIdx = -1;
+  const kindById = new Map<string, "start" | "done" | "wait" | "closed" | "invalid">();
+  const rows: { task: BoardTask; prereq: string[] }[] = [];
 
   for (const line of lines) {
     // PM이 표 대신 체크리스트(- [ ] S1 담당 `작업`)로 써도 인식: [ ] → 착수, [x] → 완료. ID로 시작하지 않는 일반 체크 항목은 무시
@@ -71,6 +112,7 @@ export function parseBoardTasks(board: string, agentIds: string[], names?: Recor
     if (cells.some((c) => c === "상태" || c.toLowerCase() === "status")) {
       statusColIdx = cells.findIndex((c) => c === "상태" || c.toLowerCase() === "status");
       roleColIdx = cells.findIndex((c) => c === "담당" || c.toLowerCase() === "assignee" || c.toLowerCase() === "role");
+      prereqColIdx = cells.findIndex((c) => c === "선행");
       continue;
     }
 
@@ -86,8 +128,10 @@ export function parseBoardTasks(board: string, agentIds: string[], names?: Recor
       ? cells[statusColIdx]
       : ([...cells].reverse().find((c) => c) ?? "");
 
-    const kind = statusKind(status) ?? (includeWaiting && /⏳|대기/.test(status) ? "wait" : null);
-    if (!kind) continue;
+    const head = status.match(STATUS_HEAD)?.[1];
+    const kind = statusKind(status) ?? (head ? "wait" : STATUS_ANYWHERE.test(status) ? "invalid" : null);
+    if (kind) kindById.set(taskId, kind);
+    if (!kind || ((kind === "wait" || kind === "invalid") && !includeWaiting)) continue;
 
     const targetCell = roleColIdx > 0 && roleColIdx < cells.length ? cells[roleColIdx] : (cells[3] ?? "");
     const backtickTokens = [...targetCell.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
@@ -97,9 +141,13 @@ export function parseBoardTasks(board: string, agentIds: string[], names?: Recor
     const agentId =
       agentIds.find((id) => candidateTokens.some((t) => id === t || id.startsWith(t + "-") || id.includes(t))) ??
       (names ? findAgentByName(targetCell, names) : undefined);
-    if (agentId) {
-      tasks.push({ taskId, agentId, status: kind });
-    }
+    if (agentId) rows.push({ task: { taskId, agentId, status: kind }, prereq: prereqColIdx > 0 && prereqColIdx < cells.length ? prereqIds(cells[prereqColIdx], taskId) : [] });
+  }
+  // 선행이 표에 있고 ✅/통합/취소가 아니면 전달 보류. 체크리스트 행(rows 밖)·표에 없는 선행은 막지 않음
+  for (const { task, prereq } of rows) {
+    const blockedBy = prereq.filter((id) => { const k = kindById.get(id); return k !== undefined && k !== "done" && k !== "closed"; });
+    if (blockedBy.length && task.status === "start" && !includeWaiting) continue;
+    tasks.push(blockedBy.length ? { ...task, blockedBy } : task);
   }
   return tasks;
 }

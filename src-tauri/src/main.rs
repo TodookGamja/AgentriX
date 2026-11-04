@@ -455,6 +455,11 @@ fn save_project_blackboard(project_path: String, content: String) -> Result<(), 
 }
 
 #[tauri::command]
+fn cancel_project_blackboard_task(project_path: String, task_id: String) -> Result<(), String> {
+    db::cancel_project_blackboard_task(&project_path, &task_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn save_session_handoff(
     project_path: String,
     filename: Option<String>,
@@ -1144,7 +1149,7 @@ async fn session_user_message_submitted(state: State<'_, AppState>, session_id: 
             }
             "antigravity" => {
                 expected_source.and_then(|expected| context::read_context("antigravity", &session_id, &session.cwd, &session.started_at, claimed.as_deref().unwrap_or(&[]))
-                    .filter(|ctx| ctx.source == expected).map(|ctx| std::path::PathBuf::from(ctx.source)))
+                    .filter(|ctx| ctx.source != "agy:no-log" && (ctx.source == expected || expected == "agy:no-log")).map(|ctx| std::path::PathBuf::from(ctx.source)))
             }
             _ => None,
         };
@@ -1180,6 +1185,12 @@ async fn get_session_context(
         } else {
             context::read_context(&cli_id, &session_id, &cwd, &started_at, &claimed)
         };
+        if cli_id == "antigravity" {
+            let pristine = pty.is_pristine_antigravity(&session_id);
+            if result.as_ref().is_some_and(|ctx| (ctx.source == "agy:no-log") != pristine) {
+                return Ok(None);
+            }
+        }
         if cli_id == "codex" {
             if let Some(result) = &result {
                 let _guard = MANAGED_SESSION_LOCK.lock().map_err(|e| e.to_string())?;
@@ -2216,6 +2227,7 @@ fn main() {
             route_team_mail,
             acknowledge_team_mail,
             save_project_blackboard,
+            cancel_project_blackboard_task,
             save_session_handoff,
             trust_project_folder,
             analyze_project_workspace,

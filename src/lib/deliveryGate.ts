@@ -20,6 +20,14 @@ export function logTurnStillBusy(cliId: string, ctx: { startedAt?: number | null
   if (ctx.startedAt && !ctx.completedAt) return true;
   return cliId === "codex" && !ctx.startedAt && !ctx.completedAt;
 }
+
+export function agyFirstPromptReady(lines: string[]): boolean {
+  let prompt = lines.length - 1;
+  while (prompt >= 0 && !/^\s*[>›❯]\s*$/.test(lines[prompt])) prompt--;
+  if (prompt < 0) return false;
+  const tail = lines.slice(prompt + 1).filter((line) => line.trim() && !/^[\s─━┄┈-]+$/.test(line));
+  return tail.length === 1 && /^\s*\?\s+for shortcuts\b/i.test(tail[0]);
+}
 export const STUCK_AFTER_MS = 15_000;
 export const ECHO_WINDOW_MS = 1_500;
 
