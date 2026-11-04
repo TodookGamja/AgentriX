@@ -78,6 +78,7 @@ import {
   apiRouteTeamMail,
   apiAcknowledgeTeamMail,
   apiGetSessionContext,
+  apiSessionUserMessageSubmitted,
   apiGetSessionQuietSince,
   apiWindowMinimize,
   apiWindowToggleMaximize,
@@ -109,7 +110,7 @@ import { AiDeepTeamModal } from "./components/AiDeepTeamModal";
 import { MarkdownLite } from "./components/MarkdownLite";
 import { FolderPickerModal } from "./components/FolderPickerModal";
 import { AgentrixLogo } from "./components/AgentrixLogo";
-import { boardProtocol, collabProtocol, forgetEndedStarts, hasTaskResultMail, keepRecentStarts, mailProtocol, parseBoardTasks } from "./lib/blackboardDispatch";
+import { boardProtocol, collabProtocol, confirmedResultMail, forgetEndedStarts, keepRecentStarts, mailProtocol, parseBoardTasks } from "./lib/blackboardDispatch";
 import { getTeamMailDeliveries, pruneStaleDeliveries, pruneStaleMailDeliveries, removeTeamMailDelivery, reserveTeamMailDelivery, saveTeamMailDelivery } from "./lib/teamMailDelivery";
 import { clearDispatchNotes, findApproval, getApprovalMode, getDispatchNotes, setDispatchNote, upsertApproval } from "./lib/taskApproval";
 import { countNewChars } from "./lib/tokenEstimate";
@@ -463,7 +464,7 @@ export const App: React.FC = () => {
     if (!updateInfo) return;
     const downloadUrl = updateInfo.download_url;
     if (!downloadUrl) {
-      await apiOpenExternalUrl(updateInfo.release_url);
+      try { await apiOpenExternalUrl(updateInfo.release_url); } catch (e) { showToast(`링크를 열지 못했습니다: ${String(e)}`, "error"); return; }
       showToast("브라우저에서 릴리즈 페이지를 열었습니다.", "info");
       return;
     }
@@ -2091,9 +2092,27 @@ ${recentSnippet || "진행 내역 기록 없음"}
         sendBlockReasonRef.current[session.id] = "앞 전달 대기";
         return false;
       }
+      if (meta.source === "mail" && session.agentId) {
+        const sessions = useAppStore.getState().sessions.filter((s) => s.cwd === session.cwd && s.agentId);
+        const pm = sessions.find((s) => s.name.includes("PM") || s.agentRole?.includes("PM") || s.agentRole?.includes("리더")) ?? sessions[0];
+        if (pm?.id === session.id) {
+          try {
+            const [board, agents, mails] = await Promise.all([apiGetProjectBlackboard(session.cwd), apiGetProjectAgents(session.cwd), apiRouteTeamMail(session.cwd)]);
+            const mail = mails.find((m) => m.id === meta.id.slice(5) && m.to === session.agentId);
+            const tasks = parseBoardTasks(board, agents.map((a) => a.id), Object.fromEntries(agents.map((a) => [a.id, a.name])));
+            if (mail && confirmedResultMail(mail, tasks, q.confirmedReports, key, session.agentId)) {
+              await apiAcknowledgeTeamMail(session.cwd, session.agentId, mail.id);
+              q.remove(key, meta.id);
+              q.markHandled(`${key}|${meta.id}`);
+              sendBlockReasonRef.current[session.id] = "확인된 완료 보고 정리";
+              return false;
+            }
+          } catch { /* 확인 증거가 없으면 기존 전달 경로를 유지한다. */ }
+        }
+      }
     }
     let ok: boolean;
-    try { ok = await sendToIdleTeamSessionRaw(session, prompt); }
+    try { ok = await sendToIdleTeamSessionRaw(session, prompt, false, meta); }
     catch (err) {
       if (meta) q.upsert(key, { ...meta, payload: prompt, createdAt: Date.now(), reason: "입력창에 멈춤: 전달 결과 미확인", stuck: true });
       throw err;
@@ -2101,6 +2120,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
     if (!meta) return ok;
     if (ok) {
       q.remove(key, meta.id);
+      if (meta.source === "report") q.confirmReport(`${key}|${meta.id}`);
       delete queueSeenRef.current[`${key}|${meta.id}`];
     } else {
       const reason = sendBlockReasonRef.current[session.id] ?? "전달 조건 미충족";
@@ -2109,7 +2129,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
     }
     return ok;
   };
-  const sendToIdleTeamSessionRaw = async (session: typeof currentProjectSessions[number], prompt: string, onlyPendingRole = false): Promise<boolean> => {
+  const sendToIdleTeamSessionRaw = async (session: typeof currentProjectSessions[number], prompt: string, onlyPendingRole = false, meta?: { id: string; source: QueueSource }): Promise<boolean> => {
     if (teamDeliveryLocksRef.current.has(session.id)) { sendBlockReasonRef.current[session.id] = "앞 전달 처리 중"; return false; }
     teamDeliveryLocksRef.current.add(session.id);
     const attempt = new DeliveryAttempt(session.id, crypto.randomUUID());
@@ -2159,6 +2179,9 @@ ${recentSnippet || "진행 내역 기록 없음"}
           return Boolean(current && current.source === ctx.source && (current.startedAt ?? 0) > baseline);
         },
         onResult: (result) => { confirmed = result; },
+        onCommit: (body, at) => {
+          if (meta?.source === "user") useSessionQueue.getState().recordAttempt(queueKey(session), meta.id, { sessionId: session.id, at, body });
+        },
         onlyPendingRole,
         onSkip: () => { skipped = true; },
         attempt,
@@ -2368,15 +2391,6 @@ ${recentSnippet || "진행 내역 기록 없음"}
           }
           const delivery = queueReservation(item, s, Date.now());
           if (!delivery) continue;
-          if (item.source === "report") {
-            const separator = delivery.id.indexOf(":");
-            const messages = await apiRouteTeamMail(s.cwd);
-            if (hasTaskResultMail(messages, delivery.id.slice(0, separator), delivery.id.slice(separator + 1), delivery.agentId)) {
-              useSessionQueue.getState().remove(key, item.id);
-              useSessionQueue.getState().markHandled(`${key}|${item.id}`);
-              continue;
-            }
-          }
           if (!reserveTeamMailDelivery(delivery)) continue;
           try {
             const sent = await sendToIdleTeamSession(s, item.payload, { id: item.id, source: item.source, preview: item.preview });
@@ -2423,9 +2437,8 @@ ${recentSnippet || "진행 내역 기록 없음"}
       }
       let board: string;
           let agents: ProjectAgentRecord[];
-          let messages: Awaited<ReturnType<typeof apiRouteTeamMail>>;
       try {
-            [board, agents, messages] = await Promise.all([apiGetProjectBlackboard(project), apiGetProjectAgents(project), apiRouteTeamMail(project)]);
+          [board, agents] = await Promise.all([apiGetProjectBlackboard(project), apiGetProjectAgents(project)]);
       } catch {
         continue;
       }
@@ -2526,17 +2539,34 @@ ${recentSnippet || "진행 내역 기록 없음"}
             if (stale.length) st.unmark(stale);
           }
           if (!list?.length) continue;
-          if (list.some((it) => it.source === "report")) mails ??= await apiRouteTeamMail(project).catch(() => []);
+            if (list.some((it) => it.source === "mail")) mails ??= await apiRouteTeamMail(project).catch(() => []);
           const settled = settledAutoIds(
             list,
             new Set(tasks.filter((t) => t.status === "done" && t.agentId === s.agentId).map((t) => t.taskId)),
-            (taskId, reporterId) => hasTaskResultMail(mails ?? [], taskId, reporterId, s.agentId!)
+              () => false
           );
           // 🔥에서 대기로 되돌림·삭제·담당 변경된 지난 배정도 제거(보드를 정상으로 읽은 경우에만 이 블록에 들어옴)
           const revoked = tasks.length === 0 ? [] : revokedAssignIds(list, new Set(boardTasks.filter((t) => t.status === "start" && t.agentId === s.agentId).map((t) => t.taskId)));
           const ids = [...new Set([...settled, ...revoked])];
           // 제출 확인은 실패했지만 대상 터미널 화면에 이미 찍힌 항목(메모리상 화면 기록만 사용)은 전달된 것으로 확정
           const onScreen = deliveredByScreen(list, readTerminalTranscript(s.id));
+            for (const item of list) {
+              if (item.source !== "user" || (!item.stuck && !item.unconfirmed) || !item.attempt || item.attempt.sessionId !== s.id) continue;
+              if (await apiSessionUserMessageSubmitted(s.id, item.attempt.body, item.attempt.at).catch(() => false)) {
+                useSessionQueue.getState().remove(key, item.id);
+                delete pendingDeliveryRef.current[s.id];
+              }
+            }
+            if (pmSession?.id === s.id && mails) {
+              for (const item of list.filter((it) => it.source === "mail")) {
+                const mail = mails.find((m) => m.id === item.id.slice(5) && m.to === s.agentId);
+                const confirmed = mail && confirmedResultMail(mail, tasks, useSessionQueue.getState().confirmedReports, key, s.agentId!);
+                if (!confirmed || getTeamMailDeliveries().some((d) => d.project === project && d.agentId === s.agentId && d.id === mail!.id && !d.kind)) continue;
+                await apiAcknowledgeTeamMail(project, s.agentId, mail!.id);
+                useSessionQueue.getState().remove(key, item.id);
+                useSessionQueue.getState().markHandled(`${key}|${item.id}`);
+              }
+            }
           for (const id of [...ids, ...onScreen.filter((x) => !ids.includes(x))]) {
             useSessionQueue.getState().remove(key, id);
             delete queueSeenRef.current[`${key}|${id}`];
@@ -2576,13 +2606,6 @@ ${recentSnippet || "진행 내역 기록 없음"}
           }
         }
         if (t.status === "done") {
-              if (pmSession?.agentId && hasTaskResultMail(messages, t.taskId, t.agentId, pmSession.agentId) &&
-                !getTeamMailDeliveries().some((d) => d.project === project && d.agentId === pmSession.agentId && d.kind === "report" && d.id === `${t.taskId}:${t.agentId}`)) {
-                useSessionQueue.getState().resolve(queueKey(pmSession), `report:${t.taskId}:${t.agentId}`);
-                sent.add(key);
-                localStorage.setItem(storeKey, JSON.stringify([...sent]));
-                continue;
-              }
           if (!pmSession) continue;
           if (useSessionQueue.getState().handled.includes(`${queueKey(pmSession)}|report:${t.taskId}:${t.agentId}`)) continue;
           if (getTeamMailDeliveries().some((d) => d.project === project && d.agentId === t.agentId && d.id === t.taskId && d.kind === "task")) continue;
@@ -4738,7 +4761,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
               </div>
               <button
                 type="button"
-                onClick={() => apiOpenExternalUrl(updateInfo.release_url)}
+                onClick={() => apiOpenExternalUrl(updateInfo.release_url).catch((e) => showToast(`링크를 열지 못했습니다: ${String(e)}`, "error"))}
                 className="w-full inline-flex items-center justify-center gap-1 text-[11px] text-slate-400 hover:text-indigo-400 transition cursor-pointer"
               >
                 <span>GitHub 릴리즈 페이지</span>

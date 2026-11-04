@@ -5,14 +5,17 @@ import { dropStaleAuto, moveItem, removeItem, upsertItem, type QueueItem, type Q
 interface SessionQueueState {
   queues: QueueMap;
   upsert: (sid: string, item: QueueItem) => void;
+  recordAttempt: (sid: string, id: string, attempt: NonNullable<QueueItem["attempt"]>) => void;
   remove: (sid: string, id: string) => void;
   move: (sid: string, id: string, dir: -1 | 1) => void;
   dropStale: (isFresh: (key: string, id: string) => boolean) => void;
   resolved: string[]; // 사용자가 직접 보내거나 버린 자동 항목(key|id)
   handled: string[];
+  confirmedReports: string[];
   resolve: (sid: string, id: string) => void;
   clearResolved: (key: string) => void;
   markHandled: (key: string) => void;
+  confirmReport: (key: string) => void;
   unmark: (keys: string[]) => void;
 }
 
@@ -24,8 +27,11 @@ export const useSessionQueue = create<SessionQueueState>()(
   persist(
     (set) => ({
       queues: {},
+      recordAttempt: (sid, id, attempt) => set((s) => ({ queues: { ...s.queues, [sid]: (s.queues[sid] ?? []).map((item) => item.id === id ? { ...item, attempt } : item) } })),
       resolved: [],
       handled: [],
+      confirmedReports: [],
+      confirmReport: (key) => set((s) => ({ handled: [...new Set([...s.handled, key])], confirmedReports: [...new Set([...s.confirmedReports, key])] })),
       resolve: (sid, id) => set((s) => ({ queues: removeItem(s.queues, sid, id), resolved: [...new Set([...s.resolved, `${sid}|${id}`])] })),
       clearResolved: (key) => set((s) => ({ resolved: s.resolved.filter((item) => item !== key) })),
       markHandled: (key) => set((s) => ({ resolved: s.resolved.filter((item) => item !== key), handled: [...new Set([...s.handled, key])] })),
@@ -35,6 +41,6 @@ export const useSessionQueue = create<SessionQueueState>()(
       move: (sid, id, dir) => set((s) => { const q = moveItem(s.queues, sid, id, dir); return q === s.queues ? s : { queues: q }; }),
       dropStale: (isFresh) => set((s) => { const q = dropStaleAuto(s.queues, isFresh); return q === s.queues ? s : { queues: q }; }),
     }),
-    { name: "agentrix_session_queue", partialize: (s) => ({ queues: s.queues, resolved: s.resolved, handled: s.handled }) }
+    { name: "agentrix_session_queue", partialize: (s) => ({ queues: s.queues, resolved: s.resolved, handled: s.handled, confirmedReports: s.confirmedReports }) }
   )
 );

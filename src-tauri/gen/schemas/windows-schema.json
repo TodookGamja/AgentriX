@@ -531,6 +531,12 @@
           "markdownDescription": "Enables the seed_project_agents_preset command without any pre-configured scope."
         },
         {
+          "description": "Enables the session_user_message_submitted command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-session-user-message-submitted",
+          "markdownDescription": "Enables the session_user_message_submitted command without any pre-configured scope."
+        },
+        {
           "description": "Enables the set_app_theme_mode command without any pre-configured scope.",
           "type": "string",
           "const": "allow-set-app-theme-mode",
@@ -943,6 +949,12 @@
           "type": "string",
           "const": "deny-seed-project-agents-preset",
           "markdownDescription": "Denies the seed_project_agents_preset command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the session_user_message_submitted command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-session-user-message-submitted",
+          "markdownDescription": "Denies the session_user_message_submitted command without any pre-configured scope."
         },
         {
           "description": "Denies the set_app_theme_mode command without any pre-configured scope.",

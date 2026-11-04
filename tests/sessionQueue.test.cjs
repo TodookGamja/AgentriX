@@ -46,7 +46,9 @@ test("queue drain sends orphaned heads in order and releases a blocked reservati
   state.queues.a = [it("report:T3:worker", "report"), it("mail:m3", "mail")];
   duplicate = true;
   await tick();
-  assert.deepEqual(handled, ["a|report:T3:worker"]);
+  assert.deepEqual(handled, []);
+  assert.equal(sent.at(-1), "report:T3:worker");
+  reservation = undefined;
   await tick();
   assert.equal(sent.at(-1), "mail:m3");
 });
@@ -114,10 +116,37 @@ test("T51: 보드 ✅가 된 assign·PM이 결과 메일을 받은 report는 stu
   assert.equal(q.prism[1].stuck, true);
   // 단위 밖 배선: 대시 tick이 보드 done + 결과 메일로 정리하고 deliveryGate 대기도 푼다
   const src = require("node:fs").readFileSync("src/App.tsx", "utf8");
-  const blk = src.slice(src.indexOf("교착 해소: 보드 ✅가 된 assign"), src.indexOf("교착 해소: 보드 ✅가 된 assign") + 3600);
+  const blk = src.slice(src.indexOf("교착 해소: 보드 ✅가 된 assign"), src.indexOf("교착 해소: 보드 ✅가 된 assign") + 6000);
   assert.match(blk, /settledAutoIds\(/);
   assert.match(blk, /removeTeamMailDelivery\(project, s\.agentId/);
   assert.match(blk, /delete pendingDeliveryRef\.current\[s\.id\]/);
+});
+
+test("T5: 결과 메일은 전달 확인된 보고와 완료된 같은 작업이 있을 때만 정리한다", () => {
+  const code = ts.transpileModule(fs.readFileSync("src/lib/blackboardDispatch.ts", "utf8"), { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText;
+  const dispatch = {};
+  vm.runInNewContext(code, { exports: dispatch });
+  const mail = { from: "worker", to: "pm", subject: "T1 완료 보고", body: "완료" };
+  const task = { taskId: "T1", agentId: "worker", status: "done" };
+  const key = "pm|report:T1:worker";
+  const check = (m, t, h) => dispatch.confirmedResultMail(m, [t], h, "pm", "pm");
+  assert.equal(check(mail, task, [key]), true);
+  assert.equal(check(mail, { ...task, status: "closed" }, [key]), true);
+  assert.equal(check(mail, task, []), false);
+  assert.equal(check(mail, { ...task, status: "start" }, [key]), false);
+  assert.equal(check({ ...mail, subject: "질문", body: "문의" }, task, [key]), false);
+  assert.equal(check({ ...mail, from: "other" }, task, [key]), false);
+});
+
+test("T5: 미확인 사용자 항목의 전송 시도 기록은 대기열 갱신에도 보존된다", () => {
+  const attempt = { sessionId: "s1", at: 123, body: "actual message" };
+  let q = api.upsertItem({}, "a", it("u1", "user", { attempt }));
+  q = api.upsertItem(q, "a", it("u1", "user", { stuck: true }));
+  assert.equal(q.a[0].attempt, attempt);
+  assert.equal(api.nextUserItem(q.a), undefined);
+  const app = fs.readFileSync("src/App.tsx", "utf8");
+  assert.ok(app.includes("item.attempt.sessionId !== s.id"));
+  assert.ok(app.includes("apiSessionUserMessageSubmitted(s.id, item.attempt.body, item.attempt.at)"));
 });
 
 test("T54: PM 본인 담당 행의 완료는 PM에게 자기 보고(doneTasks)를 만들지 않는다", () => {
@@ -191,4 +220,34 @@ test("T8: resumed id 없는 Codex 세션도 저장된 대화 id의 로그로 ctx
   const src = require("node:fs").readFileSync("src-tauri/src/main.rs", "utf8").replace(/\r/g, "");
   assert.ok(src.includes("pty.resumed_cli_id(&session_id).or_else("));
   assert.ok(src.includes('context::saved_codex_log_in_use(&codex_dir, &cwd, &saved, &started_at)'));
+});
+
+test("터미널 URL 클릭은 xterm 기본 경고 대신 외부 브라우저 열기를 쓴다", () => {
+  const src = require("node:fs").readFileSync("src/components/TerminalPane.tsx", "utf8").replace(/\r/g, "");
+  assert.ok(src.includes("linkHandler: { activate:"));
+  assert.ok(src.includes("term.registerLinkProvider("));
+  assert.ok(src.includes("apiOpenExternalUrl(m[0])"));
+});
+
+test("T1793752130651_3: Tauri에서 URL 열기 거부는 window.open으로 우회하지 않고, 줄바꿈 URL은 이어 붙여 연다", () => {
+  const fs = require("node:fs");
+  const br = fs.readFileSync("src/lib/tauriBridge.ts", "utf8").replace(/\r/g, "");
+  const body = br.slice(br.indexOf("export async function apiOpenExternalUrl"), br.indexOf("export interface UpdateProgressPayload")).split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
+  assert.ok(body.includes('await invoke("open_external_url", { url });'));
+  assert.ok(!body.includes("catch"));
+  assert.equal(body.match(/window\.open/g).length, 1);
+  assert.ok(body.indexOf("window.open") > body.indexOf("return;"));
+  const tp = fs.readFileSync("src/components/TerminalPane.tsx", "utf8").replace(/\r/g, "");
+  assert.ok(tp.includes("isWrapped") && tp.includes("line.getCell(x)"));
+  const app = fs.readFileSync("src/App.tsx", "utf8").replace(/\r/g, "");
+  assert.ok(!/apiOpenExternalUrl\(updateInfo\.release_url\)\}/.test(app));
+});
+
+test("T1793752130651_7: 출력 없는 세션 안내·릴레이 복구 경로와 잘린 재생 경계 보정", () => {
+  const fs = require("node:fs");
+  const tp = fs.readFileSync("src/components/TerminalPane.tsx", "utf8").replace(/\r/g, "");
+  assert.ok(tp.includes("setSilentSession(!!session.resumed && chunk.nextCursor === 0 &&"));
+  assert.ok(tp.includes("릴레이로 다시 열기"));
+  const pty = fs.readFileSync("src-tauri/src/pty.rs", "utf8").replace(/\r/g, "");
+  assert.ok(pty.includes("take(4096).position("));
 });

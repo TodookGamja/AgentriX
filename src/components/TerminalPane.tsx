@@ -26,6 +26,7 @@ import {
   apiResizeSession,
   apiSaveClipboardImage,
   apiWriteToSession,
+  apiOpenExternalUrl,
   SubmissionUnconfirmedError,
 } from "../lib/tauriBridge";import { FilePickerModal } from "./FilePickerModal";
 import { isTerminalReport, shouldResizePty } from "../lib/terminalReplay";
@@ -82,6 +83,7 @@ const QUICK_COMMANDS = [
   { label: "/clear", cmd: "/clear", desc: "대화 초기화" },
 ];
 
+const SILENT_SESSION_MS = 30_000;
 export const TerminalPane: React.FC<TerminalPaneProps> = ({
   session,
   drafts,
@@ -108,6 +110,8 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
   const termRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const cursorRef = useRef<number>(0);
+  // 이어하기(--resume)한 긴 세션이 첫 출력을 한 번도 못 내면(PM 빈 화면 사례) 안내와 복구(릴레이) 경로를 보여준다
+  const [silentSession, setSilentSession] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [isFilePickerOpen, setIsFilePickerOpen] = useState(false);
@@ -326,6 +330,8 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       lineHeight: 1.28,
       fontFamily: '"JetBrains Mono", Consolas, "Malgun Gothic", monospace',
       scrollback: 5000,
+      // OSC 8 하이퍼링크 클릭: xterm 기본 동작은 confirm/alert 경고만 띄우므로 앱의 외부 URL 열기로 대체(http/https만)
+      linkHandler: { activate: (_e, uri) => { if (/^https?:\/\//i.test(uri)) void apiOpenExternalUrl(uri).catch(() => {}); }, allowNonHttpProtocols: false },
       allowProposedApi: true,
       // ConPTY가 직접 줄바꿈·재배치하므로 xterm 리플로우와 충돌하지 않게 알려준다 (스크롤 후 화면 깨짐 방지)
       windowsPty: navigator.userAgent.includes("Windows") ? { backend: "conpty", buildNumber: 22000 } : undefined,
@@ -372,6 +378,39 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.open(container);
+    // 일반 텍스트 URL(http/https)도 클릭하면 기본 브라우저로 연다(한 줄 안에서 인식)
+    term.registerLinkProvider({
+      provideLinks: (y, cb) => {
+        // 터미널 폭에서 줄바꿈(isWrapped)된 긴 URL은 논리 줄 전체를 이어 붙여 인식한다(줄 폭 고정이라 오프셋 = 행·열)
+        const buf = term.buffer.active;
+        let first = y - 1;
+        while (first > 0 && buf.getLine(first)?.isWrapped) first--;
+        // 와이드 문자(한글 등, 셀 폭 2)가 있으면 문자열 인덱스 ≠ 열이므로 셀 단위로 문자열→셀 오프셋 표를 만든다
+        const cols = term.cols;
+        let text = "";
+        const cellOf: number[] = [];
+        for (let r = first; r === first || buf.getLine(r)?.isWrapped; r++) {
+          const line = buf.getLine(r);
+          if (!line) break;
+          for (let x = 0; x < cols; x++) {
+            const cell = line.getCell(x);
+            if (!cell || cell.getWidth() === 0) continue;
+            const ch = cell.getChars() || " ";
+            text += ch;
+            for (let k = 0; k < ch.length; k++) cellOf.push((r - first) * cols + x);
+          }
+        }
+        const at = (o: number) => { const c = cellOf[o] ?? 0; return { x: (c % cols) + 1, y: first + Math.floor(c / cols) + 1 }; };
+        const links = [...text.matchAll(/https?:\/\/[^\s<>"'`)\]]+[^\s<>"'`)\].,;:!?]/gi)]
+          .filter((m) => at(m.index ?? 0).y <= y && y <= at((m.index ?? 0) + m[0].length - 1).y)
+          .map((m) => ({
+          range: { start: at(m.index ?? 0), end: at((m.index ?? 0) + m[0].length - 1) },
+          text: m[0],
+          activate: () => { void apiOpenExternalUrl(m[0]).catch(() => {}); },
+        }));
+        cb(links.length ? links : undefined);
+      },
+    });
 
     termRef.current = term;
     const unregisterCursorScreen = ["cursor", "codex"].includes(session.cliId) ? registerTerminalScreen(session.id, () => {
@@ -419,7 +458,9 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       inFlight = true;
       try {
         const chunk = await apiReadSessionOutput(session.id, cursorRef.current);
-        cursorRef.current = chunk.nextCursor;        if (chunk.data && chunk.data.length > 0) {
+        cursorRef.current = chunk.nextCursor;
+        setSilentSession(!!session.resumed && chunk.nextCursor === 0 && Date.now() - Date.parse(session.startedAt) > SILENT_SESSION_MS);
+        if (chunk.data && chunk.data.length > 0) {
           // 스크롤을 강제로 내리지 않는다: 맨 아래에 있으면 xterm이 알아서 따라가고, 위로 올려 둔 경우엔 그대로 둔다.
           if (replayed) {
             term.write(chunk.data, () => { if (session.cliId === "cursor") readCursorTurn(session.id, undefined, true); });
@@ -798,6 +839,23 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
 
       {/* 2. xterm.js 캔버스 컨테이너 (클립보드 이미지/파일 붙여넣기 및 드래그 앤 드롭 지원) */}
       <div className="relative flex-1 w-full min-h-0 overflow-hidden">
+        {silentSession && (
+          <div
+            role="alert"
+            className="absolute inset-x-3 top-3 z-10 rounded-lg border border-amber-500/40 bg-slate-900/95 px-3 py-2 text-[11px] text-amber-200 shadow-lg flex items-center gap-2"
+          >
+            <span className="flex-1 leading-snug break-keep">이 세션이 시작 후 {SILENT_SESSION_MS / 1000}초 넘게 출력을 내지 않았습니다. 이어하기한 긴 대화는 응답이 늦는 중일 수 있어요. 조금 더 기다리거나, 계속 비어 있으면 릴레이로 새 세션을 여세요(맥락 인수인계). 출력이 나오면 이 안내는 사라집니다.</span>
+            {onTriggerRelay && (
+              <button
+                type="button"
+                onClick={() => onTriggerRelay(session.id)}
+                className="px-2 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-medium shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900 transition-colors"
+              >
+                릴레이로 다시 열기
+              </button>
+            )}
+          </div>
+        )}
         <div
           ref={containerRef}
           className="w-full h-full p-2 overflow-hidden"

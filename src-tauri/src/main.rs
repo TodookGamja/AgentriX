@@ -1119,6 +1119,35 @@ fn trust_project_folder(project_path: String) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+async fn session_user_message_submitted(state: State<'_, AppState>, session_id: String, body: String, after: i64) -> Result<bool, String> {
+    let pty = state.pty.clone();
+    let db = state.db.clone();
+    tokio::task::spawn_blocking(move || {
+        let Some(session) = pty.list_sessions().into_iter().find(|s| s.id == session_id) else { return false; };
+        let home = crate::cli::home_dir();
+        let path = match session.cli_id.as_str() {
+            "claude" => {
+                let Ok(id) = uuid::Uuid::parse_str(&session.id) else { return false; };
+                let projects = home.join(".claude").join("projects");
+                std::fs::read_dir(projects).ok().and_then(|entries| entries.flatten().map(|e| e.path().join(format!("{id}.jsonl"))).find(|p| p.is_file()))
+            }
+            "codex" => {
+                let sessions = home.join(".codex").join("sessions");
+                let id = pty.resumed_cli_id(&session_id).or_else(|| {
+                    let agent_id = session.agent_id.as_ref()?;
+                    let conn = db.lock().ok()?;
+                    let saved = db::get_agent_cli_session(&conn, agent_id, "codex").ok()??;
+                    context::saved_codex_log_in_use(&sessions, &session.cwd, &saved, &session.started_at)
+                });
+                id.and_then(|id| context::codex_log_for_session(&sessions, &session.cwd, &id))
+            }
+            _ => None,
+        };
+        path.and_then(|p| std::fs::read_to_string(p).ok()).is_some_and(|content| context::submitted_user_message(&content, &session.cli_id, &body, after))
+    }).await.map_err(|e| e.to_string())
+}
+
 /// 세션의 실제 컨텍스트 토큰 (CLI 로그 기반). 로그가 없는 CLI는 None → 프론트가 화면 추정치 사용
 #[tauri::command]
 async fn get_session_context(
@@ -2160,6 +2189,7 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            session_user_message_submitted,
             get_session_context,
             get_session_quiet_since,
             get_session_paste_mode,

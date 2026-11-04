@@ -52,6 +52,8 @@ pub struct SessionInfo {
     pub agent_emoji: Option<String>,
     pub role_prompt: Option<String>,
     pub role_in_system: bool,
+    #[serde(default)]
+    pub resumed: bool, // 저장 대화를 이어 연 세션 — 무출력 안내는 이 세션에만 띄운다
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -382,6 +384,7 @@ impl PtyManager {
             agent_emoji: agent_meta.as_ref().map(|a| a.avatar_emoji.clone()),
             role_prompt: agent_meta.as_ref().map(|a| a.role_prompt.clone()),
             role_in_system,
+            resumed: resumed_cli_id.is_some(),
         };
 
         let session = PtySession {
@@ -1147,6 +1150,10 @@ fn read_from(buf: &OutputBuffer, cursor: usize) -> (String, usize) {
         while from < buf.data.len() && (buf.data[from] & 0xC0) == 0x80 {
             from += 1;
         }
+        // 잘린 앞부분이 이스케이프 시퀀스(CSI/OSC) 중간이면 재생 시 xterm 상태가 깨져 화면이 비므로, 첫 줄바꿈 뒤(4KB 안)에서 시작한다
+        if let Some(nl) = buf.data[from..].iter().take(4096).position(|&b| b == b'\n') {
+            from += nl + 1;
+        }
     }
     let tail = &buf.data[from..];
     let mut valid = 0;
@@ -1178,6 +1185,30 @@ fn read_from(buf: &OutputBuffer, cursor: usize) -> (String, usize) {
 #[cfg(test)]
 mod buffer_tests {
     use super::*;
+
+    #[test]
+    fn truncated_replay_starts_after_first_newline_not_mid_escape() {
+        let mut b = OutputBuffer::default();
+        b.data.extend_from_slice(b"\x1b[38;5;21mtail of cut line\nclean line\n");
+        b.start = 100;
+        let (text, next) = read_from(&b, 0);
+        assert_eq!(text, "clean line\n");
+        assert_eq!(next, 100 + b.data.len());
+        // 잘리지 않은 구간은 그대로
+        b.start = 0;
+        assert!(read_from(&b, 0).0.starts_with("\x1b[38"));
+    }
+
+    #[test]
+    fn truncated_replay_keeps_short_buffer_without_newline() {
+        // 4KB 안 줄바꿈이 없으면 from을 옮기지 않아 짧은/한 줄 버퍼를 잃지 않는다
+        let mut b = OutputBuffer::default();
+        b.data.extend_from_slice(b"hello world prompt");
+        b.start = 50;
+        let (text, next) = read_from(&b, 0);
+        assert_eq!(text, "hello world prompt");
+        assert_eq!(next, 50 + b.data.len());
+    }
 
     #[test]
     fn cursor_survives_trim_and_utf8_split() {

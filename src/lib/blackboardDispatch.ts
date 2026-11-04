@@ -15,6 +15,12 @@ export function hasTaskResultMail(mails: { from: string; to: string; subject: st
   });
 }
 
+export function confirmedResultMail(mail: { from: string; to: string; subject: string; body: string }, tasks: BoardTask[], confirmedReports: string[], queue: string, pmId: string): boolean {
+  return tasks.some((t) => (t.status === "done" || t.status === "closed") &&
+    confirmedReports.includes(`${queue}|report:${t.taskId}:${t.agentId}`) &&
+    hasTaskResultMail([mail], t.taskId, t.agentId, pmId));
+}
+
 export function boardTaskColumn(input: { status: BoardTask["status"]; manual: boolean; approval?: string; confirmed: boolean; live: boolean; queued: boolean }): "approval" | "waiting" | "running" | "done" | "rejected" {
   if (input.status === "done" || input.status === "closed") return "done";
   if (input.status === "wait") return "waiting";

@@ -128,7 +128,8 @@ export interface SessionInfo {
   agentRole?: string | null;
   agentEmoji?: string | null;
   rolePrompt?: string | null;
-  roleInSystem?: boolean; // 역할 지침(ROLE.md+collabProtocol)이 CLI 시스템 지시로 전달됨 → 자동 브리핑 생략
+  roleInSystem?: boolean;
+  resumed?: boolean; // 저장 대화를 이어 연 세션
 }
 
 export interface PtyOutputChunk {

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-session-user-message-submitted"
+description = "Enables the session_user_message_submitted command without any pre-configured scope."
+commands.allow = ["session_user_message_submitted"]
+
+[[permission]]
+identifier = "deny-session-user-message-submitted"
+description = "Denies the session_user_message_submitted command without any pre-configured scope."
+commands.deny = ["session_user_message_submitted"]

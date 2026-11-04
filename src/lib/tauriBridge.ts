@@ -308,7 +308,7 @@ export class SubmissionUnconfirmedError extends Error {
   constructor() { super("보냈지만 제출을 확인하지 못했습니다."); this.name = "SubmissionUnconfirmedError"; }
 }
 
-export async function apiWriteToSession(sessionId: string, data: string, injected = false, verify?: { hasStarted: () => Promise<boolean | null>; onResult: (confirmed: boolean) => void; onlyPendingRole?: boolean; onSkip?: () => void; attempt?: DeliveryAttempt }, roleBriefing = false): Promise<void> {
+export async function apiWriteToSession(sessionId: string, data: string, injected = false, verify?: { hasStarted: () => Promise<boolean | null>; onResult: (confirmed: boolean) => void; onlyPendingRole?: boolean; onSkip?: () => void; attempt?: DeliveryAttempt; onCommit?: (body: string, at: number) => void }, roleBriefing = false): Promise<void> {
   recordSessionInput(sessionId, data, injected, false);
   const inputVersion = getUserInputVersion(sessionId);
   return queueSessionWrite(sessionId, async () => {
@@ -371,7 +371,8 @@ export async function apiWriteToSession(sessionId: string, data: string, injecte
         if (!cursorAtWrite || !quiet || !readCursorTurn(sessionId, quiet)?.completedAt) throw new CursorBusyError();
       }
       if (verify && getUserInputVersion(sessionId) !== inputVersion) throw new Error("사용자 입력으로 전달이 중단되었습니다.");
-      verify?.attempt?.commit();
+        verify?.onCommit?.(body, Date.now());
+        verify?.attempt?.commit();
       const wrapped = pasteWrap(body, pasteMode, session?.cliId);
       await invoke("write_to_session", { sessionId, data: wrapped });
       bodyWritten = true;
@@ -464,6 +465,11 @@ export async function apiAcknowledgeTeamMail(projectPath: string, agentId: strin
 }
 
 // CLI 로그에서 읽은 실제 컨텍스트 토큰. 로그가 없는 CLI(grok·cursor·새 CLI)나 브라우저 실행이면 null
+export async function apiSessionUserMessageSubmitted(sessionId: string, body: string, after: number): Promise<boolean> {
+  if (!isTauriRuntime()) return false;
+  return invoke("session_user_message_submitted", { sessionId, body, after });
+}
+
 export async function apiGetSessionContext(
   session: SessionInfo,
   claimed: string[]
@@ -782,10 +788,9 @@ export async function apiSaveClipboardImage(
 
 export async function apiOpenExternalUrl(url: string): Promise<void> {
   if (isTauriRuntime()) {
-    try {
-      await invoke("open_external_url", { url });
-      return;
-    } catch {}
+    // Tauri에서는 백엔드 검증(open_external_url)이 거부하면 에러를 그대로 던진다: window.open으로 우회하지 않는다
+    await invoke("open_external_url", { url });
+    return;
   }
   window.open(url, "_blank");
 }

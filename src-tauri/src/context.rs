@@ -8,6 +8,70 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+pub fn submitted_user_message(content: &str, cli: &str, body: &str, after: i64) -> bool {
+    let body = body.replace("\r\n", "\n");
+    let body = body.trim();
+    if body.is_empty() || after <= 0 { return false; }
+    content.lines().any(|line| {
+        let Ok(v) = serde_json::from_str::<Value>(line) else { return false; };
+        let Some(time) = v.get("timestamp").and_then(Value::as_str).and_then(parse_ts) else { return false; };
+        if time.timestamp_millis() <= after || v.get("isSidechain").and_then(Value::as_bool) == Some(true) { return false; }
+        let text = match cli {
+            "claude" if v.get("type").and_then(Value::as_str) == Some("user") => {
+                match v.pointer("/message/content") {
+                    Some(Value::String(text)) => Some(text.clone()),
+                    Some(Value::Array(blocks)) => Some(blocks.iter()
+                        .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
+                        .filter_map(|block| block.get("text").and_then(Value::as_str))
+                        .collect::<String>()),
+                    _ => None,
+                }
+            }
+            "codex" if v.get("type").and_then(Value::as_str) == Some("event_msg") && v.pointer("/payload/type").and_then(Value::as_str) == Some("user_message") => v.pointer("/payload/message").and_then(Value::as_str).map(str::to_owned),
+            "codex" if v.get("type").and_then(Value::as_str) == Some("response_item") && v.pointer("/payload/type").and_then(Value::as_str) == Some("message") && v.pointer("/payload/role").and_then(Value::as_str) == Some("user") => v.pointer("/payload/content").and_then(Value::as_array).map(|blocks| blocks.iter()
+                .filter(|block| block.get("type").and_then(Value::as_str) == Some("input_text"))
+                .filter_map(|block| block.get("text").and_then(Value::as_str))
+                .collect::<String>()),
+            _ => None,
+        };
+        text.is_some_and(|text| text.replace("\r\n", "\n").trim() == body)
+    })
+}
+
+#[cfg(test)]
+mod submission_tests {
+    use super::submitted_user_message;
+    #[test]
+    fn exact_message_after_attempt_only() {
+        let claude = r#"{"type":"user","timestamp":"2026-11-04T00:41:16.746Z","message":{"content":"hello"}}"#;
+        let at = 1_793_752_876_746;
+        assert!(submitted_user_message(claude, "claude", "hello", at - 1));
+        assert!(!submitted_user_message(claude, "claude", "hello", at));
+        assert!(!submitted_user_message(claude, "claude", "hello", at + 1));
+        assert!(!submitted_user_message(claude, "claude", "hell", at));
+        let codex = r#"{"type":"event_msg","timestamp":"2026-11-04T00:41:16.746Z","payload":{"type":"user_message","message":"hello"}}"#;
+        assert!(submitted_user_message(codex, "codex", "hello", at - 1));
+        assert!(!submitted_user_message(codex, "claude", "hello", at));
+    }
+
+    #[test]
+    fn claude_text_blocks_and_codex_normalize_without_matching_old_messages() {
+        let at = 1_793_752_876_746;
+        let claude_string = r#"{"type":"user","timestamp":"2026-11-04T00:41:16.746Z","message":{"content":"  hello\nworld  "}}"#;
+        let claude_blocks = r#"{"type":"user","timestamp":"2026-11-04T00:41:16.746Z","message":{"content":[{"type":"text","text":"hello\r\n"},{"type":"image","source":{"type":"base64","data":"ignored"}},{"type":"text","text":"world"}]}}"#;
+        let codex = r#"{"type":"event_msg","timestamp":"2026-11-04T00:41:16.746Z","payload":{"type":"user_message","message":" hello\r\nworld "}}"#;
+        let codex_response = r#"{"type":"response_item","timestamp":"2026-11-04T00:41:16.746Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello\nworld"}]}}"#;
+        assert!(submitted_user_message(claude_string, "claude", "hello\r\nworld", at - 1));
+        assert!(submitted_user_message(claude_blocks, "claude", " hello\nworld ", at - 1));
+        assert!(submitted_user_message(codex, "codex", "hello\nworld", at - 1));
+        assert!(submitted_user_message(codex_response, "codex", "hello\r\nworld", at - 1));
+        assert!(!submitted_user_message(codex_response.replace("\"role\":\"user\"", "\"role\":\"assistant\"").as_str(), "codex", "hello\nworld", at - 1));
+        assert!(!submitted_user_message(claude_blocks, "claude", "hello\nworld", at));
+        assert!(!submitted_user_message(claude_blocks, "claude", "hello\nother", at - 1));
+        assert!(!submitted_user_message(claude_blocks, "claude", " \r\n ", at - 1));
+    }
+}
+
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ContextUsage {
