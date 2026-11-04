@@ -182,7 +182,7 @@ test("regression: bridge restores prefix on unconfirmed submit; roleBriefing str
   const bridge = fs.readFileSync("src/lib/tauriBridge.ts", "utf8");
   const pane = fs.readFileSync("src/components/TerminalPane.tsx", "utf8");
   assert.match(bridge, /restoreHandoffHint\(sessionId, prefix, roleWasPending\)/);
-  assert.match(bridge, /if \(!confirmed\) restore\(\)/);
+  assert.ok(bridge.includes('if (!confirmed && session?.cliId !== "antigravity") restore();')); // T34: agy는 본문이 입력창에 들어간 뒤라 접두를 되살리지 않음
   assert.match(bridge, /roleBriefing && roleWasPending/);
   assert.match(pane, /apiWriteToSession\(session\.id, briefing, true, undefined, true\)/);
 });

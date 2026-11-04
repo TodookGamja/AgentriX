@@ -183,3 +183,22 @@ test("T32: getTurnContext/agyCompletedAttempt는 bootstrap·attempt sessionId가
   assert.match(src, /if \(attempt && attempt\.sessionId !== session\.id\) return false/);
   assert.match(src, /apiAgyMessageSubmitted\(session\.id, bootstrap\.body, bootstrap\.at, claimed, ctx\.source\)/);
 });
+
+test("T34: agy 본문 전체 재전송은 세션·본문당 1회, 미확인 뒤 역할 접두를 되살리지 않는다", () => {
+  const br = fs.readFileSync(path.join(ROOT, "src/lib/tauriBridge.ts"), "utf8").replace(/\r/g, "");
+  assert.ok(br.includes("const agyFullBodyRetried = new Set<string>()"));
+  assert.ok(br.includes('attempt === 0 && !agyFullBodyRetried.has(retryKey)'));
+  assert.ok(br.includes("agyFullBodyRetried.add(retryKey)"));
+  assert.ok(br.indexOf("agyFullBodyRetried.add(retryKey)") < br.indexOf('step("retry_full_body")'));
+  assert.ok(br.includes('if (!confirmed && session?.cliId !== "antigravity") restore();'));
+  // Claude/Codex/Cursor는 기존대로 미확인이면 접두 복원
+  assert.equal((br.match(/restore\(\)/g) || []).length >= 4, true);
+});
+
+test('T1793776116339_9: agy는 본문이 써진 뒤(마감 초과·중단 포함) 어떤 경로로도 역할 접두를 되살리지 않음', () => {
+  const bridge = require('node:fs').readFileSync('src/lib/tauriBridge.ts', 'latin1');
+  assert.ok(bridge.includes('const restore = () => { if (!restored && prefix && !(session?.cliId === "antigravity" && bodyWritten))'));
+  // 역할 지침만 보내는 3초 틱은 pending일 때만 — pending 복귀 경로는 restore뿐
+  const app = require('node:fs').readFileSync('src/App.tsx', 'utf8');
+  assert.ok(app.includes('if (getRoleState(session.id) !== "pending") continue;'));
+});

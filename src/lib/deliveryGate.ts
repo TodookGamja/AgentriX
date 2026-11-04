@@ -11,14 +11,29 @@ export interface PendingDelivery {
 }
 export type GateAction = "proceed" | "resend" | "wait" | "stuck";
 
-export function tabIsActive(quietSince: number | null, ctx: { startedAt?: number | null; completedAt?: number | null } | undefined): boolean {
-  return quietSince === null || Boolean(ctx?.startedAt && ctx.startedAt > (ctx.completedAt ?? 0));
+// 탭 "응답 중" 표시: 지속된 출력이거나, 열린 로그 턴(마지막 출력이 STALE 안일 때만 — 중단·고아 턴이 영영 깜빡이지 않게).
+export const TAB_STALE_TURN_MS = 120_000;
+export function tabIsActive(quietSince: number | null, ctx: { startedAt?: number | null; completedAt?: number | null } | undefined, now = Date.now()): boolean {
+  if (quietSince === null) return true;
+  return Boolean(ctx?.startedAt && ctx.startedAt > (ctx.completedAt ?? 0)) && now - quietSince < TAB_STALE_TURN_MS;
 }
 
 export function logTurnStillBusy(cliId: string, ctx: { startedAt?: number | null; completedAt?: number | null } | null): boolean {
   if (!ctx) return false;
   if (ctx.startedAt && !ctx.completedAt) return true;
   return cliId === "codex" && !ctx.startedAt && !ctx.completedAt;
+}
+
+export function claudeIdleFallback(cliId: string, ctx: { startedAt?: number | null; completedAt?: number | null } | null, lines: string[], quietSince: number | null, now = Date.now()): boolean {
+  if (cliId !== "claude" || !ctx?.startedAt || ctx.completedAt || quietSince === null || quietSince < ctx.startedAt || now - quietSince < 30_000) return false;
+  const tail = lines.filter((line) => line.trim() && !/^[\s─━┄┈-]+$/.test(line)).slice(-2);
+  return tail.length === 2 && /^\s*❯\s*$/.test(tail[0]) && /^\s*[⏵▶»›❯]*\s*(?:bypass permissions on|accept edits on)\b/i.test(tail[1]);
+}
+
+export function codexInterruptedIdle(cliId: string, ctx: { startedAt?: number | null; completedAt?: number | null } | null, lines: string[], quietSince: number | null, now = Date.now()): boolean {
+  if (cliId !== "codex" || !ctx?.startedAt || ctx.completedAt || quietSince === null || quietSince < ctx.startedAt || now - quietSince < 10_000) return false;
+  const tail = lines.filter((line) => line.trim()).slice(-2);
+  return tail.length === 2 && /^\s*›\s*(?:Ask Codex to do anything)?\s*$/i.test(tail[0]) && /^\s*(?:gpt-[\w.-]+|o[134][\w.-]*)\b/i.test(tail[1]);
 }
 
 export function agyFirstPromptReady(lines: string[]): boolean {

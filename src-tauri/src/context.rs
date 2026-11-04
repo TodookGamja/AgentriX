@@ -278,6 +278,7 @@ fn codex_completion(content: &str) -> Option<i64> {
         match v.pointer("/payload/type").and_then(Value::as_str) {
             Some("task_started" | "user_message") => return None,
             Some("task_complete") => return v.get("timestamp").and_then(Value::as_str).and_then(parse_ts).map(|t| t.timestamp_millis()),
+            Some("turn_aborted") if v.get("type").and_then(Value::as_str) == Some("event_msg") => return v.get("timestamp").and_then(Value::as_str).and_then(parse_ts).map(|t| t.timestamp_millis()),
             _ => {}
         }
     }
@@ -515,6 +516,14 @@ fn opencode(db: &Path, cwd: &str, started: DateTime<Utc>, claimed: &[String]) ->
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn codex_interrupted_turn_is_complete_until_a_new_turn_starts() {
+        let start = r#"{"timestamp":"2026-10-28T07:00:00Z","type":"event_msg","payload":{"type":"task_started"}}"#;
+        let abort = r#"{"timestamp":"2026-10-28T07:00:01Z","type":"event_msg","payload":{"type":"turn_aborted","reason":"interrupted"}}"#;
+        let expected = super::parse_ts("2026-10-28T07:00:01Z").unwrap().timestamp_millis();
+        assert_eq!(super::codex_completion(&format!("{start}\n{abort}")), Some(expected));
+        assert_eq!(super::codex_completion(&format!("{abort}\n{start}")), None);
+    }
     #[test]
     fn claude_local_commands_preserve_a_completed_turn_but_not_a_running_turn() {
         let user = r#"{"timestamp":"2026-11-02T02:00:00Z","type":"user","message":{"content":"real request"}}"#;

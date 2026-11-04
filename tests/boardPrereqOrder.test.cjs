@@ -59,7 +59,7 @@ test('T26: 취소는 ID가 정확히 일치하는 행의 상태 칸만 바꾸고
 
 test('T26: 작업보드 UI — 대기·진행 카드에 취소(확인창), 30분 미만 완료 신호 없음은 경고색 아님', () => {
   const src = fs.readFileSync('src/components/TaskApprovalBoard.tsx', 'utf8').replace(/\r/g, '');
-  assert.match(src, /window\.confirm\(`\$\{c\.taskId\} 작업을 취소할까요/);
+  assert.ok(src.includes("confirmDialog({ title: `${c.taskId} 작업을 취소할까요?`"));
   assert.match(src, /waiting, cancelButton\)/);
   assert.match(src, /running, cancelButton\)/);
   assert.match(src, /\(\\d\+\)분째\/\)\?\.\[1\] \?\? 99999\) < 30/);

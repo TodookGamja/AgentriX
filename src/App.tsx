@@ -103,6 +103,7 @@ import { McpSkillView } from "./components/McpSkillView";
 import { AuthSettingsView } from "./components/AuthSettingsView";
 import { AvatarDisplay, TeamModeView } from "./components/TeamModeView";
 import { ProfileModal } from "./components/ProfileModal";
+import { confirmDialog, isConfirmOpen } from "./lib/confirmDialog";
 import {
   TokenOptimizationModal,
   TokenOptimizationConfig,
@@ -115,7 +116,7 @@ import { boardProtocol, collabProtocol, confirmedResultMail, forgetEndedStarts, 
 import { getTeamMailDeliveries, pruneStaleDeliveries, pruneStaleMailDeliveries, removeTeamMailDelivery, reserveTeamMailDelivery, saveTeamMailDelivery } from "./lib/teamMailDelivery";
 import { clearDispatchNotes, findApproval, getApprovalMode, getDispatchNotes, setDispatchNote, upsertApproval } from "./lib/taskApproval";
 import { countNewChars } from "./lib/tokenEstimate";
-import { agyFirstPromptReady, deliveryGate, logTurnStillBusy, tabIsActive, type PendingDelivery } from "./lib/deliveryGate";
+import { agyFirstPromptReady, claudeIdleFallback, codexInterruptedIdle, deliveryGate, logTurnStillBusy, tabIsActive, type PendingDelivery } from "./lib/deliveryGate";
 import { DeliveryAttempt, withDeliveryDeadline } from "./lib/deliveryAttempt";
 import { CursorBusyError, readTerminalScreen, readTerminalTranscript, readCursorTurn } from "./lib/cursorScreen";
 import { useSessionQueue, queueKey } from "./lib/sessionQueueStore";
@@ -610,9 +611,12 @@ export const App: React.FC = () => {
   // 모든 로컬 설정 및 백엔드 데이터(프로젝트, 사용량 통계, 캐시) 공장 초기화
   const handleResetAllAppData = async () => {
     if (
-      !window.confirm(
-        "정말로 모든 로컬 설정, 프로젝트 목록, 사용량 기록을 초기화하시겠습니까?\n\n이 작업은 모든 프로젝트 목록과 토큰 사용 기록을 깨끗한 첫 실행 상태로 되돌립니다."
-      )
+      !(await confirmDialog({
+        title: "정말로 모든 로컬 설정, 프로젝트 목록, 사용량 기록을 초기화하시겠습니까?",
+        message: "이 작업은 모든 프로젝트 목록과 토큰 사용 기록을 깨끗한 첫 실행 상태로 되돌립니다.",
+        confirmLabel: "초기화",
+        danger: true,
+      }))
     ) {
       return;
     }
@@ -1366,15 +1370,21 @@ ${recentSnippet || "진행 내역 기록 없음"}
   }, []);
 
   // 세션 탭 점 맥동용: 출력이 10초 넘게 멈추지 않은 세션 = 작업 중 (apiGetSessionQuietSince가 null)
+  // 유휴 CLI가 재그리기·리사이즈로 한 번 내는 출력은 무시: 4초 창 안에 출력이 두 틱 연속 있어야 '출력 중'
   const [busySessionIds, setBusySessionIds] = useState<string>("");
+  const tabOutputPrevRef = useRef(new Set<string>());
   useEffect(() => {
     const tick = async () => {
       const sessions = useAppStore.getState().sessions;
       const ids = sessions.map((s) => s.id);
-      const quiet = await Promise.all(ids.map((id) => apiGetSessionQuietSince(id).catch(() => 0)));
+      const quiet = await Promise.all(ids.map((id) => apiGetSessionQuietSince(id, 4000).catch(() => 0)));
+      const now = Date.now();
+      const prev = tabOutputPrevRef.current;
+      const out = new Set(ids.filter((_, i) => quiet[i] === null));
+      tabOutputPrevRef.current = out;
       setBusySessionIds(ids.filter((id, i) => {
         const turn = sessions[i].cliId === "cursor" ? readCursorTurn(id) : undefined;
-        return tabIsActive(quiet[i], turn ?? tabTurnRef.current[id]);
+        return tabIsActive(out.has(id) && !prev.has(id) ? quiet[i] ?? now : quiet[i], turn ?? tabTurnRef.current[id], now);
       }).join(","));
     };
     void tick();
@@ -2088,7 +2098,23 @@ ${recentSnippet || "진행 내역 기록 없음"}
     }
     if (session.cliId === "antigravity") return ctx;
     // A running or ambiguous log takes precedence over terminal silence.
-    if (logTurnStillBusy(session.cliId, ctx)) return ctx;
+    if (logTurnStillBusy(session.cliId, ctx)) {
+      if (session.cliId === "claude" && ctx?.startedAt && !ctx.completedAt) {
+        const pending = pendingDeliveryRef.current[session.id];
+        if (!pending || (!pending.unconfirmed && pending.started && ctx.startedAt > pending.at)) {
+          const quiet = await apiGetSessionQuietSince(session.id, 30_000).catch(() => null);
+          if (claudeIdleFallback(session.cliId, ctx, readTerminalScreen(session.id) ?? [], quiet)) return { ...ctx, completedAt: quiet };
+        }
+      }
+      if (session.cliId === "codex" && ctx?.startedAt && !ctx.completedAt) {
+        const pending = pendingDeliveryRef.current[session.id];
+        if (!pending || (!pending.unconfirmed && pending.started && ctx.startedAt > pending.at)) {
+          const quiet = await apiGetSessionQuietSince(session.id, 10_000).catch(() => null);
+          if (codexInterruptedIdle(session.cliId, ctx, readTerminalScreen(session.id) ?? [], quiet)) return { ...ctx, completedAt: quiet };
+        }
+      }
+      return ctx;
+    }
     const quiet = await apiGetSessionQuietSince(session.id).catch(() => null);
     if (!quiet || quiet <= lastSubmit || (session.cliId === "claude" && lastSubmit > 0 && Date.now() - quiet < 30_000)) return ctx;
     return { tokens: ctx?.tokens ?? 0, window: ctx?.window ?? null, source: ctx?.source ?? `pty:${session.id}`, completedAt: quiet };
@@ -2797,6 +2823,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
   // 프로급 생산성 단축키 지원 (Alt+1~4: 터미널 포커스, Alt+S: 레이아웃 순환, F11: 전체화면)
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      if (isConfirmOpen()) return; // 확인 모달이 열린 동안 전역 단축키 차단
       // F11: 창 최대화 / 복원 토글
       if (e.key === "F11") {
         e.preventDefault();
@@ -3701,9 +3728,9 @@ ${recentSnippet || "진행 내역 기록 없음"}
                         setActiveSessionId(s.id);
                         setProjectSubView("session");
                       }}
-                      title={`${s.name} ${s.agentRole ? `(${s.agentRole})` : ""}`}
+                      title={`${s.name} ${s.agentRole ? `(${s.agentRole})` : ""}${busySessionIds.split(",").includes(s.id) ? " · 응답 중 (하늘색 깜빡임 = 출력이 이어지거나 턴 진행 중)" : ""}`}
                       className={`group flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium cursor-pointer border transition shrink-0 whitespace-nowrap ${
-                        busySessionIds.split(",").includes(s.id) ? "animate-pulse motion-reduce:animate-none ring-2 ring-cyan-400 " : ""
+                        busySessionIds.split(",").includes(s.id) ? "animate-pulse motion-reduce:animate-none ring-2 ring-cyan-400 ring-offset-1 ring-offset-slate-900 " : ""
                       }${
                         isPrimary
                           ? "bg-slate-950 text-slate-100 font-bold border-indigo-500/80 shadow-sm"

@@ -8,6 +8,31 @@ const js = ts.transpileModule(fs.readFileSync("src/lib/deliveryGate.ts", "utf8")
 const api = {};
 vm.runInNewContext(js, { exports: api });
 
+test("Claude idle fallback requires a quiet empty prompt and permission footer", () => {
+  const ctx = { startedAt: 100, completedAt: null };
+  const idle = ["❯ [완료 보고] T1", "❯", "⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent"];
+  assert.equal(api.claudeIdleFallback("claude", ctx, idle, 200, 30_200), true);
+  assert.equal(api.claudeIdleFallback("claude", ctx, idle, 200, 30_199), false);
+  assert.equal(api.claudeIdleFallback("codex", ctx, idle, 200, 30_200), false);
+  assert.equal(api.claudeIdleFallback("claude", ctx, ["❯ some input", idle[2]], 200, 30_200), false);
+  assert.equal(api.claudeIdleFallback("claude", ctx, [...idle, "working"], 200, 30_200), false);
+  assert.equal(api.claudeIdleFallback("claude", ctx, ["❯", "Allow this action?"], 200, 30_200), false);
+  assert.equal(api.claudeIdleFallback("claude", ctx, idle, 99, 40_000), false);
+  assert.equal(api.claudeIdleFallback("claude", { startedAt: 100, completedAt: 150 }, idle, 200, 30_200), false);
+});
+
+test("Codex idle fallback needs an empty prompt, model footer, and quiet output", () => {
+  const ctx = { startedAt: 100, completedAt: null };
+  const screen = ["■ Conversation interrupted", "› Ask Codex to do anything", "GPT-6.1 Terra high · project"];
+  assert.equal(api.codexInterruptedIdle("codex", ctx, screen, 200, 10_200), true);
+  assert.equal(api.codexInterruptedIdle("codex", ctx, screen, 200, 10_199), false);
+  assert.equal(api.codexInterruptedIdle("codex", ctx, screen, 99, 20_000), false);
+  assert.equal(api.codexInterruptedIdle("claude", ctx, screen, 200, 10_200), false);
+  assert.equal(api.codexInterruptedIdle("codex", ctx, ["› draft", "GPT-6.1 Terra high"], 200, 10_200), false);
+  assert.equal(api.codexInterruptedIdle("codex", ctx, ["› Ask Codex to do anything", "working"], 200, 10_200), false);
+  assert.equal(api.codexInterruptedIdle("codex", ctx, [...screen, "working"], 200, 10_200), false);
+});
+
 test("agy first prompt requires an empty input and its shortcuts footer", () => {
   assert.equal(typeof api.agyFirstPromptReady, "function");
   assert.equal(api.agyFirstPromptReady(["Antigravity CLI 1.5.0", "›", "────", "? for shortcuts"]), true);
@@ -18,7 +43,8 @@ test("agy first prompt requires an empty input and its shortcuts footer", () => 
 
 test("tabs stay active for observed log turns or recent output and stop when idle", () => {
   assert.equal(api.tabIsActive(null, undefined), true);
-  assert.equal(api.tabIsActive(100, { startedAt: 120, completedAt: null }), true);
+  assert.equal(api.tabIsActive(100, { startedAt: 120, completedAt: null }, 150), true);
+  assert.equal(api.tabIsActive(100, { startedAt: 120, completedAt: null }, 100 + 120_000), false); // 중단·고아 턴은 영영 깜빡이지 않음
   assert.equal(api.tabIsActive(100, { startedAt: 120, completedAt: 130 }), false);
   assert.equal(api.tabIsActive(100, undefined), false);
 });
@@ -54,14 +80,17 @@ test("tab polling reflects active output for every CLI", async () => {
     useAppStore: { getState: () => ({ sessions: ids.map((id) => ({ id, cliId: id })) }) },
     apiGetSessionQuietSince: async () => quiet,
     readCursorTurn: () => ({ startedAt: 100, completedAt: 200 }),
-    tabTurnRef: { current: {} }, tabIsActive: api.tabIsActive,
+    tabTurnRef: { current: {} }, tabOutputPrevRef: { current: new Set() }, Date, tabIsActive: api.tabIsActive,
     setBusySessionIds: (value) => { visible = value; },
     window: { setInterval: (callback) => { tick = callback; return 1; }, clearInterval: () => {} },
   };
   vm.runInNewContext(ts.transpileModule(`module.exports = ${effect}`, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, sandbox);
   sandbox.module.exports();
   await new Promise(setImmediate);
-  assert.equal(visible, ids.join(","));
+  assert.equal(visible, ""); // 출력 한 번(유휴 재그리기)은 응답 중이 아님
+  tick();
+  await new Promise(setImmediate);
+  assert.equal(visible, ids.join(",")); // 두 틱 연속 출력 = 응답 중
   quiet = 200;
   tick();
   await new Promise(setImmediate);
@@ -80,8 +109,9 @@ test("Claude local-command completion waits for output to settle and never overr
   let quiet = null;
   let ctx = { source: "claude-log", tokens: 10, window: null, startedAt: 50, completedAt: 200 };
   const sandbox = { module: { exports: null }, getLastSubmission: () => 100,
-    apiGetSessionContext: async () => ctx, apiGetSessionQuietSince: async (_id, ms) => { assert.equal(ms, 3000); return quiet; },
-    logTurnStillBusy: api.logTurnStillBusy, Date };
+    apiGetSessionContext: async () => ctx, apiGetSessionQuietSince: async (_id, ms) => { assert.ok(ms === 3000 || ms === 30000); return quiet; },
+    pendingDeliveryRef: { current: {} }, readTerminalScreen: () => ["❯", "⏵⏵ bypass permissions on"],
+    claudeIdleFallback: api.claudeIdleFallback, logTurnStillBusy: api.logTurnStillBusy, Date };
   vm.runInNewContext(ts.transpileModule(`module.exports = ${expression}`, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, sandbox);
   const session = { id: "s", cliId: "claude" };
   assert.equal(await sandbox.module.exports(session, []), null);
@@ -89,6 +119,13 @@ test("Claude local-command completion waits for output to settle and never overr
   assert.equal((await sandbox.module.exports(session, [])).completedAt, 200);
   ctx = { ...ctx, startedAt: 300, completedAt: null };
   assert.equal((await sandbox.module.exports(session, [])).completedAt, null);
+  quiet = Date.now() - 31_000;
+  assert.equal((await sandbox.module.exports(session, [])).completedAt, quiet);
+  sandbox.pendingDeliveryRef.current.s = { at: 250, unconfirmed: true };
+  assert.equal((await sandbox.module.exports(session, [])).completedAt, null);
+  sandbox.pendingDeliveryRef.current.s = { at: 250, started: true };
+  const completed = await sandbox.module.exports(session, []);
+  assert.equal(api.deliveryGate(sandbox.pendingDeliveryRef.current.s, completed.completedAt > 250, quiet, Date.now()), "proceed");
 });
 
 test("a running or ambiguous Codex turn cannot be treated as idle on silence", () => {

@@ -672,11 +672,16 @@ pub fn save_project_blackboard(project_path: &str, content: &str) -> Result<()> 
 }
 
 pub fn cancel_project_blackboard_task(project_path: &str, task_id: &str) -> Result<()> {
+    cancel_project_blackboard_task_with_hook(project_path, task_id, || {})
+}
+
+fn cancel_project_blackboard_task_with_hook(project_path: &str, task_id: &str, mut before_check: impl FnMut()) -> Result<()> {
     let norm = normalize_project_path(project_path);
     if norm.is_empty() || is_forbidden_system_dir(&norm) || task_id.trim().is_empty() {
         anyhow::bail!("유효한 프로젝트 또는 작업 ID가 아닙니다.");
     }
     let path = Path::new(&norm).join(".ai-agents").join("BLACKBOARD.md");
+    for _ in 0..3 {
     let board = std::fs::read_to_string(&path)?;
     let mut status_idx = None;
     let mut matches = Vec::new();
@@ -705,13 +710,18 @@ pub fn cancel_project_blackboard_task(project_path: &str, task_id: &str) -> Resu
     let mut updated = board.clone();
     updated.replace_range(start..end, " 취소 사용자 작업판에서 취소 ");
     let temp = path.with_file_name(format!("BLACKBOARD.{}.tmp", uuid::Uuid::new_v4()));
-    let result = (|| -> Result<()> {
+    let result = (|| -> Result<bool> {
         std::fs::write(&temp, updated)?;
+        before_check();
+        if std::fs::read(&path)? != board.as_bytes() { return Ok(false); }
+        // shortcut: edits between this check and rename can still race; use coordinated locking to eliminate the gap.
         std::fs::rename(&temp, &path)?;
-        Ok(())
+        Ok(true)
     })();
-    if result.is_err() { let _ = std::fs::remove_file(&temp); }
-    result
+    if !matches!(result, Ok(true)) { let _ = std::fs::remove_file(&temp); }
+    if result? { return Ok(()); }
+    }
+    anyhow::bail!("작업표가 바뀌어 취소를 다시 시도하세요")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2168,6 +2178,35 @@ pub fn reset_all_user_data(conn: &Connection) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cancellation_retries_when_board_changes_before_rename() {
+        let project = std::env::temp_dir().join(format!("agentrix-board-retry-{}", uuid::Uuid::new_v4()));
+        let dir = project.join(".ai-agents");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("BLACKBOARD.md");
+        let original = "| ID | 상태 |\r\n| T1 | 🔥 착수 |\r\n| T2 | ⏳ 대기 |\r\n";
+        std::fs::write(&path, original).unwrap();
+        let mut calls = 0;
+        super::cancel_project_blackboard_task_with_hook(project.to_str().unwrap(), "T1", || {
+            calls += 1;
+            if calls == 1 { std::fs::write(&path, original.replace("T2", "T2 외부 변경")).unwrap(); }
+        }).unwrap();
+        let result = std::fs::read_to_string(&path).unwrap();
+        assert!(result.contains("| T2 외부 변경 | ⏳ 대기 |"));
+        assert!(result.contains("| T1 | 취소 사용자 작업판에서 취소 |"));
+        assert_eq!(calls, 2);
+        std::fs::write(&path, original).unwrap();
+        let mut calls = 0;
+        let error = super::cancel_project_blackboard_task_with_hook(project.to_str().unwrap(), "T1", || {
+            calls += 1;
+            std::fs::write(&path, format!("{original}외부 변경 {calls}\r\n")).unwrap();
+        }).unwrap_err();
+        assert_eq!(calls, 3);
+        assert!(error.to_string().contains("작업표가 바뀌어 취소를 다시 시도하세요"));
+        assert!(std::fs::read_to_string(&path).unwrap().contains("외부 변경 3"));
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        std::fs::remove_dir_all(project).unwrap();
+    }
     #[test]
     fn cancel_blackboard_preserves_other_rows_and_rejects_missing_or_duplicate_ids() {
         let project = std::env::temp_dir().join(format!("agentrix-board-{}", uuid::Uuid::new_v4()));

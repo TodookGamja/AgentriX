@@ -13,6 +13,7 @@ import {
   type TaskApproval,
 } from "../lib/taskApproval";
 import { recentDone } from "../lib/boardDone";
+import { alertDialog, confirmDialog } from "../lib/confirmDialog";
 import type { ProjectAgentRecord } from "../types/types";
 
 const FOCUS = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500";
@@ -90,14 +91,13 @@ export const TaskApprovalBoard: React.FC<TaskApprovalBoardProps> = ({ projectPat
 
   // 작업표의 해당 행 상태 칸만 "취소"로 바꾸고 그 작업의 전달 대기·예약을 정리(완료 칸으로 이동, 재전달 없음)
   const cancel = async (c: Card) => {
-    if (!window.confirm(`${c.taskId} 작업을 취소할까요?
-작업표 상태가 '취소'로 바뀌고 전달 대기가 정리됩니다.`)) return;
+    if (!(await confirmDialog({ title: `${c.taskId} 작업을 취소할까요?`, message: "작업표 상태가 '취소'로 바뀌고 전달 대기가 정리됩니다.", confirmLabel: "작업 취소", cancelLabel: "닫기", danger: true }))) return;
     try {
       await apiCancelProjectBlackboardTask(projectPath, c.taskId);
       useSessionQueue.getState().remove(c.agentId, `assign:${c.taskId}`);
       removeTeamMailDelivery(projectPath, c.agentId, c.taskId, "task");
     } catch (e) {
-      window.alert(`취소하지 못했습니다: ${String(e)}`);
+      await alertDialog("취소하지 못했습니다", String(e));
     }
     setTick((v) => v + 1);
   };

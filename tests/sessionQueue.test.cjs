@@ -97,7 +97,7 @@ test("T7: 자동 항목 수동 처리 — 게이트가 resolved를 소비해 재
   assert.match(gate, /q\.resolved\.includes\(`\$\{key\}\|\$\{meta\.id\}`\)[\s\S]*?return false;[\s\S]*?await sendToIdleTeamSessionRaw/);
   assert.match(gate, /payload: prompt/); // 자동 항목도 payload 보관(지금 보내기용)
   const tp = fs.readFileSync("src/components/TerminalPane.tsx", "utf8");
-  assert.match(tp, /auto && hasPendingSessionInput\(session\.id\) && !window\.confirm/);
+  assert.ok(tp.includes("auto && hasPendingSessionInput(session.id) && !(await confirmDialog("));
   assert.match(tp, /sendQueuedNow\(it\.id, it\.payload, it\.source !== "user"\)/);
   assert.match(tp, /\.resolve\(qKey, it\.id\)/);
   assert.match(tp, /it\.source === "user" && <>/); // ↑↓는 사용자 항목만

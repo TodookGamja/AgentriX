@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import ErrorBoundary from "./components/ErrorBoundary";
+import { ConfirmHost } from "./components/ConfirmHost";
 import "./index.css";
 
 // 구버전이 localStorage에 평문으로 남긴 Deep AI API 키 정리
@@ -17,6 +18,7 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <ErrorBoundary>
       <App />
+      <ConfirmHost />
     </ErrorBoundary>
   </React.StrictMode>
 );

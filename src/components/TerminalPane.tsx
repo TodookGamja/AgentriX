@@ -35,6 +35,7 @@ import { readCursorTurn, registerTerminalScreen, registerTerminalTranscript } fr
 import { useSessionQueue, queueKey } from "../lib/sessionQueueStore";
 import { useAppStore } from "../lib/store";
 import { hasPendingSessionInput } from "../lib/inputHistory";
+import { confirmDialog, isConfirmOpen } from "../lib/confirmDialog";
 import { previewOf, type QueueSource } from "../lib/sessionQueue";
 
 const SOURCE_BADGE: Record<QueueSource, string> = {
@@ -262,6 +263,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
   // 전역 키보드 캡처 리스너: 포커스 위치와 무관하게 Ctrl+0(원상복구), Ctrl++(확대), Ctrl--(축소) 100% 작동 보장
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      if (isConfirmOpen()) return; // 확인 모달이 열린 동안 Ctrl+휠/± 줌 등 차단
       if (!isVisible) return;
       if (e.ctrlKey) {
         // 숫자 0, 넘패드 0 리셋
@@ -625,7 +627,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
   const sendQueuedNow = async (id: string, payload: string, auto = false) => {
     if (sendingQueueRef.current.has(id) || useSessionQueue.getState().queues[qKey]?.find((item) => item.id === id)?.unconfirmed) return;
     // 자동 항목은 입력창·턴 관문을 건너뛰므로 쓰다 만 글이 있으면 먼저 확인
-    if (auto && hasPendingSessionInput(session.id) && !window.confirm("입력창에 쓰던 글이 있습니다. 그 뒤에 붙어 전달될 수 있어요. 그래도 지금 보낼까요?")) return;
+    if (auto && hasPendingSessionInput(session.id) && !(await confirmDialog({ title: "입력창에 쓰던 글이 있습니다", message: "그 뒤에 붙어 전달될 수 있어요. 그래도 지금 보낼까요?", confirmLabel: "지금 보내기" }))) return;
     sendingQueueRef.current.add(id);
     const queuedItem = useSessionQueue.getState().queues[qKey]?.find((item) => item.id === id);
     if (queuedItem) useSessionQueue.getState().upsert(qKey, { ...queuedItem, stuck: true, reason: "수동 전송 중" });

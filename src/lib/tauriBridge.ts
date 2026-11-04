@@ -15,6 +15,7 @@ import { useAppStore } from "./store";
 import { enterReady, needsEnterRetry, pasteWrap, queueSessionWrite, submissionStarted } from "./sessionWriteQueue";
 
 const AGY_FULL_BODY_RETRY_TIMEOUT_MS = 10_000;
+const agyFullBodyRetried = new Set<string>(); // 세션·본문별 retry_full_body 사용 기록(앱 실행 중 유지)
 import type { DeliveryAttempt } from "./deliveryAttempt";
 import { codexPastePending, CursorBusyError, cursorPastedSubmission, cursorTurnBusy, readCursorTurn, readTerminalScreen } from "./cursorScreen";
 import type {
@@ -342,7 +343,8 @@ export async function apiWriteToSession(sessionId: string, data: string, injecte
     if (roleBriefing && roleWasPending && roleText && prefix.includes(roleText)) data = prefix.replace(roleText, "") + original;
     let restored = false;
     let bodyWritten = false;
-    const restore = () => { if (!restored && prefix) { restoreHandoffHint(sessionId, prefix, roleWasPending); restored = true; } };
+    // agy는 본문이 입력창에 들어간 뒤(마감 시간 초과·중단 포함)에는 접두를 되살리지 않는다 — 되살리면 3초 틱이 역할 지침만 계속 다시 넣음
+    const restore = () => { if (!restored && prefix && !(session?.cliId === "antigravity" && bodyWritten)) { restoreHandoffHint(sessionId, prefix, roleWasPending); restored = true; } };
     try {
   if (isTauriRuntime()) {
     // TUI(Claude/Codex 등)는 "텍스트+\r" 한 덩어리를 붙여넣기로 인식해 Enter를 줄바꿈으로 삼킨다.
@@ -424,7 +426,10 @@ export async function apiWriteToSession(sessionId: string, data: string, injecte
           const codexScreen = session?.cliId === "codex" ? readTerminalScreen(sessionId) : null;
           confirmed = cursorConfirmed || (session?.cliId === "cursor" ? logStarted === true : submissionStarted(output, logStarted, codexScreen !== null && codexPastePending(codexScreen)));
           verify.attempt?.check();
-        if (session?.cliId === "antigravity" && !confirmed && attempt === 0) {
+        // agy 본문 전체 재전송은 같은 세션·같은 본문에 평생 1회(시도마다 반복하면 입력창에 같은 지침이 쌓임)
+        const retryKey = `${sessionId} ${body}`;
+        if (session?.cliId === "antigravity" && !confirmed && attempt === 0 && !agyFullBodyRetried.has(retryKey)) {
+          agyFullBodyRetried.add(retryKey);
           if (getUserInputVersion(sessionId) !== inputVersion) break;
           const retrySentAt = Date.now();
           verify.onCommit?.(body, retrySentAt);
@@ -455,7 +460,9 @@ export async function apiWriteToSession(sessionId: string, data: string, injecte
           retries++;
         }
         console.info(`[team-delivery] session=${sessionId} paste_mode=${pasteMode} write_at=${sentAt} enter_at=${enterAt} output_bytes_2s=${outputBytes} confirmed=${confirmed} retries=${retries}`);
-        if (!confirmed) restore();
+        // agy는 본문이 이미 입력창에 들어간 뒤의 미확인이므로 접두(역할 지침)를 되살리지 않는다 — 되살리면 다음 전달마다 같은 지침이 또 붙는다.
+        // 늦게 로그로 확인되면 confirmRestoredPrefix가 역할 상태를 확정한다.
+        if (!confirmed && session?.cliId !== "antigravity") restore();
         verify.onResult(confirmed);
         if (!confirmed && internalVerify) throw new Error("제출 확인 실패: 입력창을 확인해 주세요.");
       }
