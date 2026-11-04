@@ -1120,7 +1120,7 @@ fn trust_project_folder(project_path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn session_user_message_submitted(state: State<'_, AppState>, session_id: String, body: String, after: i64) -> Result<bool, String> {
+async fn session_user_message_submitted(state: State<'_, AppState>, session_id: String, body: String, after: i64, claimed: Option<Vec<String>>, expected_source: Option<String>) -> Result<bool, String> {
     let pty = state.pty.clone();
     let db = state.db.clone();
     tokio::task::spawn_blocking(move || {
@@ -1141,6 +1141,10 @@ async fn session_user_message_submitted(state: State<'_, AppState>, session_id: 
                     context::saved_codex_log_in_use(&sessions, &session.cwd, &saved, &session.started_at)
                 });
                 id.and_then(|id| context::codex_log_for_session(&sessions, &session.cwd, &id))
+            }
+            "antigravity" => {
+                expected_source.and_then(|expected| context::read_context("antigravity", &session_id, &session.cwd, &session.started_at, claimed.as_deref().unwrap_or(&[]))
+                    .filter(|ctx| ctx.source == expected).map(|ctx| std::path::PathBuf::from(ctx.source)))
             }
             _ => None,
         };

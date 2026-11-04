@@ -13,6 +13,8 @@ import { applyHandoffHint, getRoleState, markRolePrefix, restoreHandoffHint } fr
 import { collabProtocol } from "./blackboardDispatch";
 import { useAppStore } from "./store";
 import { enterReady, needsEnterRetry, pasteWrap, queueSessionWrite, submissionStarted } from "./sessionWriteQueue";
+
+const AGY_FULL_BODY_RETRY_TIMEOUT_MS = 10_000;
 import type { DeliveryAttempt } from "./deliveryAttempt";
 import { codexPastePending, CursorBusyError, cursorPastedSubmission, cursorTurnBusy, readCursorTurn, readTerminalScreen } from "./cursorScreen";
 import type {
@@ -387,7 +389,7 @@ export async function apiWriteToSession(sessionId: string, data: string, injecte
         if (enterReady(sentAt, last, Date.now(), minWait)) break;
       }
       // Enter 직전 출력 끝 위치: 이후 출력만 보고 삼켜짐을 판정 (커서가 끝을 넘으면 nextCursor = 현재 끝)
-      const endCursor = await invoke<PtyOutputChunk>("read_session_output", { sessionId, cursor: Number.MAX_SAFE_INTEGER }).then((c) => c.nextCursor).catch(() => null);
+    let endCursor = await invoke<PtyOutputChunk>("read_session_output", { sessionId, cursor: Number.MAX_SAFE_INTEGER }).then((c) => c.nextCursor).catch(() => null);
       verify?.attempt?.check();
       if (verify && getUserInputVersion(sessionId) !== inputVersion) {
         console.info(`[team-delivery] session=${sessionId} paste_mode=${pasteMode} write_at=${sentAt} enter_at=none output_bytes_2s=0 confirmed=false retries=0`);
@@ -395,7 +397,7 @@ export async function apiWriteToSession(sessionId: string, data: string, injecte
         if (internalVerify) throw new Error("사용자 입력으로 전달이 중단되었습니다.");
         return;
       }
-      const enterAt = Date.now();
+      let enterAt = Date.now();
       verify?.attempt?.step("submit");
       await invoke("write_to_session", { sessionId, data: "\r" });
       recordSessionSubmission(sessionId);
@@ -406,7 +408,7 @@ export async function apiWriteToSession(sessionId: string, data: string, injecte
         let retries = 0;
         let outputBytes = 0;
         for (let attempt = 0; attempt < 3; attempt++) {
-          await new Promise((r) => setTimeout(r, attempt === 0 ? 2000 : 1000));
+        await new Promise((r) => setTimeout(r, attempt === 0 ? (session?.cliId === "antigravity" ? AGY_FULL_BODY_RETRY_TIMEOUT_MS : 2000) : 1000));
           const chunk = endCursor === null ? null : await invoke<PtyOutputChunk>("read_session_output", { sessionId, cursor: endCursor }).catch(() => null);
           const output = chunk?.data ?? "";
           if (attempt === 0 && chunk && endCursor !== null) outputBytes = Math.max(0, chunk.nextCursor - endCursor);
@@ -417,7 +419,32 @@ export async function apiWriteToSession(sessionId: string, data: string, injecte
           const codexScreen = session?.cliId === "codex" ? readTerminalScreen(sessionId) : null;
           confirmed = cursorConfirmed || (session?.cliId === "cursor" ? logStarted === true : submissionStarted(output, logStarted, codexScreen !== null && codexPastePending(codexScreen)));
           verify.attempt?.check();
-          if (!needsEnterRetry(confirmed, getUserInputVersion(sessionId) !== inputVersion) || attempt === 2) break;
+        if (session?.cliId === "antigravity" && !confirmed && attempt === 0) {
+          if (getUserInputVersion(sessionId) !== inputVersion) break;
+          const retrySentAt = Date.now();
+          verify.onCommit?.(body, retrySentAt);
+          verify.attempt?.step("retry_full_body");
+          await invoke("write_to_session", { sessionId, data: wrapped });
+          let quietSince = await invoke<number | null>("get_session_quiet_since", { sessionId, quietMs: 0 }).catch(() => null);
+          while (getUserInputVersion(sessionId) === inputVersion && !enterReady(retrySentAt, quietSince, Date.now(), minWait)) {
+            await new Promise((r) => setTimeout(r, 50));
+            verify.attempt?.check();
+            quietSince = await invoke<number | null>("get_session_quiet_since", { sessionId, quietMs: 0 }).catch(() => null);
+          }
+          if (getUserInputVersion(sessionId) !== inputVersion) {
+            restore();
+            verify.onResult(false);
+            break;
+          }
+          endCursor = await invoke<PtyOutputChunk>("read_session_output", { sessionId, cursor: Number.MAX_SAFE_INTEGER }).then((c) => c.nextCursor).catch(() => null);
+          enterAt = Date.now();
+          await invoke("write_to_session", { sessionId, data: "\r" });
+          recordSessionSubmission(sessionId);
+          verify.attempt?.check();
+          retries++;
+          continue;
+        }
+          if (session?.cliId === "antigravity" || !needsEnterRetry(confirmed, getUserInputVersion(sessionId) !== inputVersion) || attempt === 2) break;
           if (getUserInputVersion(sessionId) !== inputVersion) break;
           await invoke("write_to_session", { sessionId, data: "\r" });
           retries++;
@@ -468,6 +495,11 @@ export async function apiAcknowledgeTeamMail(projectPath: string, agentId: strin
 export async function apiSessionUserMessageSubmitted(sessionId: string, body: string, after: number): Promise<boolean> {
   if (!isTauriRuntime()) return false;
   return invoke("session_user_message_submitted", { sessionId, body, after });
+}
+
+export async function apiAgyMessageSubmitted(sessionId: string, body: string, after: number, claimed: string[], expectedSource: string): Promise<boolean> {
+  if (!isTauriRuntime()) return false;
+  return invoke("session_user_message_submitted", { sessionId, body, after, claimed, expectedSource });
 }
 
 export async function apiGetSessionContext(

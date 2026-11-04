@@ -79,6 +79,7 @@ import {
   apiAcknowledgeTeamMail,
   apiGetSessionContext,
   apiSessionUserMessageSubmitted,
+  apiAgyMessageSubmitted,
   apiGetSessionQuietSince,
   apiWindowMinimize,
   apiWindowToggleMaximize,
@@ -164,6 +165,7 @@ export function getShortFolderName(pathStr?: string): string {
   return pathStr.split(/[/\\]/).filter(Boolean).pop() || pathStr;
 }
 
+const SUBMISSION_UNCONFIRMED_REASON = "입력창에 멈춤: 전달의 제출을 확인하지 못했습니다";
 const EMOJI_OPTIONS = ["👑", "🛠️", "🎨", "🔍", "🤖", "🦀", "🐍", "📊", "🛡️", "⚡"];
 
 export const App: React.FC = () => {
@@ -2061,13 +2063,28 @@ ${recentSnippet || "진행 내역 기록 없음"}
     const lastSubmit = getLastSubmission(session.id);
     if (ctx?.completedAt && ctx.completedAt > lastSubmit) {
       if (session.cliId === "claude" && !await apiGetSessionQuietSince(session.id, 3000).catch(() => null)) return null;
+      if (session.cliId === "antigravity" && !await apiGetSessionQuietSince(session.id, 10_000).catch(() => null)) return null;
       return ctx;
     }
+    if (session.cliId === "antigravity") return ctx;
     // A running or ambiguous log takes precedence over terminal silence.
     if (logTurnStillBusy(session.cliId, ctx)) return ctx;
     const quiet = await apiGetSessionQuietSince(session.id).catch(() => null);
     if (!quiet || quiet <= lastSubmit || (session.cliId === "claude" && lastSubmit > 0 && Date.now() - quiet < 30_000)) return ctx;
     return { tokens: ctx?.tokens ?? 0, window: ctx?.window ?? null, source: ctx?.source ?? `pty:${session.id}`, completedAt: quiet };
+  };
+  const agyCompletedAttempt = async (session: typeof currentProjectSessions[number], id: string, claimed: string[], ctx: Awaited<ReturnType<typeof getTurnContext>>) => {
+    if (session.cliId !== "antigravity" || !ctx?.completedAt) return false;
+    const item = useSessionQueue.getState().queues[queueKey(session)]?.find((queued) => queued.id === id);
+    if (!item) return false;
+    const attempt = item.attempt;
+    if (attempt && attempt.sessionId !== session.id) return false;
+    const delivery = attempt ? undefined : getTeamMailDeliveries().find((d) => d.project === session.cwd && d.agentId === session.agentId && d.sessionId === session.id &&
+      `${d.kind === "task" ? "assign" : d.kind === "report" ? "report" : d.kind ? "goal" : "mail"}:${d.id}` === id);
+    const at = attempt?.at ?? delivery?.submittedAt;
+    const source = attempt?.source ?? ctx.source;
+    if (!at || ctx.source !== source || ctx.completedAt <= at) return false;
+    return apiAgyMessageSubmitted(session.id, attempt?.body ?? item.payload, at, claimed, source).catch(() => false);
   };
   const prevStartsRef = useRef<Record<string, ReturnType<typeof parseBoardTasks>>>({}); // 프로젝트별 지난 읽기의 🔥 행(오독 방지 2회 확인용)
   const queueSeenRef = useRef<Record<string, number>>({}); // 자동 전달 항목이 마지막으로 시도된 시각(오래되면 대기열 표시에서 제거)
@@ -2114,7 +2131,10 @@ ${recentSnippet || "진행 내역 기록 없음"}
     let ok: boolean;
     try { ok = await sendToIdleTeamSessionRaw(session, prompt, false, meta); }
     catch (err) {
-      if (meta) q.upsert(key, { ...meta, payload: prompt, createdAt: Date.now(), reason: "입력창에 멈춤: 전달 결과 미확인", stuck: true });
+    if (meta) {
+      const unconfirmed = session.cliId === "antigravity" && pendingDeliveryRef.current[session.id]?.unconfirmed;
+      q.upsert(key, { ...meta, payload: prompt, createdAt: Date.now(), reason: unconfirmed ? SUBMISSION_UNCONFIRMED_REASON : "입력창에 멈춤: 전달 결과 미확인", stuck: true, unconfirmed });
+    }
       throw err;
     }
     if (!meta) return ok;
@@ -2125,7 +2145,8 @@ ${recentSnippet || "진행 내역 기록 없음"}
     } else {
       const reason = sendBlockReasonRef.current[session.id] ?? "전달 조건 미충족";
       queueSeenRef.current[`${key}|${meta.id}`] = Date.now();
-      q.upsert(key, { id: meta.id, source: meta.source, preview: meta.preview, payload: prompt, createdAt: Date.now(), reason, stuck: reason.startsWith("입력창에 멈춤") });
+    const agyUnconfirmed = session.cliId === "antigravity" && reason === SUBMISSION_UNCONFIRMED_REASON;
+    q.upsert(key, { id: meta.id, source: meta.source, preview: meta.preview, payload: prompt, createdAt: Date.now(), reason, stuck: reason.startsWith("입력창에 멈춤"), unconfirmed: agyUnconfirmed });
     }
     return ok;
   };
@@ -2170,9 +2191,11 @@ ${recentSnippet || "진행 내역 기록 없음"}
       contextSourceRef.current[session.id] = ctx.source;
       let confirmed = false;
       let skipped = false;
+        let agyAttempt: { body: string; at: number } | undefined;
       const baseline = "startedAt" in ctx ? ctx.startedAt ?? 0 : 0;
       await apiWriteToSession(session.id, prompt, true, {
         hasStarted: async () => {
+            if (session.cliId === "antigravity") return agyAttempt ? apiAgyMessageSubmitted(session.id, agyAttempt.body, agyAttempt.at, claimed, ctx.source).catch(() => false) : false;
           if (ctx.source.startsWith("cursor-screen:")) return (readCursorTurn(session.id)?.startedAt ?? 0) > baseline;
           if (ctx.source.startsWith("pty:")) return null;
           const current = await apiGetSessionContext(session, claimed);
@@ -2180,7 +2203,8 @@ ${recentSnippet || "진행 내역 기록 없음"}
         },
         onResult: (result) => { confirmed = result; },
         onCommit: (body, at) => {
-          if (meta?.source === "user") useSessionQueue.getState().recordAttempt(queueKey(session), meta.id, { sessionId: session.id, at, body });
+          if (session.cliId === "antigravity") agyAttempt = { body, at };
+          if (meta && (meta.source === "user" || session.cliId === "antigravity")) useSessionQueue.getState().recordAttempt(queueKey(session), meta.id, { sessionId: session.id, at, body, source: session.cliId === "antigravity" ? ctx.source : undefined });
         },
         onlyPendingRole,
         onSkip: () => { skipped = true; },
@@ -2189,14 +2213,14 @@ ${recentSnippet || "진행 내역 기록 없음"}
       attempt.check();
       if (skipped) return true;
       pendingDeliveryRef.current[session.id] = { at: getLastSubmission(session.id), started: confirmed, retriedAt: Date.now(), unconfirmed: !confirmed };
-      return confirmed || blocked("입력창에 멈춤: 전달의 제출을 확인하지 못했습니다");
+      return confirmed || blocked(SUBMISSION_UNCONFIRMED_REASON);
       }, 15_000);
     } catch (error) {
       if (error instanceof CursorBusyError) return blocked("팀원이 응답 중(턴 종료 신호 대기)");
       if (!attempt.cancelled) throw error;
       if (attempt.committed) {
         pendingDeliveryRef.current[session.id] = { at: Date.now(), started: false, retriedAt: Date.now(), unconfirmed: true };
-        return blocked("입력창에 멈춤: 전달의 제출을 확인하지 못했습니다");
+        return blocked(SUBMISSION_UNCONFIRMED_REASON);
       }
       return blocked("전달 준비 시간 초과");
     } finally {
@@ -2285,8 +2309,11 @@ ${recentSnippet || "진행 내역 기록 없음"}
           if (!pending && !message) continue;
           const claimed = Object.entries(contextSourceRef.current).filter(([id]) => id !== session.id).map(([, src]) => src);
           const ctx = await getTurnContext(session, claimed);
-          if (pending?.unconfirmed && ctx && "startedAt" in ctx && ctx.startedAt && ctx.startedAt > pending.submittedAt) {
+            const agyConfirmed = pending?.unconfirmed && await agyCompletedAttempt(session, `mail:${pending.id}`, claimed, ctx);
+            if (pending?.unconfirmed && session.cliId === "antigravity" && !agyConfirmed) continue;
+            if (pending?.unconfirmed && (agyConfirmed || (session.cliId !== "antigravity" && ctx && "startedAt" in ctx && ctx.startedAt && ctx.startedAt > pending.submittedAt))) {
             pending.unconfirmed = false;
+              if (agyConfirmed) delete pendingDeliveryRef.current[session.id];
             saveTeamMailDelivery(pending);
             useSessionQueue.getState().remove(queueKey(session), `mail:${pending.id}`);
           }
@@ -2313,7 +2340,8 @@ ${recentSnippet || "진행 내역 기록 없음"}
             throw err;
           }
           if (!sent) {
-              if (sendBlockReasonRef.current[session.id] !== "입력창에 멈춤: 전달의 제출을 확인하지 못했습니다") removeTeamMailDelivery(project, session.agentId, message.id);
+          const queued = useSessionQueue.getState().queues[queueKey(session)]?.find((item) => item.id === `mail:${message.id}`);
+          if (!queued?.unconfirmed && sendBlockReasonRef.current[session.id] !== SUBMISSION_UNCONFIRMED_REASON) removeTeamMailDelivery(project, session.agentId, message.id);
             continue;
           }
             saveTeamMailDelivery({ ...delivery, submittedAt: getLastSubmission(session.id), unconfirmed: false });
@@ -2396,7 +2424,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
             const sent = await sendToIdleTeamSession(s, item.payload, { id: item.id, source: item.source, preview: item.preview });
             if (sent) {
               saveTeamMailDelivery({ ...delivery, submittedAt: getLastSubmission(s.id), unconfirmed: false });
-            } else if (sendBlockReasonRef.current[s.id] !== "입력창에 멈춤: 전달의 제출을 확인하지 못했습니다") {
+            } else if (sendBlockReasonRef.current[s.id] !== SUBMISSION_UNCONFIRMED_REASON) {
               removeTeamMailDelivery(delivery.project, delivery.agentId, delivery.id, delivery.kind);
             }
           } catch (err) {
@@ -2486,8 +2514,11 @@ ${recentSnippet || "진행 내역 기록 없음"}
         }
         const claimed = Object.entries(contextSourceRef.current).filter(([id]) => id !== session.id).map(([, src]) => src);
         const ctx = await getTurnContext(session, claimed);
-        if (delivery.unconfirmed && ctx && "startedAt" in ctx && ctx.startedAt && ctx.startedAt > delivery.submittedAt) {
+          const agyConfirmed = delivery.unconfirmed && await agyCompletedAttempt(session, `${delivery.kind === "task" ? "assign" : "report"}:${delivery.id}`, claimed, ctx);
+          if (delivery.unconfirmed && session.cliId === "antigravity" && !agyConfirmed) continue;
+          if (delivery.unconfirmed && (agyConfirmed || (session.cliId !== "antigravity" && ctx && "startedAt" in ctx && ctx.startedAt && ctx.startedAt > delivery.submittedAt))) {
           delivery.unconfirmed = false;
+            if (agyConfirmed) delete pendingDeliveryRef.current[session.id];
           saveTeamMailDelivery(delivery);
           useSessionQueue.getState().remove(queueKey(session), delivery.kind === "task" ? `assign:${delivery.id}` : `report:${delivery.id}`);
           if (delivery.kind === "task") {
@@ -2549,10 +2580,14 @@ ${recentSnippet || "진행 내역 기록 없음"}
           const revoked = tasks.length === 0 ? [] : revokedAssignIds(list, new Set(boardTasks.filter((t) => t.status === "start" && t.agentId === s.agentId).map((t) => t.taskId)));
           const ids = [...new Set([...settled, ...revoked])];
           // 제출 확인은 실패했지만 대상 터미널 화면에 이미 찍힌 항목(메모리상 화면 기록만 사용)은 전달된 것으로 확정
-          const onScreen = deliveredByScreen(list, readTerminalTranscript(s.id));
+          const onScreen = s.cliId === "antigravity" ? [] : deliveredByScreen(list, readTerminalTranscript(s.id));
             for (const item of list) {
               if (item.source !== "user" || (!item.stuck && !item.unconfirmed) || !item.attempt || item.attempt.sessionId !== s.id) continue;
-              if (await apiSessionUserMessageSubmitted(s.id, item.attempt.body, item.attempt.at).catch(() => false)) {
+              const claimed = Object.entries(contextSourceRef.current).filter(([id]) => id !== s.id).map(([, src]) => src);
+              const confirmed = s.cliId === "antigravity"
+                ? await agyCompletedAttempt(s, item.id, claimed, await getTurnContext(s, claimed))
+                : await apiSessionUserMessageSubmitted(s.id, item.attempt.body, item.attempt.at).catch(() => false);
+              if (confirmed) {
                 useSessionQueue.getState().remove(key, item.id);
                 delete pendingDeliveryRef.current[s.id];
               }
@@ -2643,7 +2678,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
             `[PM 배정] .ai-agents/BLACKBOARD.md 작업표의 ${t.taskId} 작업을 수행하세요. 완료하면 해당 행의 상태를 ✅ 완료로 바꾸고 결과를 한 줄 메모로 남기세요. BLACKBOARD.md는 셸 명령이 아닌 파일 편집 도구로 수정하세요(한글 깨짐 방지). ${mailProtocol(t.agentId, agents)}\r`,
             { id: `assign:${t.taskId}`, source: "assign", preview: `${t.taskId} 작업 배정` }
           )) {
-              if (sendBlockReasonRef.current[target.id] !== "입력창에 멈춤: 전달의 제출을 확인하지 못했습니다") removeTeamMailDelivery(project, t.agentId, t.taskId, "task");
+              if (sendBlockReasonRef.current[target.id] !== SUBMISSION_UNCONFIRMED_REASON) removeTeamMailDelivery(project, t.agentId, t.taskId, "task");
             setDispatchNote(project, t.taskId, `대기: ${sendBlockReasonRef.current[target.id] ?? "전달 조건 미충족"}`);
             continue;
           }
@@ -2669,7 +2704,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
           if (await sendToIdleTeamSession(pmSession, `[완료 보고] ${task.taskId} 작업이 완료되었습니다. .ai-agents/BLACKBOARD.md를 확인하고 다음 작업을 배정하거나 최종 보고하세요.\r`, { id: `report:${task.taskId}:${task.agentId}`, source: "report", preview: `${task.taskId} 완료 보고` })) {
               saveTeamMailDelivery({ ...delivery, submittedAt: getLastSubmission(pmSession.id), unconfirmed: false });
           } else {
-              if (sendBlockReasonRef.current[pmSession.id] !== "입력창에 멈춤: 전달의 제출을 확인하지 못했습니다") removeTeamMailDelivery(project, delivery.agentId, delivery.id, "report");
+              if (sendBlockReasonRef.current[pmSession.id] !== SUBMISSION_UNCONFIRMED_REASON) removeTeamMailDelivery(project, delivery.agentId, delivery.id, "report");
           }
         } catch {}
       }

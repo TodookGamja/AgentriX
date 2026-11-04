@@ -10,7 +10,7 @@ export interface QueueItem {
   reason?: string; // 아직 못 들어간 사유(게이트 메시지)
   stuck?: boolean; // 입력창 제출 실패로 멈춤 → 다음 항목 보류
   unconfirmed?: boolean; // 본문을 썼지만 제출 확인 실패: 자동 및 수동 재전송 금지
-  attempt?: { sessionId: string; at: number; body: string };
+  attempt?: { sessionId: string; at: number; body: string; source?: string };
 }
 export type QueueMap = Record<string, QueueItem[]>;
 

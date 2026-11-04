@@ -31,6 +31,7 @@ test("queue drain sends orphaned heads in order and releases a blocked reservati
     apiRouteTeamMail: async () => [], hasTaskResultMail: () => duplicate,
     reserveTeamMailDelivery: (value) => { if (reservation) return false; reservation = value; return true; },
     removeTeamMailDelivery: () => { reservation = undefined; }, saveTeamMailDelivery: (value) => { reservation = value; },
+    SUBMISSION_UNCONFIRMED_REASON: eval(fs.readFileSync("src/App.tsx", "utf8").match(/^const SUBMISSION_UNCONFIRMED_REASON = (".*");/m)[1]),
     getLastSubmission: () => 1, sendBlockReasonRef: { current: {} },
     sendToIdleTeamSession: async (_s, _payload, item) => {
       if (blocked) { blocked = false; return false; }

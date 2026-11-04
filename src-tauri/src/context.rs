@@ -8,7 +8,23 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+fn antigravity_submitted_message(content: &str, body: &str, after: i64) -> bool {
+    let body = body.replace("\r\n", "\n");
+    let body = body.trim();
+    if body.is_empty() || after <= 0 { return false; }
+    content.lines().any(|line| {
+        let Ok(v) = serde_json::from_str::<Value>(line) else { return false; };
+        if v.get("type").and_then(Value::as_str) != Some("USER_INPUT") { return false; }
+        let Some(time) = v.get("created_at").and_then(Value::as_str).and_then(parse_ts) else { return false; };
+        if time.timestamp_millis() < after - after.rem_euclid(1000) { return false; }
+        v.get("content").and_then(Value::as_str).is_some_and(|text| {
+            text.replace("\r\n", "\n").trim() == body
+        })
+    })
+}
+
 pub fn submitted_user_message(content: &str, cli: &str, body: &str, after: i64) -> bool {
+    if cli == "antigravity" { return antigravity_submitted_message(content, body, after); }
     let body = body.replace("\r\n", "\n");
     let body = body.trim();
     if body.is_empty() || after <= 0 { return false; }
@@ -40,7 +56,7 @@ pub fn submitted_user_message(content: &str, cli: &str, body: &str, after: i64) 
 
 #[cfg(test)]
 mod submission_tests {
-    use super::submitted_user_message;
+    use super::{antigravity, antigravity_turn, submitted_user_message};
     #[test]
     fn exact_message_after_attempt_only() {
         let claude = r#"{"type":"user","timestamp":"2026-11-04T00:41:16.746Z","message":{"content":"hello"}}"#;
@@ -69,6 +85,49 @@ mod submission_tests {
         assert!(!submitted_user_message(claude_blocks, "claude", "hello\nworld", at));
         assert!(!submitted_user_message(claude_blocks, "claude", "hello\nother", at - 1));
         assert!(!submitted_user_message(claude_blocks, "claude", " \r\n ", at - 1));
+    }
+
+    #[test]
+    fn antigravity_turn_requires_final_response_and_quiet_log() {
+        let user = r#"{"step_index":0,"type":"USER_INPUT","status":"DONE","created_at":"2026-11-04T00:41:16Z","content":"a delivered message"}"#;
+        let response = r#"{"step_index":1,"type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-04T00:41:17Z","content":"done"}"#;
+        let tool = r#"{"step_index":1,"type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-04T00:41:17Z","content":"working","tool_calls":[{}]}"#;
+        let system = r#"{"step_index":2,"type":"SYSTEM_MESSAGE","status":"DONE","created_at":"2026-11-04T00:41:18Z"}"#;
+        let (start, end) = antigravity_turn(&[user, response].join("\n"), true);
+        assert!(start.is_some() && end.is_some());
+        assert!(antigravity_turn(&[user, response].join("\n"), false).1.is_none());
+        assert!(antigravity_turn(&[user, tool].join("\n"), true).1.is_none());
+        assert!(antigravity_turn(&[user, response, system].join("\n"), true).1.is_none());
+        assert!(submitted_user_message(user, "antigravity", "a delivered message", 1_793_752_876_900));
+        assert!(!submitted_user_message(user, "antigravity", "a different message", 1_793_752_876_900));
+        assert!(!submitted_user_message(user, "antigravity", "a delivered message", 1_793_752_877_000));
+        let long_body = format!("{} original ending", "가".repeat(100));
+        let truncated = serde_json::json!({"type":"USER_INPUT", "created_at":"2026-11-04T00:41:16Z", "content": "가".repeat(80)}).to_string();
+        assert!(!submitted_user_message(&truncated, "antigravity", &long_body, 1_793_752_876_900));
+        let exact = serde_json::json!({"type":"USER_INPUT", "created_at":"2026-11-04T00:41:16Z", "content": long_body}).to_string();
+        assert!(submitted_user_message(&exact, "antigravity", &long_body, 1_793_752_876_900));
+        let normalized = serde_json::json!({"type":"USER_INPUT", "created_at":"2026-11-04T00:41:16Z", "content": "  line1\r\nline2  "}).to_string();
+        assert!(submitted_user_message(&normalized, "antigravity", "line1\nline2", 1_793_752_876_900));
+        assert!(!submitted_user_message(&truncated, "antigravity", "다른 입력", 1_793_752_876_900));
+    }
+
+    #[test]
+    fn antigravity_refuses_ambiguous_session_logs() {
+        let root = std::env::temp_dir().join(format!("agentrix-agy-{}", uuid::Uuid::new_v4()));
+        let mut paths = Vec::new();
+        for id in ["one", "two"] {
+            let dir = root.join(id).join(".system_generated").join("logs");
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("transcript.jsonl");
+            let line = serde_json::json!({"type":"USER_INPUT", "created_at":chrono::Utc::now().to_rfc3339(), "content":"hello"}).to_string();
+            std::fs::write(&path, line).unwrap();
+            paths.push(path);
+        }
+        let started = chrono::Utc::now() - chrono::Duration::seconds(1);
+        assert!(antigravity(&root, started, &[]).is_none());
+        let claimed = vec![paths[0].to_string_lossy().into_owned()];
+        assert_eq!(antigravity(&root, started, &claimed).unwrap().source, paths[1].to_string_lossy());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
 
@@ -328,9 +387,10 @@ pub fn unique_codex_session_id(sessions: &Path, cwd: &str, started_at: &str, sou
 }
 
 /// Antigravity: brain/<uuid>/.system_generated/logs/transcript.jsonl, 로그에 작업 폴더가 없어 시작 시각으로만 매칭
-// ponytail: 여러 Antigravity 세션을 거의 동시에 띄우면 뒤바뀔 수 있음, CLI가 cwd를 기록하면 Codex처럼 폴더 매칭 추가
+// shortcut: 로그 후보가 여러 개면 보류하며, CLI가 cwd를 기록하면 폴더로 식별한다.
 fn antigravity(brain: &Path, started: DateTime<Utc>, claimed: &[String]) -> Option<ContextUsage> {
     let mut best: Option<(DateTime<Utc>, PathBuf, String)> = None;
+    let mut matches = 0;
     for path in collect_newest_jsonl_files(brain, 4, 40, Some("transcript.jsonl")) {
         if !touched_since(&path, started) {
             break;
@@ -349,13 +409,38 @@ fn antigravity(brain: &Path, started: DateTime<Utc>, claimed: &[String]) -> Opti
         if ts < started - chrono::Duration::seconds(10) {
             continue;
         }
+        matches += 1;
         if best.as_ref().map(|b| ts < b.0).unwrap_or(true) {
             best = Some((ts, path, content));
         }
     }
+    if matches != 1 { return None; }
     let (_, path, content) = best?;
-    let tokens = antigravity_last_context(&content)?;
-    Some(ContextUsage { tokens, window: None, source: path.to_string_lossy().into(), completed_at: None, started_at: None })
+    let tokens = antigravity_last_context(&content).unwrap_or(0);
+    let quiet = std::fs::metadata(&path).and_then(|m| m.modified()).ok()
+        .and_then(|t| t.elapsed().ok()).is_some_and(|elapsed| elapsed >= Duration::from_secs(10));
+    let (started_at, completed_at) = antigravity_turn(&content, quiet);
+    Some(ContextUsage { tokens, window: None, source: path.to_string_lossy().into(), completed_at, started_at })
+}
+
+fn antigravity_turn(content: &str, quiet: bool) -> (Option<i64>, Option<i64>) {
+    let mut started = None;
+    let mut last = None;
+    for line in content.lines() {
+        let Ok(v) = serde_json::from_str::<Value>(line) else { return (None, None); };
+        if v.get("type").and_then(Value::as_str) == Some("USER_INPUT") {
+            started = v.get("created_at").and_then(Value::as_str).and_then(parse_ts).map(|t| t.timestamp_millis());
+        }
+        last = Some(v);
+    }
+    let completed = last.filter(|v| quiet && started.is_some() &&
+        v.get("type").and_then(Value::as_str) == Some("PLANNER_RESPONSE") &&
+        v.get("status").and_then(Value::as_str) == Some("DONE") &&
+        v.get("content").and_then(Value::as_str).is_some_and(|s| !s.trim().is_empty()) &&
+        v.get("tool_calls").map_or(true, |calls| calls.as_array().is_some_and(|a| a.is_empty())))
+        .and_then(|v| v.get("created_at").and_then(Value::as_str).and_then(parse_ts))
+        .map(|t| t.timestamp_millis() + 999);
+    (started, completed)
 }
 
 fn antigravity_last_context(content: &str) -> Option<u64> {
