@@ -145,7 +145,9 @@ test("T1793841150955_1: result mail marks the task so the ✅ auto report is ski
   const mail = { from: "agent", to: "pm", subject: "T9_1 결과", body: "완료" };
   const task = (taskId, status) => ({ taskId, status, agentId: "agent" });
   // 메일 먼저(🔥 상태에서 이미 보냄) 또는 ✅ 먼저·메일 나중: 메일이 보이는 순간 키가 잡혀 보고 생략/대기열 제거
-  assert.deepEqual(api.resultMailTaskKeys([mail], [task("T9_1", "start")], "pm"), ["T9_1:agent"]);
+  // T1793847054429_3: 중간·승인요청·결정부탁 메일은 🔥·✅ 어느 쪽에서도 결과로 안 침 → ✅ 때 자동 보고 유지
+  assert.deepEqual([...api.resultMailTaskKeys([mail], [task("T9_1", "start")], "pm")], ["T9_1:agent"]);
+  for (const status of ["start", "done"]) for (const subject of ["T9_1 중간 결과", "T9_1 조건부 완료 승인 요청", "T9_1 실측 결과, 결정 부탁"]) assert.deepEqual([...api.resultMailTaskKeys([{ ...mail, subject }], [task("T9_1", status)], "pm")], []);
   assert.deepEqual(api.resultMailTaskKeys([mail], [task("T9_1", "done")], "pm"), ["T9_1:agent"]);
   // 메일 없음: 키 없음 → 자동 보고 유지
   assert.deepEqual(api.resultMailTaskKeys([], [task("T9_1", "done")], "pm"), []);

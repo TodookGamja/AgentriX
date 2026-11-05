@@ -166,40 +166,141 @@ pub struct PtyManager {
     sessions: Arc<Mutex<HashMap<String, PtySession>>>,
 }
 
-pub fn auto_trust_project_folder(project_path: &str) {
-    if let Some(home) = dirs::home_dir() {
-        let claude_json_path = home.join(".claude.json");
-        if claude_json_path.exists() {
-            if let Ok(content) = std::fs::read_to_string(&claude_json_path) {
-                if let Ok(mut json) = serde_json::from_str::<serde_json::Value>(&content) {
-                    if let Some(projects) = json.get_mut("projects").and_then(|p| p.as_object_mut()) {
-                        let win_path = project_path.replace('/', "\\");
-                        let unix_path = project_path.replace('\\', "/");
+fn registered_project(project: &Path, registered: &[std::path::PathBuf]) -> Option<std::path::PathBuf> {
+    let root = project.canonicalize().ok()?;
+    registered.iter().any(|p| p.canonicalize().ok().is_some_and(|p| {
+        if cfg!(windows) { p.to_string_lossy().eq_ignore_ascii_case(&root.to_string_lossy()) } else { p == root }
+    })).then_some(root)
+}
 
-                        let trust_entry = serde_json::json!({
-                            "hasTrustDialogAccepted": true,
-                            "allowedTools": []
-                        });
+pub fn enable_registered_project_mcp(project: &Path, registered: &[std::path::PathBuf]) -> std::io::Result<()> {
+    use std::io::{Error, ErrorKind};
+    let Some(root) = registered_project(project, registered) else { return Ok(()) };
+    let dir = root.join(".claude");
+    std::fs::create_dir_all(&dir)?;
+    if !dir.canonicalize()?.starts_with(&root) {
+        return Err(Error::new(ErrorKind::PermissionDenied, "settings directory outside project"));
+    }
+    let path = dir.join("settings.local.json");
+    if path.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err(Error::new(ErrorKind::PermissionDenied, "settings file is a symlink"));
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.share_mode(0x4);
+    }
+    let mut locked = match options.open(&path) {
+        Ok(file) => Some(file),
+        Err(e) if e.kind() == ErrorKind::NotFound => None,
+        Err(e) => return Err(e),
+    };
+    let original = if let Some(file) = locked.as_mut() {
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)?;
+        Some(bytes)
+    } else { None };
+    let mut json: serde_json::Value = match &original {
+        Some(bytes) => serde_json::from_slice(bytes).map_err(|e| Error::new(ErrorKind::InvalidData, e))?,
+        None => serde_json::json!({}),
+    };
+    let object = json.as_object_mut().ok_or_else(|| Error::new(ErrorKind::InvalidData, "settings must be an object"))?;
+    if object.get("enableAllProjectMcpServers") == Some(&serde_json::Value::Bool(true)) { return Ok(()); }
+    object.insert("enableAllProjectMcpServers".into(), serde_json::Value::Bool(true));
+    let temp = dir.join(format!(".agentrix-{}.tmp", Uuid::new_v4()));
+    let result = (|| {
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&temp)?;
+        serde_json::to_writer_pretty(&mut file, &json).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+        file.sync_all()?;
+        if original.is_none() {
+            std::fs::hard_link(&temp, &path)?;
+            std::fs::remove_file(&temp)
+        } else {
+            #[cfg(not(windows))]
+            if std::fs::read(&path)? != *original.as_ref().unwrap() {
+                return Err(Error::new(ErrorKind::WouldBlock, "settings changed concurrently"));
+            }
+            std::fs::rename(&temp, &path)
+        }
+    })();
+    if result.is_err() { let _ = std::fs::remove_file(&temp); }
+    result
+}
 
-                        projects
-                            .entry(&win_path)
-                            .or_insert_with(|| trust_entry.clone())
-                            .as_object_mut()
-                            .map(|o| o.insert("hasTrustDialogAccepted".to_string(), serde_json::json!(true)));
-
-                        projects
-                            .entry(&unix_path)
-                            .or_insert_with(|| trust_entry)
-                            .as_object_mut()
-                            .map(|o| o.insert("hasTrustDialogAccepted".to_string(), serde_json::json!(true)));
-
-                        if let Ok(updated) = serde_json::to_string_pretty(&json) {
-                            let _ = std::fs::write(&claude_json_path, updated);
-                        }
-                    }
-                }
+fn trust_registered_project_folder(project: &Path, registered: &[std::path::PathBuf], config: &Path) -> std::io::Result<()> {
+    use std::io::{Error, ErrorKind};
+    static TRUST_LOCK: Mutex<()> = Mutex::new(());
+    if registered_project(project, registered).is_none() { return Ok(()); }
+    let _guard = TRUST_LOCK.lock().map_err(|e| Error::other(e.to_string()))?;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.share_mode(0x5);
+    }
+    let mut file = None;
+    for attempt in 0..10 {
+        match options.open(config) {
+            Ok(opened) => { file = Some(opened); break; }
+            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(()),
+            Err(e) if matches!(e.raw_os_error(), Some(32 | 33)) && attempt < 9 => std::thread::sleep(Duration::from_millis(50)),
+            Err(e) => return Err(e),
+        }
+    }
+    let mut file = file.ok_or_else(|| Error::new(ErrorKind::WouldBlock, "configuration locked"))?;
+    let mut original = Vec::new();
+    file.read_to_end(&mut original)?;
+    let raw = project.to_string_lossy();
+    let paths = [raw.replace('/', "\\"), raw.replace('\\', "/")];
+    let merge = |bytes: &[u8]| -> std::io::Result<(serde_json::Value, bool)> {
+        let mut json: serde_json::Value = serde_json::from_slice(bytes).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+        let projects = json.get_mut("projects").and_then(|p| p.as_object_mut()).ok_or_else(|| Error::new(ErrorKind::InvalidData, "projects must be an object"))?;
+        if paths.iter().any(|path| projects.get(path).and_then(|p| p.get("hasTrustDialogAccepted")) == Some(&serde_json::Value::Bool(true))) {
+            return Ok((json, false));
+        }
+        let mut changed = false;
+        for path in &paths {
+            let entry = projects.entry(path).or_insert_with(|| serde_json::json!({"allowedTools": []}));
+            let entry = entry.as_object_mut().ok_or_else(|| Error::new(ErrorKind::InvalidData, "project must be an object"))?;
+            if entry.get("hasTrustDialogAccepted") != Some(&serde_json::Value::Bool(true)) {
+                entry.insert("hasTrustDialogAccepted".into(), serde_json::Value::Bool(true));
+                changed = true;
             }
         }
+        Ok((json, changed))
+    };
+    let (json, changed) = merge(&original)?;
+    if !changed { return Ok(()); }
+    let temp = config.with_file_name(format!(".agentrix-{}.tmp", Uuid::new_v4()));
+    let result = (|| {
+        let mut output = std::fs::OpenOptions::new().write(true).create_new(true).open(&temp)?;
+        serde_json::to_writer_pretty(&mut output, &json).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+        output.sync_all()?;
+        let mut current_file = options.open(config)?;
+        let mut current = Vec::new();
+        current_file.read_to_end(&mut current)?;
+        if current != original {
+            let (updated, changed) = merge(&current)?;
+            if !changed { return Ok(()); }
+            output.set_len(0)?;
+            use std::io::{Seek, SeekFrom};
+            output.seek(SeekFrom::Start(0))?;
+            serde_json::to_writer_pretty(&mut output, &updated).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+            output.sync_all()?;
+        }
+        std::fs::rename(&temp, config)
+    })();
+    let _ = std::fs::remove_file(&temp);
+    result
+}
+
+pub fn auto_trust_project_folder(project: &Path, registered: &[std::path::PathBuf]) -> std::io::Result<()> {
+    match dirs::home_dir() {
+        Some(home) => trust_registered_project_folder(project, registered, &home.join(".claude.json")),
+        None => Ok(()),
     }
 }
 
@@ -248,8 +349,6 @@ impl PtyManager {
 
         let safe_cwd = resolve_safe_cwd(cwd);
 
-        // 프로젝트 폴더 신뢰 자동 등록 (폴더 신뢰 질문 원천 스킵)
-        auto_trust_project_folder(&safe_cwd);
 
         // Claude 또는 Headroom 래퍼(hclaude) 실행 시 프로젝트 폴더 내 .claude 디렉터리 미리 보장
         if cli_def.id == "claude" || initial_command.as_deref() == Some("__WRAPPER__") {
@@ -886,6 +985,129 @@ fn build_platform_command(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn folder_trust_requires_registration_and_preserves_existing_config() {
+        let base = std::env::temp_dir().join(format!("forge-folder-trust-{}", uuid::Uuid::new_v4()));
+        let project = base.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let config = base.join("claude.json");
+        std::fs::write(&config, br#"{"projects":{},"keep":{"value":42}}"#).unwrap();
+        let before = std::fs::read(&config).unwrap();
+        super::trust_registered_project_folder(&project, &[], &config).unwrap();
+        assert_eq!(std::fs::read(&config).unwrap(), before);
+        super::trust_registered_project_folder(&project, std::slice::from_ref(&project), &config).unwrap();
+        let data: serde_json::Value = serde_json::from_slice(&std::fs::read(&config).unwrap()).unwrap();
+        assert_eq!(data["keep"]["value"], 42);
+        assert_eq!(data["projects"][project.to_string_lossy().replace('\\', "/")]["hasTrustDialogAccepted"], true);
+        let modified = std::fs::metadata(&config).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        super::trust_registered_project_folder(&project, std::slice::from_ref(&project), &config).unwrap();
+        assert_eq!(std::fs::metadata(&config).unwrap().modified().unwrap(), modified);
+        let single_path = project.to_string_lossy().replace('\\', "/");
+        let single = serde_json::json!({"projects":{single_path:{"hasTrustDialogAccepted":true}},"keep":42});
+        std::fs::write(&config, serde_json::to_vec(&single).unwrap()).unwrap();
+        let modified = std::fs::metadata(&config).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        super::trust_registered_project_folder(&project, std::slice::from_ref(&project), &config).unwrap();
+        assert_eq!(std::fs::metadata(&config).unwrap().modified().unwrap(), modified);
+        std::fs::write(&config, b"invalid").unwrap();
+        assert!(super::trust_registered_project_folder(&project, std::slice::from_ref(&project), &config).is_err());
+        assert_eq!(std::fs::read(&config).unwrap(), b"invalid");
+        std::fs::remove_dir_all(base).unwrap();
+    }
+    #[cfg(windows)]
+    #[test]
+    fn folder_trust_retries_locked_config_without_losing_concurrent_write() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use std::io::Write;
+        let base = std::env::temp_dir().join(format!("forge-folder-lock-{}", uuid::Uuid::new_v4()));
+        let project = base.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let config = base.join("claude.json");
+        std::fs::write(&config, br#"{"projects":{}}"#).unwrap();
+        let mut held = std::fs::OpenOptions::new().write(true).share_mode(0).open(&config).unwrap();
+        let p = project.clone(); let c = config.clone();
+        let worker = std::thread::spawn(move || super::trust_registered_project_folder(&p, std::slice::from_ref(&p), &c));
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        held.set_len(0).unwrap();
+        held.write_all(br#"{"projects":{},"concurrent":true}"#).unwrap();
+        held.sync_all().unwrap(); drop(held);
+        worker.join().unwrap().unwrap();
+        let data: serde_json::Value = serde_json::from_slice(&std::fs::read(&config).unwrap()).unwrap();
+        assert_eq!(data["concurrent"], true);
+        assert_eq!(data["projects"][project.to_string_lossy().replace('\\', "/")]["hasTrustDialogAccepted"], true);
+        std::fs::remove_dir_all(base).unwrap();
+    }
+    #[cfg(windows)]
+    #[test]
+    fn folder_trust_keeps_original_when_lock_does_not_clear() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let base = std::env::temp_dir().join(format!("forge-folder-locked-{}", uuid::Uuid::new_v4()));
+        let project = base.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let config = base.join("claude.json");
+        std::fs::write(&config, br#"{"projects":{},"keep":true}"#).unwrap();
+        let held = std::fs::OpenOptions::new().write(true).share_mode(0).open(&config).unwrap();
+        assert!(super::trust_registered_project_folder(&project, std::slice::from_ref(&project), &config).is_err());
+        drop(held);
+        assert_eq!(std::fs::read(&config).unwrap(), br#"{"projects":{},"keep":true}"#);
+        std::fs::remove_dir_all(base).unwrap();
+    }
+    #[cfg(windows)]
+    #[test]
+    fn folder_trust_concurrent_sessions_keep_both_project_entries() {
+        let base = std::env::temp_dir().join(format!("forge-folder-sessions-{}", uuid::Uuid::new_v4()));
+        let a = base.join("a"); let b = base.join("b");
+        std::fs::create_dir_all(&a).unwrap(); std::fs::create_dir_all(&b).unwrap();
+        let config = base.join("claude.json");
+        std::fs::write(&config, br#"{"projects":{}}"#).unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let workers: Vec<_> = [a.clone(), b.clone()].into_iter().map(|p| {
+            let c = config.clone(); let gate = barrier.clone();
+            std::thread::spawn(move || { gate.wait(); super::trust_registered_project_folder(&p, std::slice::from_ref(&p), &c) })
+        }).collect();
+        for worker in workers { worker.join().unwrap().unwrap(); }
+        let data: serde_json::Value = serde_json::from_slice(&std::fs::read(&config).unwrap()).unwrap();
+        for project in [a,b] {
+            assert_eq!(data["projects"][project.to_string_lossy().replace('\\', "/")]["hasTrustDialogAccepted"], true);
+        }
+        std::fs::remove_dir_all(base).unwrap();
+    }
+    #[test]
+    fn mcp_trust_requires_existing_registration_and_preserves_settings() {
+        let root = std::env::temp_dir().join(format!("agentrix-mcp-trust-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        super::enable_registered_project_mcp(&root, &[]).unwrap();
+        let settings = root.join(".claude").join("settings.local.json");
+        assert!(!settings.exists());
+        super::enable_registered_project_mcp(&root, &[root.join(".." ).join(root.file_name().unwrap())]).unwrap();
+        assert_eq!(serde_json::from_slice::<serde_json::Value>(&std::fs::read(&settings).unwrap()).unwrap()["enableAllProjectMcpServers"], true);
+        std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+        std::fs::write(&settings, r#"{"custom":{"value":42}}"#).unwrap();
+        super::enable_registered_project_mcp(&root, &[root.clone()]).unwrap();
+        let data: serde_json::Value = serde_json::from_slice(&std::fs::read(&settings).unwrap()).unwrap();
+        assert_eq!(data["custom"]["value"], 42);
+        assert_eq!(data["enableAllProjectMcpServers"], true);
+        std::fs::write(&settings, b"not-json").unwrap();
+        assert!(super::enable_registered_project_mcp(&root, &[root.clone()]).is_err());
+        assert_eq!(std::fs::read(&settings).unwrap(), b"not-json");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[cfg(windows)]
+    #[test]
+    fn mcp_trust_does_not_overwrite_locked_settings() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let root = std::env::temp_dir().join(format!("agentrix-mcp-lock-{}", uuid::Uuid::new_v4()));
+        let dir = root.join(".claude");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.local.json");
+        std::fs::write(&path, b"{}").unwrap();
+        let held = std::fs::OpenOptions::new().write(true).share_mode(0x4).open(&path).unwrap();
+        assert!(super::enable_registered_project_mcp(&root, std::slice::from_ref(&root)).is_err());
+        drop(held);
+        assert_eq!(std::fs::read(&path).unwrap(), b"{}");
+        std::fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn first_input_tracking_ignores_only_complete_terminal_controls() {
         assert!(super::is_terminal_control_only(b"\x1b[1;2R\x1b[?1;2c"));

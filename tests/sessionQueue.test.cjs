@@ -262,10 +262,10 @@ test("T1793842681518_2: 끝난 작업의 report·mail만 제거(완료·취소·
   const mailOf = (id) => mails[id] && { subject: mails[id], body: "", isResult: id === "m7" };
   const list = [
     item("mail:m1", "mail"), item("mail:m2", "mail"), item("mail:m3", "mail"), item("mail:m4", "mail"), item("mail:m5", "mail"), item("mail:m6", "mail"), item("mail:m7", "mail"),
-    item("mail:m8", "mail", { stuck: true }),
+    item("mail:m8", "mail", { stuck: true }), // 닫힌 작업의 stuck mail도 제거
     item("report:T100000_1:a", "report"), item("report:T100000_2:a", "report"), item("report:T100000_3:a", "report"), item("report:T100000_7:a", "report"),
   ];
-  assert.deepEqual([...sq.endedQueueIds(list, tasks, mailOf)], ["mail:m1", "mail:m2", "mail:m3", "report:T100000_2:a", "report:T100000_3:a", "report:T100000_7:a"]);
+  assert.deepEqual([...sq.endedQueueIds(list, tasks, mailOf)], ["mail:m1", "mail:m2", "mail:m3", "mail:m8", "report:T100000_2:a", "report:T100000_3:a", "report:T100000_7:a"]);
   // _1 은 _10 과 구별
   assert.deepEqual([...sq.endedQueueIds([item("mail:x", "mail")], tasks, () => ({ subject: "T100000_1", body: "T100000_10", isResult: false }))], []);
 });

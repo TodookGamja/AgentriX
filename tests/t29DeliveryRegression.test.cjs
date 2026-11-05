@@ -42,7 +42,7 @@ test('unconfirmed automatic deliveries retain their reservation', () => {
 test('assignment, approval, mail and report use the shared FIFO gate', () => {
   const app = fs.readFileSync('src/App.tsx', 'utf8');
   const queue = fs.readFileSync('src/lib/sessionQueue.ts', 'utf8');
-  assert.match(app, /queues\[key\]\?\.\[0\]\?\.id !== meta\.id/);
+  assert.match(app, /queues\[key\]\?\.find\(\(item\) => !item\.unconfirmed\)\?\.id !== meta\.id/);
   assert.match(app, /source: "assign"/);
   assert.match(app, /source: "mail"/);
   assert.match(app, /source: "report"/);

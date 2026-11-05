@@ -1119,8 +1119,14 @@ async fn install_token_tool(tool_id: String) -> Result<tools::InstallResult, Str
 }
 
 #[tauri::command]
-fn trust_project_folder(project_path: String) -> Result<(), String> {
-    pty::auto_trust_project_folder(&project_path);
+fn trust_project_folder(state: State<'_, AppState>, project_path: String) -> Result<(), String> {
+    let registered = {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        db::get_project_folders(&conn).map_err(|e| e.to_string())?
+            .into_iter().map(|p| std::path::PathBuf::from(p.path)).collect::<Vec<_>>()
+    };
+    pty::enable_registered_project_mcp(std::path::Path::new(&project_path), &registered).map_err(|e| e.to_string())?;
+    pty::auto_trust_project_folder(std::path::Path::new(&project_path), &registered).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -1248,6 +1254,17 @@ async fn start_session(
     collab_protocol: Option<String>,
     start_fresh: Option<bool>,
 ) -> Result<SessionInfo, String> {
+    let registered = {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        db::get_project_folders(&conn).map_err(|e| e.to_string())?
+            .into_iter().map(|p| std::path::PathBuf::from(p.path)).collect::<Vec<_>>()
+    };
+    if let Some(path) = cwd.as_deref() {
+        pty::auto_trust_project_folder(std::path::Path::new(path), &registered).map_err(|e| e.to_string())?;
+        if cli_id == "claude" {
+            pty::enable_registered_project_mcp(std::path::Path::new(path), &registered).map_err(|e| e.to_string())?;
+        }
+    }
     let (mut cli_def, mut injected_env, mut agent_meta, headroom_enabled) = {
         let conn = state.db.lock().map_err(|e| e.to_string())?;
         if let Some(ref dir) = cwd {

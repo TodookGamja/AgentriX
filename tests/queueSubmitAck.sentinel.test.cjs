@@ -117,6 +117,6 @@ test("T1793752130651_6: 대기열은 세션키 격리·FIFO head(사용자 stuck
   assert.match(store, /export const queueKey =/);
   // App 디스패치가 meta head가 아니면 앞 전달 대기로 보류 → stuck user head가 메일을 막음
   const app = read("src/App.tsx");
-  assert.match(app, /queues\[key\]\?\.\[0\]\?\.id !== meta\.id/);
+  assert.match(app, /queues\[key\]\?\.find\(\(item\) => !item\.unconfirmed\)\?\.id !== meta\.id/);
   assert.match(app, /앞 전달 대기/);
 });

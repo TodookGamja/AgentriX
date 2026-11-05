@@ -2203,7 +2203,8 @@ ${recentSnippet || "진행 내역 기록 없음"}
       const existing = q.queues[key]?.find((item) => item.id === meta.id);
       if (existing?.stuck) { sendBlockReasonRef.current[session.id] = existing.reason ?? "입력창에 멈춤: 전달 결과 미확인"; return false; }
       q.upsert(key, { ...meta, payload: prompt, createdAt: Date.now(), reason: "앞 전달 대기" });
-      if (useSessionQueue.getState().queues[key]?.[0]?.id !== meta.id) {
+      // 미확인(unconfirmed) 항목은 재전송하지 않되 뒤 항목을 막지 않는다
+      if (useSessionQueue.getState().queues[key]?.find((item) => !item.unconfirmed)?.id !== meta.id) {
         sendBlockReasonRef.current[session.id] = "앞 전달 대기";
         return false;
       }

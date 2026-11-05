@@ -159,7 +159,8 @@ export function endedQueueIds(
   const status = new Map(tasks.map((t) => [t.taskId, t.status]));
   const out: string[] = [];
   for (const it of list ?? []) {
-    if (it.stuck || it.unconfirmed) continue;
+    // 닫힌 작업의 mail은 미확인/멈춤이어도 제거한다(재전송 근거가 없고 뒤 항목만 막는다). report는 기존대로 보존
+    if ((it.stuck || it.unconfirmed) && it.source !== "mail") continue;
     if (it.source === "report") {
       if (status.get(it.id.slice(7).split(":")[0]) !== "done") out.push(it.id);
     } else if (it.source === "mail") {
