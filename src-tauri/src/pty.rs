@@ -657,8 +657,8 @@ fn codex_role_config(role: &str) -> Option<String> {
         } else {
             write!(value, "\\U{:08X}", ch as u32).ok()?;
         }
-        // 16,000 encoded bytes passed a Windows PowerShell-to-Node probe; longer roles use PTY submission.
-        if value.len() > 16_000 { return None; }
+        // Leave room for the wrapper and other arguments within Windows cmd's 8191-character limit.
+        if value.len() > 6_000 { return None; }
     }
     value.push_str("\\\"");
     Some(value)
@@ -992,8 +992,8 @@ mod tests {
         let config = codex_role_config("a \"'\n한😀").unwrap();
         assert_eq!(config, "developer_instructions=\\\"\\u0061\\u0020\\u0022\\u0027\\u000A\\uD55C\\U0001F600\\\"");
         assert!(codex_role_config(&"a".repeat(3000)).is_none());
-        assert!(codex_role_config(&"a".repeat(2662)).is_some());
-        assert!(codex_role_config(&"a".repeat(2663)).is_none());
+        assert!(codex_role_config(&"a".repeat(995)).is_some());
+        assert!(codex_role_config(&"a".repeat(1000)).is_none());
     }
 
     #[test]
