@@ -158,6 +158,25 @@ mod submission_tests {
         assert_eq!(antigravity_with_agent(&root, started, &[], Some(("one", "Other"))).unwrap().source, "agy:ambiguous");
         std::fs::remove_dir_all(root).unwrap();
     }
+
+    #[test]
+    fn agy_resumed_log_requires_unique_agent_identity() {
+        let root = std::env::temp_dir().join(format!("agentrix-agy-resume-{}", uuid::Uuid::new_v4()));
+        let dir = root.join("log").join(".system_generated").join("logs");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("transcript.jsonl");
+        let first = serde_json::json!({"type":"USER_INPUT", "created_at":(chrono::Utc::now()-chrono::Duration::hours(1)).to_rfc3339(), "content":".ai-agents/agents/prism/ROLE.md"});
+        std::fs::write(&path, format!("{first}\n")).unwrap();
+        let started = chrono::Utc::now() - chrono::Duration::minutes(1);
+        assert_eq!(antigravity_with_agent(&root, started, &[], Some(("prism", "Prism"))).unwrap().source, path.to_string_lossy());
+        assert_eq!(antigravity_with_agent(&root, started, &[], Some(("other", "Other"))).unwrap().source, "agy:no-log");
+        assert_eq!(antigravity_with_agent(&root, started, &[path.to_string_lossy().into_owned()], Some(("prism", "Prism"))).unwrap().source, "agy:no-log");
+        let other_dir = root.join("other").join(".system_generated").join("logs");
+        std::fs::create_dir_all(&other_dir).unwrap();
+        std::fs::write(other_dir.join("transcript.jsonl"), format!("{first}\n")).unwrap();
+        assert_eq!(antigravity_with_agent(&root, started, &[], Some(("prism", "Prism"))).unwrap().source, "agy:ambiguous");
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -474,11 +493,7 @@ fn antigravity_with_agent(brain: &Path, started: DateTime<Utc>, claimed: &[Strin
             .next()
             .and_then(|l| serde_json::from_str::<Value>(l).ok())
             .and_then(|v| v.get("created_at").and_then(|x| x.as_str()).and_then(parse_ts))?;
-        if ts < started - chrono::Duration::seconds(10) {
-            continue;
-        }
-        matches += 1;
-        if let Some((id, name)) = agent {
+        let identified_agent = if let Some((id, name)) = agent {
             let first_user = content.lines().filter_map(|line| serde_json::from_str::<Value>(line).ok()).find(|v| v.get("type").and_then(Value::as_str) == Some("USER_INPUT"));
             let text = first_user.as_ref().and_then(|v| v.get("content")).and_then(Value::as_str).unwrap_or("").replace('\\', "/");
             let role_path = format!(".ai-agents/agents/{id}/ROLE.md");
@@ -487,10 +502,13 @@ fn antigravity_with_agent(brain: &Path, started: DateTime<Utc>, claimed: &[Strin
                     label == name || label.strip_suffix(name).is_some_and(|prefix| prefix.ends_with(char::is_whitespace))
                 })
             });
-            if (!id.is_empty() && text.contains(&role_path)) || named_header {
-                identified_count += 1;
-                if identified_count == 1 { identified = Some((ts, path.clone(), content.clone())); }
-            }
+            (!id.is_empty() && text.contains(&role_path)) || named_header
+        } else { false };
+        if ts < started - chrono::Duration::seconds(10) && !identified_agent { continue; }
+        matches += 1;
+        if identified_agent {
+            identified_count += 1;
+            if identified_count == 1 { identified = Some((ts, path.clone(), content.clone())); }
         }
         if best.as_ref().map(|b| ts < b.0).unwrap_or(true) {
             best = Some((ts, path, content));

@@ -85,11 +85,13 @@ export function dropStaleAuto(map: QueueMap, isFresh: (key: string, id: string) 
 export function settledAutoIds(
   list: QueueItem[] | undefined,
   doneTaskIds: ReadonlySet<string>,
-  hasResultMail: (taskId: string, reporterId: string) => boolean
+  hasResultMail: (taskId: string, reporterId: string) => boolean,
+  // 담당자가 이미 그 작업 ID를 언급한 메일을 보낸 assign ID(받아서 착수했다는 신호)
+  ackedTaskIds: ReadonlySet<string> = new Set()
 ): string[] {
   const out: string[] = [];
   for (const it of list ?? []) {
-    if (it.source === "assign" && doneTaskIds.has(it.id.slice(7))) out.push(it.id);
+    if (it.source === "assign" && (doneTaskIds.has(it.id.slice(7)) || ackedTaskIds.has(it.id.slice(7)))) out.push(it.id);
     else if (it.source === "report") {
       const [taskId, reporterId] = it.id.slice(7).split(":");
       if (taskId && reporterId && hasResultMail(taskId, reporterId)) out.push(it.id);

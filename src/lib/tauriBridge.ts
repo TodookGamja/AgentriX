@@ -8,7 +8,7 @@ export async function apiInstallNpmCliUpdate(packageName: string): Promise<void>
   return invoke("install_npm_cli_update", { package: packageName });
 }
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
-import { getUserInputVersion, recordSessionInput, recordSessionSubmission } from "./inputHistory";
+import { getUserInputVersion, getLastSubmission, hasPendingSessionInput, recordSessionInput, recordSessionSubmission } from "./inputHistory";
 import { applyHandoffHint, getRoleState, markRolePrefix, restoreHandoffHint } from "./handoffRelay";
 import { roleBriefText } from "./blackboardDispatch";
 import { useAppStore } from "./store";
@@ -18,6 +18,7 @@ const AGY_FULL_BODY_RETRY_TIMEOUT_MS = 10_000;
 const agyFullBodyRetried = new Set<string>(); // 세션·본문별 retry_full_body 사용 기록(앱 실행 중 유지)
 import type { DeliveryAttempt } from "./deliveryAttempt";
 import { codexPastePending, CursorBusyError, cursorPastedSubmission, cursorTurnBusy, readCursorTurn, readTerminalScreen, setTerminalScreen } from "./cursorScreen";
+import { AGY_IDLE_FALLBACK_MS, idleScreenFallback } from "./deliveryGate";
 import type {
   ApiKeyStatus,
   ApplyResult,
@@ -389,7 +390,11 @@ export async function apiWriteToSession(sessionId: string, data: string, injecte
       const cursorAtWrite = session?.cliId === "cursor" ? readTerminalScreen(sessionId) : null;
       if (session?.cliId === "cursor") {
         const quiet = await apiGetSessionQuietSince(sessionId, 3000).catch(() => null);
-        if (!cursorAtWrite || !quiet || !readCursorTurn(sessionId, quiet)?.completedAt) throw new CursorBusyError();
+        if (!cursorAtWrite || !quiet || !readCursorTurn(sessionId, quiet)?.completedAt) {
+          const screen = await apiGetSessionScreen(sessionId, 30).catch(() => null);
+          const idleSince = await apiGetSessionQuietSince(sessionId, AGY_IDLE_FALLBACK_MS).catch(() => null);
+          if ((cursorAtWrite && cursorTurnBusy(cursorAtWrite)) || !idleScreenFallback("cursor", screen, idleSince, getLastSubmission(sessionId), hasPendingSessionInput(sessionId))) throw new CursorBusyError();
+        }
       }
       if (verify && getUserInputVersion(sessionId) !== inputVersion) throw new Error("사용자 입력으로 전달이 중단되었습니다.");
         verify?.onCommit?.(body, Date.now());

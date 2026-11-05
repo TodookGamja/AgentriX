@@ -1155,7 +1155,7 @@ async fn session_user_message_submitted(state: State<'_, AppState>, session_id: 
             }
             "antigravity" => {
                 expected_source.and_then(|expected| context::read_context_with_agent("antigravity", &session_id, &session.cwd, &session.started_at, claimed.as_deref().unwrap_or(&[]), session.agent_id.as_deref().zip(session.agent_name.as_deref()))
-                    .filter(|ctx| !ctx.source.starts_with("agy:") && (ctx.source == expected || matches!(expected.as_str(), "agy:no-log" | "agy:ambiguous" | "agy:unavailable"))).map(|ctx| std::path::PathBuf::from(ctx.source)))
+                    .filter(|ctx| !ctx.source.starts_with("agy:") && (ctx.source == expected || matches!(expected.as_str(), "agy:no-log" | "agy:ambiguous" | "agy:unavailable" | "agy:unavailable_no_log"))).map(|ctx| std::path::PathBuf::from(ctx.source)))
             }
             _ => None,
         };
@@ -1195,12 +1195,9 @@ async fn get_session_context(
         } else {
             context::read_context(&cli_id, &session_id, &cwd, &started_at, &claimed)
         };
-        if cli_id == "antigravity" {
-            let pristine = pty.is_pristine_antigravity(&session_id);
-            if result.as_ref().is_some_and(|ctx| (ctx.source == "agy:no-log" && !pristine) || (!ctx.source.starts_with("agy:") && pristine)) {
-                return Ok(None);
-            }
-        }
+        let result = if cli_id == "antigravity" {
+            agy_pristine_context(result, pty.is_pristine_antigravity(&session_id))
+        } else { result };
         if cli_id == "codex" {
             if let Some(result) = &result {
                 let _guard = MANAGED_SESSION_LOCK.lock().map_err(|e| e.to_string())?;
@@ -1386,6 +1383,17 @@ async fn start_session(
     }).await.map_err(|e| e.to_string())?
 }
 
+fn agy_pristine_context(mut context: Option<context::ContextUsage>, pristine: bool) -> Option<context::ContextUsage> {
+    if context.is_none() {
+        return Some(context::ContextUsage { tokens: 0, window: None, source: "agy:unavailable".into(), started_at: None, completed_at: None, source_modified_at: None });
+    }
+    if let Some(ctx) = context.as_mut() {
+        if ctx.source == "agy:no-log" && !pristine { ctx.source = "agy:unavailable_no_log".into(); }
+        if !ctx.source.starts_with("agy:") && pristine { return None; }
+    }
+    context
+}
+
 fn available_resume(candidate: Option<String>, sessions: &[(String, Option<String>)]) -> Option<String> {
     candidate.filter(|id| !sessions.iter().any(|(session, resumed)| session == id || resumed.as_ref() == Some(id)))
 }
@@ -1415,6 +1423,14 @@ fn headroom_command(command: Option<String>, enabled: bool) -> Option<String> {
 #[cfg(test)]
 mod headroom_launch_tests {
     use super::headroom_command;
+
+    #[test]
+    fn agy_missing_log_after_input_is_unavailable_not_a_fresh_session() {
+        let ctx = crate::context::ContextUsage { tokens: 0, window: None, source: "agy:no-log".into(), started_at: None, completed_at: None, source_modified_at: None };
+        assert_eq!(super::agy_pristine_context(Some(ctx.clone()), false).unwrap().source, "agy:unavailable_no_log");
+        assert_eq!(super::agy_pristine_context(Some(ctx), true).unwrap().source, "agy:no-log");
+        assert_eq!(super::agy_pristine_context(None, false).unwrap().source, "agy:unavailable");
+    }
 
     #[test]
     fn conflicting_resume_uses_fresh_session() {

@@ -119,7 +119,7 @@ import { hasTaskResultMail, boardProtocol, collabProtocol, confirmedResultMail, 
 import { getTeamMailDeliveries, orphanReservation, pruneStaleDeliveries, pruneStaleMailDeliveries, removeTeamMailDelivery, reserveTeamMailDelivery, saveTeamMailDelivery } from "./lib/teamMailDelivery";
 import { clearDispatchNotes, findApproval, getApprovalMode, getDispatchNotes, setDispatchNote, upsertApproval } from "./lib/taskApproval";
 import { countNewChars } from "./lib/tokenEstimate";
-import { AGY_IDLE_FALLBACK_MS, agyFirstPromptReady, agyIdleFallback, idleScreenFallback, claudeIdleFallback, codexInterruptedIdle, deliveryGate, logTurnStillBusy, tabIsActive, type PendingDelivery } from "./lib/deliveryGate";
+import { AGY_IDLE_FALLBACK_MS, agyFirstPromptReady, agyIdleFallback, agyMissingContextFallback, idleScreenFallback, claudeIdleFallback, codexInterruptedIdle, deliveryGate, logTurnStillBusy, tabIsActive, type PendingDelivery } from "./lib/deliveryGate";
 import { DeliveryAttempt, withDeliveryDeadline } from "./lib/deliveryAttempt";
 import { CursorBusyError, forgetTerminalScreen, readTerminalScreen, readTerminalTranscript, readCursorTurn } from "./lib/cursorScreen";
 import { useSessionQueue, queueKey } from "./lib/sessionQueueStore";
@@ -2114,25 +2114,37 @@ ${recentSnippet || "진행 내역 기록 없음"}
         if (quiet !== null && quiet >= turn.startedAt && !hasPendingSessionInput(session.id) && idleScreenFallback(session.cliId, screen, quiet, getLastSubmission(session.id), agyUnresolved())) return { tokens: 0, window: null, source: `cursor-screen:${session.id}`, ...turn, completedAt: quiet, screenFallback: true };
       }
       if (turn) return { tokens: 0, window: null, source: `cursor-screen:${session.id}`, ...turn };
-      if (readTerminalScreen(session.id) && getLastSubmission(session.id) > 0) return null;
+      if (readTerminalScreen(session.id) && getLastSubmission(session.id) > 0) {
+        if (!agyUnresolved() && !hasPendingSessionInput(session.id)) {
+          const screen = await apiGetSessionScreen(session.id, 30).catch(() => null);
+          const quiet = await apiGetSessionQuietSince(session.id, AGY_IDLE_FALLBACK_MS).catch(() => null);
+          if (idleScreenFallback("cursor", screen, quiet, getLastSubmission(session.id), agyUnresolved() || hasPendingSessionInput(session.id))) {
+            return { tokens: 0, window: null, source: `screen:cursor:${session.id}`, startedAt: null, completedAt: quiet, sourceModifiedAt: null, screenFallback: true };
+          }
+        }
+        return null;
+      }
     }
     const ctx = await apiGetSessionContext(session, claimed).catch(() => null);
     const lastSubmit = getLastSubmission(session.id);
-    if (session.cliId === "antigravity" && (!ctx || ctx.source === "agy:ambiguous") && !agyUnresolved() && !hasPendingSessionInput(session.id)) {
+    if (session.cliId === "antigravity" && (!ctx || ctx.source === "agy:ambiguous" || ctx.source === "agy:unavailable" || ctx.source === "agy:unavailable_no_log" || (ctx.source === "agy:no-log" && (lastSubmit > 0 || session.resumed))) && !agyUnresolved() && !hasPendingSessionInput(session.id)) {
       const screen = await apiGetSessionScreen(session.id, 30).catch(() => null);
       const latest = await apiGetSessionContext(session, claimed).catch(() => null);
       const quiet = await apiGetSessionQuietSince(session.id, AGY_IDLE_FALLBACK_MS).catch(() => null);
-      if ((latest?.source ?? null) === (ctx?.source ?? null) && !hasPendingSessionInput(session.id) && idleScreenFallback(session.cliId, screen, quiet, getLastSubmission(session.id), agyUnresolved())) {
-        return { tokens: 0, window: null, source: ctx?.source ?? "agy:unavailable", startedAt: null, completedAt: quiet, sourceModifiedAt: null };
+      if (agyMissingContextFallback(ctx?.source ?? null, latest?.source ?? null, screen, quiet, getLastSubmission(session.id), agyUnresolved() || hasPendingSessionInput(session.id))) {
+        return { tokens: 0, window: null, source: !ctx || ctx.source === "agy:no-log" ? "agy:unavailable" : ctx.source, startedAt: null, completedAt: quiet, sourceModifiedAt: null, screenFallback: true };
       }
     }
-    if ((session.cliId === "claude" || session.cliId === "codex") && !ctx && !agyUnresolved() && !hasPendingSessionInput(session.id)) {
-      const screen = await apiGetSessionScreen(session.id, 30).catch(() => null);
-      const latest = await apiGetSessionContext(session, claimed).catch(() => null);
-      const quiet = await apiGetSessionQuietSince(session.id, AGY_IDLE_FALLBACK_MS).catch(() => null);
-      if (!latest && !hasPendingSessionInput(session.id) && idleScreenFallback(session.cliId, screen, quiet, getLastSubmission(session.id), agyUnresolved())) {
-        return { tokens: 0, window: null, source: `screen:${session.cliId}:${session.id}`, startedAt: null, completedAt: quiet, sourceModifiedAt: null };
+    if (["claude", "codex", "cursor"].includes(session.cliId) && !ctx) {
+      if (!agyUnresolved() && !hasPendingSessionInput(session.id)) {
+        const screen = await apiGetSessionScreen(session.id, 30).catch(() => null);
+        const latest = await apiGetSessionContext(session, claimed).catch(() => null);
+        const quiet = await apiGetSessionQuietSince(session.id, AGY_IDLE_FALLBACK_MS).catch(() => null);
+        if (!latest && !hasPendingSessionInput(session.id) && idleScreenFallback(session.cliId, screen, quiet, getLastSubmission(session.id), agyUnresolved())) {
+          return { tokens: 0, window: null, source: `screen:${session.cliId}:${session.id}`, startedAt: null, completedAt: quiet, sourceModifiedAt: null };
+        }
       }
+      return null;
     }
     if (session.cliId === "antigravity" && ctx?.source === "agy:no-log") {
       if (session.resumed || lastSubmit || hasPendingSessionInput(session.id)) return null;
@@ -2164,6 +2176,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
       return ctx;
     }
     if (session.cliId === "antigravity") return ctx;
+    if (!["claude", "codex", "cursor"].includes(session.cliId) && (!ctx || (!ctx.startedAt && !ctx.completedAt))) return null;
     // A running or ambiguous log takes precedence over terminal silence.
     if (logTurnStillBusy(session.cliId, ctx)) {
       if (session.cliId === "claude" && ctx?.startedAt && !ctx.completedAt) {
@@ -2294,6 +2307,8 @@ ${recentSnippet || "진행 내역 기록 없음"}
         acquiredBootstrap = true;
       }
       const claimed = Object.entries(contextSourceRef.current).filter(([id]) => id !== session.id).map(([, src]) => src);
+      const sessionStartedMs = Date.parse(session.startedAt);
+      attempt.step(`session_started_${Number.isFinite(sessionStartedMs) ? sessionStartedMs : "unknown"}`);
       attempt.step("turn");
       const ctx = await getTurnContext(session, claimed);
       attempt.check();
@@ -2302,6 +2317,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
       attempt.step(`context_${contextKind}_${sourceId}`, ctx?.source);
       if (!ctx?.completedAt || ctx.completedAt <= getLastSubmission(session.id)) {
         logSig = `_ctx${ctx ? "1" : "0"}_s${(ctx as { startedAt?: number | null } | null)?.startedAt ? "1" : "0"}_c${ctx?.completedAt ? "1" : "0"}_${(ctx?.source ?? "none").startsWith("pty:") ? "pty" : "log"}`;
+        if (!ctx && !["claude", "codex", "cursor", "antigravity"].includes(session.cliId)) return blocked(`유휴 판정 불가(${session.cliId}) — 지금 보내기 가능`);
         return blocked("팀원이 응답 중(턴 종료 신호 대기)");
       }
       if (ctx.source === "agy:no-log" && agyBootstrapRef.current?.sessionId !== session.id) return blocked("앞 agy 첫 전달 확인 중");
@@ -2336,7 +2352,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
       let screenAttempt: { body: string; at: number } | undefined;
       const baseline = "startedAt" in ctx ? ctx.startedAt ?? 0 : 0;
       await apiWriteToSession(session.id, prompt, true, {
-        allowAgyRetry: !["agy:ambiguous", "agy:unavailable"].includes(ctx.source),
+          allowAgyRetry: !["agy:ambiguous", "agy:unavailable"].includes(ctx.source) && ctx.source !== "agy:unavailable_no_log",
         allowRetry: !ctx.source.startsWith("screen:"),
         hasStarted: async () => {
             if (session.cliId === "antigravity") {
@@ -2754,11 +2770,14 @@ ${recentSnippet || "진행 내역 기록 없음"}
             if (stale.length) st.unmark(stale);
           }
           if (!list?.length) continue;
-            if (list.some((it) => it.source === "mail")) mails ??= await apiRouteTeamMail(project).catch(() => []);
+            if (list.some((it) => it.source === "mail" || it.source === "assign")) mails ??= await apiRouteTeamMail(project).catch(() => []);
+          const acked = new Set(list.filter((it) => it.source === "assign").map((it) => it.id.slice(7)).filter((id) => (mails ?? []).some((m) => m.from === s.agentId && (`${m.subject} ${m.body}`.match(/[A-Za-z0-9_]+/g) ?? [] as string[]).includes(id))));
           const settled = settledAutoIds(
             list,
             new Set(tasks.filter((t) => t.status === "done" && t.agentId === s.agentId).map((t) => t.taskId)),
-              () => false
+              () => false,
+            // 담당자 본인이 보낸 메일에 그 작업 ID가 있으면 이미 받아 착수한 것: 대기열에서 닫는다
+            acked
           );
           // 🔥에서 대기로 되돌림·삭제·담당 변경된 지난 배정도 제거(보드를 정상으로 읽은 경우에만 이 블록에 들어옴)
           const revoked = tasks.length === 0 ? [] : revokedAssignIds(list, new Set(boardTasks.filter((t) => t.status === "start" && t.agentId === s.agentId).map((t) => t.taskId)));
@@ -2805,7 +2824,9 @@ ${recentSnippet || "진행 내역 기록 없음"}
               if (!kind) await apiAcknowledgeTeamMail(project, s.agentId, itemId).catch(() => {});
               else useSessionQueue.getState().markHandled(`${key}|${id}`);
             }
-            removeTeamMailDelivery(project, s.agentId, itemId, kind);
+            // 담당자가 이미 받은 배정: 재전달(sent)·재등록(handled)을 막아 작업판이 '진행 중'으로 보이게 한다
+          if (id.startsWith("assign:") && acked.has(itemId)) { useSessionQueue.getState().markHandled(`${key}|${id}`); sent.add(`${itemId}:start:${s.agentId}`); localStorage.setItem(storeKey, JSON.stringify([...sent])); }
+          removeTeamMailDelivery(project, s.agentId, itemId, kind);
             delete pendingDeliveryRef.current[s.id]; // 앞 전달 확인 대기(deliveryGate)가 다음 항목을 계속 막지 않게
           }
         }

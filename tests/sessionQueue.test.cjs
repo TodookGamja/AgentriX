@@ -269,3 +269,11 @@ test("T1793842681518_2: 끝난 작업의 report·mail만 제거(완료·취소·
   // _1 은 _10 과 구별
   assert.deepEqual([...sq.endedQueueIds([item("mail:x", "mail")], tasks, () => ({ subject: "T100000_1", body: "T100000_10", isResult: false }))], []);
 });
+
+test("T1793860863515_1: 담당자가 이미 받은(ack) assign만 닫히고 다른 ID는 유지", () => {
+  const q = [it("assign:T20", "assign", { reason: "팀원이 응답 중" }), it("assign:T21", "assign")];
+  assert.deepEqual([...api.settledAutoIds(q, new Set(), () => false, new Set(["T20"]))], ["assign:T20"]);
+  assert.deepEqual([...api.settledAutoIds(q, new Set(), () => false)], []);
+  const app = require("node:fs").readFileSync("src/App.tsx", "utf8");
+  assert.match(app, /m\.from === s\.agentId/);
+});

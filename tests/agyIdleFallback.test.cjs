@@ -6,6 +6,26 @@ const ts = require("typescript");
 const api = {};
 vm.runInNewContext(ts.transpileModule(fs.readFileSync("src/lib/deliveryGate.ts", "utf8"), { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, { exports: api });
 
+test("missing agy context allows only a stable idle screen without unresolved delivery", () => {
+  const screen = { lines: ["finished", "> ", "? for shortcuts"], rows: 20, cursorRow: 18, cursorCol: 2 };
+  const ready = (source, latest, s = screen, pending = false) => api.agyMissingContextFallback(source, latest, s, 200, 150, pending, 60_200);
+  assert.equal(ready(null, null), true);
+  assert.equal(ready("agy:no-log", "agy:no-log"), true);
+  assert.equal(ready("agy:unavailable_no_log", "agy:unavailable_no_log"), true);
+  assert.equal(ready(null, null, { ...screen, lines: ["Working...", "> ", "? for shortcuts"] }), false);
+  assert.equal(ready(null, null, screen, true), false);
+  assert.equal(ready(null, "actual-transcript"), false);
+});
+
+test("quiet spinner or tool activity never qualifies as an idle prompt", () => {
+  for (const [cli, prompt, footer] of [["antigravity", ">", "? for shortcuts"], ["claude", "❯", "? for shortcuts"], ["codex", "›", "gpt-5.1-codex"], ["cursor", "→", "Ready"]]) {
+    for (const work of ["⠋ thinking", "Running tool..."]) {
+      const screen = { lines: [work, prompt, footer], rows: 3, cursorRow: 1, cursorCol: 1 };
+      assert.equal(api.idleScreenFallback(cli, screen, 200, 150, false, 60_200), false, `${cli}: ${work}`);
+    }
+  }
+});
+
 test("agy idle fallback requires a known log, quiet PTY, empty prompt at cursor and no pending delivery", () => {
   const ctx = { source: "transcript.jsonl", startedAt: 100, completedAt: null, sourceModifiedAt: 200 };
   const screen = { lines: ["finished", "> ", "? for shortcuts"], rows: 20, cursorRow: 18, cursorCol: 2 };

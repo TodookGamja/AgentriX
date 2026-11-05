@@ -4,7 +4,7 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 const ts = require("typescript");
 
-function setup(pasteMode = true, quiet = Date.now()) {
+function setup(pasteMode = true, quiet = Date.now(), backendScreen = null) {
   const session = { id: "resumed", agentId: "agent-1", cliId: "codex", cwd: "project", startedAt: "2026-11-02T00:00:00Z", rolePrompt: "역할 지침", roleInSystem: false };
   const writes = [];
   const routes = [];
@@ -16,6 +16,7 @@ function setup(pasteMode = true, quiet = Date.now()) {
     if (name === "get_session_context") return { source: "log", startedAt: enters >= 2 ? 200 : 100 };
     if (name === "get_session_paste_mode") return pasteMode;
     if (name === "get_session_quiet_since") return quiet;
+    if (name === "get_session_screen") return backendScreen;
     if (name === "read_session_output") return { data: "prompt redraw", nextCursor: 0 };
     if (name === "write_to_session") { writes.push(args.data); if (args.data === "\r") enters++; return; }
     if (name === "read_file_as_base64") throw new Error("ROLE.md 없음"); // 파일이 없으면 기존 전문 브리핑으로 대체
@@ -24,7 +25,7 @@ function setup(pasteMode = true, quiet = Date.now()) {
   const modules = {
     "@tauri-apps/api/core": { invoke },
     "@tauri-apps/api/event": {},
-    "./inputHistory": { getUserInputVersion: () => inputVersion, recordSessionSubmission: () => {}, recordSessionInput: (_id, _data, injected) => { if (!injected) inputVersion++; } },
+    "./inputHistory": { getUserInputVersion: () => inputVersion, getLastSubmission: () => 0, hasPendingSessionInput: () => false, recordSessionSubmission: () => {}, recordSessionInput: (_id, _data, injected) => { if (!injected) inputVersion++; } },
     "./store": { useAppStore: { getState: () => ({ sessions: [session] }) } },
   };
   const load = (path, name) => {
@@ -37,6 +38,7 @@ function setup(pasteMode = true, quiet = Date.now()) {
   load("src/lib/handoffRelay.ts", "./handoffRelay");
   load("src/lib/blackboardDispatch.ts", "./blackboardDispatch");
   load("src/lib/cursorScreen.ts", "./cursorScreen");
+  load("src/lib/deliveryGate.ts", "./deliveryGate");
   load("src/lib/sessionWriteQueue.ts", "./sessionWriteQueue");
   modules["./sessionWriteQueue"].enterReady = () => true;
   const bridge = load("src/lib/tauriBridge.ts", "./tauriBridge");
@@ -72,6 +74,17 @@ test("Cursor checks rendered busy state immediately before writing", async () =>
   screen.registerTerminalScreen(session.id, () => ["Working", "ctrl+c to stop"]);
   await assert.rejects(bridge.apiWriteToSession(session.id, "task\r", true, { hasStarted: async () => false, onResult() {} }), /응답 중/);
   assert.deepEqual(writes, []);
+});
+
+test("Cursor missing turn record accepts only stable backend idle screen", async () => {
+  const quiet = Date.now() - 61_000;
+  const backend = { lines: ["→", "Ready"], rows: 2, cursorRow: 0, cursorCol: 1 };
+  const { bridge, writes, session, screen } = setup(true, quiet, backend);
+  session.cliId = "cursor";
+  session.roleInSystem = true;
+  screen.registerTerminalScreen(session.id, () => ["→", "Ready"]);
+  await bridge.apiWriteToSession(session.id, "task\r", true, { hasStarted: async () => true, onResult() {} });
+  assert.ok(writes.some((value) => value.includes("task")));
 });
 
 test("Cursor refuses a write while output is not quiet even with a clear screen", async () => {

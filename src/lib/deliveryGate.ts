@@ -47,7 +47,7 @@ export function agyFirstPromptReady(lines: string[]): boolean {
 export const AGY_IDLE_FALLBACK_MS = 60_000;
 
 function screenShowsWork(lines: string[]): boolean {
-  return lines.slice(-6).some((line) => /esc\s+(?:to\s+)?(?:interrupt|cancel)|ctrl\+c\s+(?:to\s+)?(?:stop|cancel)|^\s*(?:thinking|working|running)(?:\s|\.|$)/i.test(line));
+  return lines.slice(-6).some((line) => /esc\s+(?:to\s+)?(?:interrupt|cancel)|ctrl\+c\s+(?:to\s+)?(?:stop|cancel)|^\s*(?:[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]|(?:thinking|working|running)(?:\s|\.|$))/i.test(line));
 }
 
 export function agyIdleScreen(
@@ -77,6 +77,15 @@ export function idleScreenFallback(
   if (cliId === "claude") return claudeIdleFallback(cliId, { startedAt: 1 }, screen.lines, quietSince, now);
   if (cliId === "codex") return codexInterruptedIdle(cliId, { startedAt: 1 }, screen.lines, quietSince, now);
   return !screen.lines.slice(-5).some((line) => /ctrl\+c\s+to\s+stop|\brunning\b|\bapproval\b|\ballow\b/i.test(line));
+}
+
+export function agyMissingContextFallback(
+  source: string | null, latestSource: string | null,
+  screen: { lines: string[]; rows: number; cursorRow: number; cursorCol: number } | null,
+  quietSince: number | null, lastSubmit: number, pending: boolean, now = Date.now(),
+): boolean {
+  return source === latestSource && (source === null || ["agy:no-log", "agy:ambiguous", "agy:unavailable", "agy:unavailable_no_log"].includes(source))
+    && agyIdleScreen(screen, quietSince, lastSubmit, pending, now);
 }
 
 export function agyIdleFallback(

@@ -29,6 +29,7 @@ test("a fresh agy with no log proceeds only at a quiet empty prompt", async () =
     queueKey: () => "key",
     getTeamMailDeliveries: () => [],
     agyIdleScreen: gate.agyIdleScreen,
+    agyMissingContextFallback: gate.agyMissingContextFallback,
     idleScreenFallback: gate.idleScreenFallback,
     agyIdleFallback: gate.agyIdleFallback,
     AGY_IDLE_FALLBACK_MS: gate.AGY_IDLE_FALLBACK_MS,
@@ -79,6 +80,19 @@ test("a fresh agy with no log proceeds only at a quiet empty prompt", async () =
   assert.equal((await check(session, [])).completedAt, null);
   context = null;
   assert.equal(await check(session, []), null);
+  delete sandbox.pendingDeliveryRef.current.s;
+  assert.equal((await check(session, [])).source, "agy:unavailable");
+  sandbox.apiGetSessionScreen = async () => ({ lines: ["Working...", ">", "? for shortcuts"], rows: 3, cursorRow: 1, cursorCol: 1 });
+  assert.equal(await check(session, []), null);
+  sandbox.readCursorTurn = () => null;
+  sandbox.readTerminalScreen = () => ({ lines: ["→", "Ready"] });
+  lastSubmit = 100;
+  sandbox.apiGetSessionScreen = async () => ({ lines: ["→", "Ready"], rows: 2, cursorRow: 0, cursorCol: 1 });
+  assert.equal((await check({ ...session, cliId: "cursor" }, [])).completedAt, quiet);
+  sandbox.apiGetSessionScreen = async () => ({ lines: ["Working...", "❯", "? for shortcuts"], rows: 3, cursorRow: 1, cursorCol: 1 });
+  assert.equal(await check({ ...session, cliId: "claude" }, []), null);
+  assert.equal(await check({ ...session, cliId: "grok" }, []), null);
+  assert.equal(await check({ ...session, cliId: "opencode" }, []), null);
 });
 
 test("simultaneous new agy sessions serialize first-delivery checks", async () => {
@@ -145,7 +159,7 @@ test("agy recovery requires the same session, source, completed turn and matchin
   assert.equal(await check(session, item.id, [], completed), true);
   item.attempt.source = "agy:no-log";
   assert.equal(await check(session, item.id, [], completed), true);
-  for (const source of ["agy:ambiguous", "agy:unavailable"]) {
+  for (const source of ["agy:ambiguous", "agy:unavailable", "agy:unavailable_no_log"]) {
     item.attempt.source = source;
     match = false;
     assert.equal(await check(session, item.id, [], completed), false);
