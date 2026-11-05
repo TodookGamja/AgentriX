@@ -12,6 +12,7 @@ import {
   upsertApproval,
   type TaskApproval,
 } from "../lib/taskApproval";
+import { idleStaleKeys } from "../lib/statusNudge";
 import { recentDone } from "../lib/boardDone";
 import { alertDialog, confirmDialog } from "../lib/confirmDialog";
 import type { ProjectAgentRecord } from "../types/types";
@@ -23,6 +24,7 @@ interface Card {
   agentId: string;
   title: string;
   waitReason?: string;
+  resting?: boolean;
   blockedBy?: string[];
 }
 
@@ -36,7 +38,7 @@ export const TaskApprovalBoard: React.FC<TaskApprovalBoardProps> = ({ projectPat
   const [mode, setMode] = useState(() => getApprovalMode(projectPath));
   const [approvals, setApprovals] = useState<TaskApproval[]>([]);
   const [notes, setNotes] = useState<Record<string, string>>({});
-  const [cards, setCards] = useState<(Card & { status: BoardTask["status"]; confirmed: boolean; live: boolean; queued: boolean; waitReason: string })[]>([]);
+  const [cards, setCards] = useState<(Card & { status: BoardTask["status"]; confirmed: boolean; live: boolean; queued: boolean; waitReason: string; resting?: boolean })[]>([]);
   const [rejecting, setRejecting] = useState<string | null>(null);
   const [reason, setReason] = useState("");
   const [showAllDone, setShowAllDone] = useState(false);
@@ -65,7 +67,10 @@ export const TaskApprovalBoard: React.FC<TaskApprovalBoardProps> = ({ projectPat
             const live = sessions.some((s) => s.cwd === projectPath && s.agentId === t.agentId && s.status === "running");
             const confirmed = !handled.includes(`${t.agentId}|assign:${t.taskId}`) && (Boolean(delivery && !delivery.unconfirmed) || sent.includes(`${t.taskId}:start:${t.agentId}`));
             const waitReason = t.status === "invalid" ? "상태 형식 오류: 상태 칸은 ⏳/🔥/✅/통합/취소로 시작해야 합니다" : t.blockedBy?.length ? `선행 ${t.blockedBy.map((id) => id.replace(/^.*_(?=\d+$)/, "_")).join(", ")} 대기` : t.status === "wait" ? "작업표에서 대기 중" : queue?.reason || (!live ? "담당 세션이 없습니다" : delivery?.unconfirmed ? "전달 결과 미확인" : "전달 대기");
-            return { ...t, title: boardTaskTitle(board, t.taskId), confirmed, live, queued: Boolean(queue), waitReason };
+            const restingOf = (agentId: string, taskId: string) => idleStaleKeys.has(`${agentId}:${taskId}`);
+            const resting = t.status === "start" && restingOf(t.agentId, t.taskId);
+            const blocker = (t.blockedBy ?? []).map((id) => tasks.find((x) => x.taskId === id)).find((b) => b && b.status === "start" && restingOf(b.agentId, b.taskId));
+            return { ...t, title: boardTaskTitle(board, t.taskId), confirmed, live, queued: Boolean(queue), resting, waitReason: blocker ? `${waitReason}(담당 쉬는 중 · 상태 미갱신)` : waitReason };
           }));
         }
       } catch {
@@ -146,6 +151,7 @@ export const TaskApprovalBoard: React.FC<TaskApprovalBoardProps> = ({ projectPat
               {notes[c.taskId]?.startsWith("대기:") ? notes[c.taskId] : c.waitReason}
             </div>
           )}
+          {c.resting && <div className="text-[11px] text-amber-300/80">팀원 쉬는 중 · 상태 미갱신</div>}
           {tone.includes("rose") && (
             <div className="text-[11px] text-rose-300/80">
               사유: {approvals.find((a) => a.taskId === c.taskId && a.agentId === c.agentId)?.reason || "없음"}

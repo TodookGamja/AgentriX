@@ -123,6 +123,7 @@ import { AGY_IDLE_FALLBACK_MS, agyFirstPromptReady, agyIdleFallback, agyMissingC
 import { DeliveryAttempt, withDeliveryDeadline } from "./lib/deliveryAttempt";
 import { CursorBusyError, forgetTerminalScreen, readTerminalScreen, readTerminalTranscript, readCursorTurn } from "./lib/cursorScreen";
 import { useSessionQueue, queueKey } from "./lib/sessionQueueStore";
+import { dueNudges, markNudged, nudgeText, idleStaleKeys, type NudgeMem } from "./lib/statusNudge";
 import { nextQueueItem, previewOf, queueReservation, settledAutoIds, endedQueueIds, revokedAssignIds, staleAssignRecordKeys, deliveredByScreen, staleMailIds, type QueueSource } from "./lib/sessionQueue";
 import { forgetSessionInput, getLastSubmission, getSubmissionVersion, getSessionInputHistory, hasPendingSessionInput, setInstructionKeyResolver } from "./lib/inputHistory";
 import { permissionLaunch } from "./lib/permissionSettings";
@@ -1422,6 +1423,52 @@ ${recentSnippet || "진행 내역 기록 없음"}
     };
     void tick();
     const id = window.setInterval(tick, 3000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  // 턴이 끝나 유휴인데 작업표가 🔥로 남은 작업: 담당에게 상태 갱신을 최대 2회(턴당 1회) 요청하고 작업판에 표시
+  const busyIdsRef = useRef("");
+  busyIdsRef.current = busySessionIds;
+  useEffect(() => {
+    const mem: NudgeMem = {};
+    const idleSince: Record<string, number> = {};
+    let running = false;
+    const tick = async () => {
+      if (running) return;
+      running = true;
+      try {
+        const now = Date.now();
+        const busyIds = busyIdsRef.current.split(",");
+        const sessions = useAppStore.getState().sessions.filter((x) => x.agentId);
+        const stale = new Set<string>();
+        for (const project of new Set(sessions.map((x) => x.cwd))) {
+          const projSessions = sessions.filter((x) => x.cwd === project);
+          let tasks: ReturnType<typeof parseBoardTasks>;
+          let sent: string[];
+          try {
+            const [board, agents] = await Promise.all([apiGetProjectBlackboard(project), apiGetProjectAgents(project)]);
+            tasks = parseBoardTasks(board, agents.map((a) => a.id), Object.fromEntries(agents.map((a) => [a.id, a.name])));
+            sent = JSON.parse(localStorage.getItem(`agentrix_bb_dispatched:${project}`) || "[]");
+          } catch { continue; }
+          for (const s of projSessions) {
+            const busy = busyIds.includes(s.id);
+            if (busy || idleSince[s.id] === undefined) idleSince[s.id] = now;
+            const mine = tasks.filter((t) => t.status === "start" && t.agentId === s.agentId && sent.includes(`${t.taskId}:start:${t.agentId}`));
+            const keys = mine.map((t) => `${s.agentId}:${t.taskId}`);
+            // 대기열·전달 처리 중이면 아직 전달 단계이므로 건드리지 않는다
+            const delivering = (useSessionQueue.getState().queues[queueKey(s)]?.length ?? 0) > 0 || teamDeliveryLocksRef.current.has(s.id);
+            const due = delivering ? [] : dueNudges(mem, keys, busy, now - idleSince[s.id]);
+            if (!busy && !delivering && now - idleSince[s.id] >= 60_000) keys.forEach((k) => stale.add(k));
+            if (!due.length) continue;
+            if (await sendToIdleTeamSession(s, nudgeText(due.map((k) => k.slice(k.indexOf(":") + 1))))) due.forEach((k) => markNudged(mem, k));
+          }
+        }
+        idleStaleKeys.clear();
+        stale.forEach((k) => idleStaleKeys.add(k));
+      } catch (err) { console.error("Status nudge failed", err); }
+      finally { running = false; }
+    };
+    const id = window.setInterval(tick, 5000);
     return () => window.clearInterval(id);
   }, []);
 
