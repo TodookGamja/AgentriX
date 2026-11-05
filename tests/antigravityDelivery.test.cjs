@@ -23,6 +23,16 @@ test("a fresh agy with no log proceeds only at a quiet empty prompt", async () =
     module: { exports: null },
     apiGetSessionContext: async () => context,
     apiGetSessionQuietSince: async () => quiet,
+    apiGetSessionScreen: async () => null,
+    pendingDeliveryRef: { current: {} },
+    useSessionQueue: { getState: () => ({ queues: {} }) },
+    queueKey: () => "key",
+    getTeamMailDeliveries: () => [],
+    agyIdleScreen: gate.agyIdleScreen,
+    idleScreenFallback: gate.idleScreenFallback,
+    agyIdleFallback: gate.agyIdleFallback,
+    AGY_IDLE_FALLBACK_MS: gate.AGY_IDLE_FALLBACK_MS,
+    refreshTerminalScreen: async () => {},
     readTerminalTranscript: () => lines,
     getLastSubmission: () => lastSubmit,
     hasPendingSessionInput: () => false,
@@ -60,6 +70,15 @@ test("a fresh agy with no log proceeds only at a quiet empty prompt", async () =
   assert.equal(sandbox.agyBootstrapRef.current, null);
   assert.equal(sandbox.contextSourceRef.current.s, "actual-log");
   assert.equal(sandbox.pendingDeliveryRef.current.s, undefined);
+  context = { source: "agy:ambiguous", startedAt: null, completedAt: null, tokens: 0, window: null };
+  quiet = Date.now() - 61_000;
+  sandbox.apiGetSessionScreen = async () => ({ lines: [">", "? for shortcuts"], rows: 2, cursorRow: 0, cursorCol: 1 });
+  assert.equal((await check(session, [])).source, "agy:ambiguous");
+  assert.equal((await check(session, [])).completedAt, quiet);
+  sandbox.pendingDeliveryRef.current.s = { at: quiet - 1, unconfirmed: true };
+  assert.equal((await check(session, [])).completedAt, null);
+  context = null;
+  assert.equal(await check(session, []), null);
 });
 
 test("simultaneous new agy sessions serialize first-delivery checks", async () => {
@@ -126,6 +145,13 @@ test("agy recovery requires the same session, source, completed turn and matchin
   assert.equal(await check(session, item.id, [], completed), true);
   item.attempt.source = "agy:no-log";
   assert.equal(await check(session, item.id, [], completed), true);
+  for (const source of ["agy:ambiguous", "agy:unavailable"]) {
+    item.attempt.source = source;
+    match = false;
+    assert.equal(await check(session, item.id, [], completed), false);
+    match = true;
+    assert.equal(await check(session, item.id, [], completed), true);
+  }
   item.attempt.source = "log";
   assert.equal(await check(session, item.id, [], { source: "other", completedAt: 101 }), false);
   assert.equal(await check(session, item.id, [], { source: "log" }), false);
@@ -141,7 +167,7 @@ test("agy recovery requires the same session, source, completed turn and matchin
 
 test("agy does not retry Enter when submission is unconfirmed", () => {
   const bridge = fs.readFileSync("src/lib/tauriBridge.ts", "utf8");
-  assert.match(bridge, /session\?\.cliId === "antigravity" \|\| !needsEnterRetry/);
+  assert.match(bridge, /session\?\.cliId === "antigravity" \|\| verify\.allowRetry === false \|\| !needsEnterRetry/);
   const app = fs.readFileSync("src/App.tsx", "utf8");
   assert.match(app, /s\.cliId === "antigravity" \? \[\] : deliveredByScreen/);
 });
@@ -149,7 +175,7 @@ test("agy does not retry Enter when submission is unconfirmed", () => {
 test("agy retries the full body once after the confirmation timeout", () => {
   const bridge = fs.readFileSync("src/lib/tauriBridge.ts", "utf8");
   assert.match(bridge, /AGY_FULL_BODY_RETRY_TIMEOUT_MS\s*=\s*10_000/);
-  assert.match(bridge, /session\?\.cliId === "antigravity" && !confirmed && attempt === 0[\s\S]*?data: wrapped[\s\S]*?data: "\\r"/);
+  assert.match(bridge, /session\?\.cliId === "antigravity" && verify\.allowAgyRetry !== false && !confirmed && attempt === 0[\s\S]*?data: wrapped[\s\S]*?data: "\\r"/);
   assert.match(bridge, /retry_full_body/);
 });
 

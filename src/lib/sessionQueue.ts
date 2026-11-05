@@ -146,3 +146,28 @@ export function staleAssignRecordKeys(records: string[], queueKeyOf: string, sta
   const prefix = `${queueKeyOf}|assign:`;
   return records.filter((k) => k.startsWith(prefix) && !startTaskIds.has(k.slice(prefix.length)));
 }
+
+// 작업표와 연동해 끝난 작업의 대기열 항목을 찾는다(보드를 정상으로 읽은 경우에만 호출).
+// - report:<ID>:<담당>: 그 행이 ✅(done)로 남아 있을 때만 유효. 취소·통합·삭제·🔥 복귀면 제거.
+// - mail:<id>: 제목·본문의 작업 ID(T숫자_숫자, 단어 일치)가 하나 이상 있고 전부 ✅·취소·보드에 없음이면 끝난 작업. ID 없는 일반 메일, 진행 중(🔥·⏳) ID가 하나라도 있는 메일, 담당→PM 결과 메일(isResultMail)은 유지.
+// 입력창에 이미 들어간(stuck·unconfirmed) 항목은 건드리지 않는다. assign은 revokedAssignIds·settledAutoIds가 이미 처리.
+export function endedQueueIds(
+  list: QueueItem[] | undefined,
+  tasks: { taskId: string; status: string }[],
+  mailOf: (mailId: string) => { subject: string; body: string; isResult: boolean } | undefined
+): string[] {
+  const status = new Map(tasks.map((t) => [t.taskId, t.status]));
+  const out: string[] = [];
+  for (const it of list ?? []) {
+    if (it.stuck || it.unconfirmed) continue;
+    if (it.source === "report") {
+      if (status.get(it.id.slice(7).split(":")[0]) !== "done") out.push(it.id);
+    } else if (it.source === "mail") {
+      const m = mailOf(it.id.slice(5));
+      if (!m || m.isResult) continue;
+      const ids = `${m.subject} ${m.body}`.match(/\bT\d{6,}_\d+\b/g);
+      if (ids?.length && ids.every((id) => ["done", "closed", undefined].includes(status.get(id)))) out.push(it.id);
+    }
+  }
+  return out;
+}

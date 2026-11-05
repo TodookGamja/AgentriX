@@ -107,10 +107,13 @@ test("Claude local-command completion waits for output to settle and never overr
   visit(source);
   assert.ok(expression);
   let quiet = null;
-  let ctx = { source: "claude-log", tokens: 10, window: null, startedAt: 50, completedAt: 200 };
+  let ctx = { source: "claude-log", tokens: 10, window: null, startedAt: 50, completedAt: 200, sourceModifiedAt: Date.now() - 61_000 };
   const sandbox = { module: { exports: null }, getLastSubmission: () => 100,
-    apiGetSessionContext: async () => ctx, apiGetSessionQuietSince: async (_id, ms) => { assert.ok(ms === 3000 || ms === 30000); return quiet; },
-    pendingDeliveryRef: { current: {} }, readTerminalScreen: () => ["❯", "⏵⏵ bypass permissions on"],
+    apiGetSessionContext: async () => ctx, apiGetSessionQuietSince: async (_id, ms) => { assert.ok(ms === 3000 || ms === 60000); return quiet; },
+    apiGetSessionScreen: async () => ({ lines: ["❯", "⏵⏵ bypass permissions on"], rows: 2, cursorRow: 0, cursorCol: 1 }),
+    AGY_IDLE_FALLBACK_MS: api.AGY_IDLE_FALLBACK_MS, idleScreenFallback: api.idleScreenFallback,
+    hasPendingSessionInput: () => false, useSessionQueue: { getState: () => ({ queues: {} }) }, queueKey: () => "key", getTeamMailDeliveries: () => [],
+    pendingDeliveryRef: { current: {} }, refreshTerminalScreen: async () => {}, readTerminalScreen: () => ["❯", "⏵⏵ bypass permissions on"],
     claudeIdleFallback: api.claudeIdleFallback, logTurnStillBusy: api.logTurnStillBusy, Date };
   vm.runInNewContext(ts.transpileModule(`module.exports = ${expression}`, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, sandbox);
   const session = { id: "s", cliId: "claude" };
@@ -119,7 +122,7 @@ test("Claude local-command completion waits for output to settle and never overr
   assert.equal((await sandbox.module.exports(session, [])).completedAt, 200);
   ctx = { ...ctx, startedAt: 300, completedAt: null };
   assert.equal((await sandbox.module.exports(session, [])).completedAt, null);
-  quiet = Date.now() - 31_000;
+  quiet = Date.now() - 61_000;
   assert.equal((await sandbox.module.exports(session, [])).completedAt, quiet);
   sandbox.pendingDeliveryRef.current.s = { at: 250, unconfirmed: true };
   assert.equal((await sandbox.module.exports(session, [])).completedAt, null);

@@ -399,6 +399,12 @@
           "markdownDescription": "Enables the get_session_quiet_since command without any pre-configured scope."
         },
         {
+          "description": "Enables the get_session_screen command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-session-screen",
+          "markdownDescription": "Enables the get_session_screen command without any pre-configured scope."
+        },
+        {
           "description": "Enables the get_team_members command without any pre-configured scope.",
           "type": "string",
           "const": "allow-get-team-members",
@@ -823,6 +829,12 @@
           "type": "string",
           "const": "deny-get-session-quiet-since",
           "markdownDescription": "Denies the get_session_quiet_since command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_session_screen command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-session-screen",
+          "markdownDescription": "Denies the get_session_screen command without any pre-configured scope."
         },
         {
           "description": "Denies the get_team_members command without any pre-configured scope.",

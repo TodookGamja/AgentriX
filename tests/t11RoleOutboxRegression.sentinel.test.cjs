@@ -61,8 +61,8 @@ test("T1793776116339_11: collabProtocol/mailProtocol은 시작 지침에 outbox 
 test("T1793776116339_11: roleInSystem=false·릴레이 새 세션은 markRolePrefix에 collabProtocol(outbox) 포함", () => {
   assert.match(app, /!session\.roleInSystem[\s\S]{0,120}markRolePrefix\(session\.id,/);
   assert.match(app, /!newSession\.roleInSystem[\s\S]{0,120}markRolePrefix\(newSession\.id,/);
-  assert.match(app, /markRolePrefix\(session\.id, `\$\{agent\.rolePrompt[\s\S]*?collabProtocol\(agent\.id, projectAgents\)/);
-  assert.match(app, /markRolePrefix\(newSession\.id, `\$\{relayAgent\.rolePrompt[\s\S]*?collabProtocol\(relayAgent\.id, relayAgents\)/);
+  assert.ok(app.includes("markRolePrefix(session.id, roleBriefText(agent, projectAgents,")); // ROLE.md 있으면 파일 참조, 없으면 전문
+  assert.ok(app.includes("markRolePrefix(newSession.id, roleBriefText(relayAgent, relayAgents,"));
   // 역할 틱은 짧은 대기 문구만; outbox는 접두에 이미 있음
   assert.match(app, /역할 지침을 확인하고 다음 지시를 기다리세요/);
   assert.match(app, /onlyPendingRole = false/);

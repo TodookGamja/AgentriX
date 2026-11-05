@@ -1148,8 +1148,8 @@ async fn session_user_message_submitted(state: State<'_, AppState>, session_id: 
                 id.and_then(|id| context::codex_log_for_session(&sessions, &session.cwd, &id))
             }
             "antigravity" => {
-                expected_source.and_then(|expected| context::read_context("antigravity", &session_id, &session.cwd, &session.started_at, claimed.as_deref().unwrap_or(&[]))
-                    .filter(|ctx| ctx.source != "agy:no-log" && (ctx.source == expected || expected == "agy:no-log")).map(|ctx| std::path::PathBuf::from(ctx.source)))
+                expected_source.and_then(|expected| context::read_context_with_agent("antigravity", &session_id, &session.cwd, &session.started_at, claimed.as_deref().unwrap_or(&[]), session.agent_id.as_deref().zip(session.agent_name.as_deref()))
+                    .filter(|ctx| !ctx.source.starts_with("agy:") && (ctx.source == expected || matches!(expected.as_str(), "agy:no-log" | "agy:ambiguous" | "agy:unavailable"))).map(|ctx| std::path::PathBuf::from(ctx.source)))
             }
             _ => None,
         };
@@ -1182,12 +1182,16 @@ async fn get_session_context(
         } else { None };
         let result = if let Some(id) = resumed {
             context::codex_log_for_session(&codex_dir, &cwd, &id).and_then(|path| context::read_codex_session(&path))
+        } else if cli_id == "antigravity" {
+            let session = pty.list_sessions().into_iter().find(|s| s.id == session_id);
+            let agent = session.as_ref().and_then(|s| s.agent_id.as_deref().zip(s.agent_name.as_deref()));
+            context::read_context_with_agent(&cli_id, &session_id, &cwd, &started_at, &claimed, agent)
         } else {
             context::read_context(&cli_id, &session_id, &cwd, &started_at, &claimed)
         };
         if cli_id == "antigravity" {
             let pristine = pty.is_pristine_antigravity(&session_id);
-            if result.as_ref().is_some_and(|ctx| (ctx.source == "agy:no-log") != pristine) {
+            if result.as_ref().is_some_and(|ctx| (ctx.source == "agy:no-log" && !pristine) || (!ctx.source.starts_with("agy:") && pristine)) {
                 return Ok(None);
             }
         }
@@ -1402,14 +1406,19 @@ async fn list_cli_models(cli_id: String) -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-fn log_delivery_stage(session_id: String, attempt_id: String, stage: String, elapsed_ms: u64) {
+fn log_delivery_stage(state: State<'_, AppState>, session_id: String, attempt_id: String, stage: String, elapsed_ms: u64, source: Option<String>) {
     use std::io::Write;
     let Some(root) = dirs::data_dir() else { return };
     let dir = root.join("AI_CLI_Manager");
     if std::fs::create_dir_all(&dir).is_err() { return; }
     if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("delivery.log")) {
         let clean = |s: &str| s.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').take(100).collect::<String>();
-        let _ = writeln!(file, "{} session={} attempt={} stage={} elapsed_ms={}", chrono::Utc::now().to_rfc3339(), clean(&session_id), clean(&attempt_id), clean(&stage), elapsed_ms);
+        let session = state.pty.list_sessions().into_iter().find(|s| s.id == session_id);
+        let agent = session.as_ref().and_then(|s| s.agent_id.as_deref()).unwrap_or("none");
+        let cli = session.as_ref().map(|s| s.cli_id.as_str()).unwrap_or("unknown");
+        let source = source.unwrap_or_default().chars().filter(|c| !c.is_control()).take(1024).collect::<String>();
+        let source = serde_json::to_string(&source).unwrap_or_default();
+        let _ = writeln!(file, "{} session={} agent={} cli={} attempt={} stage={} source={} elapsed_ms={}", chrono::Utc::now().to_rfc3339(), clean(&session_id), clean(agent), clean(cli), clean(&attempt_id), clean(&stage), source, elapsed_ms);
     }
 }
 
@@ -1440,6 +1449,11 @@ fn resize_session(
     rows: u16,
 ) -> Result<(), String> {
     state.pty.resize_session(&session_id, cols, rows)
+}
+
+#[tauri::command]
+fn get_session_screen(state: State<'_, AppState>, session_id: String, lines: Option<u16>) -> Result<pty::PtyScreen, String> {
+    state.pty.screen(&session_id, lines.unwrap_or(30))
 }
 
 #[tauri::command]
@@ -2245,6 +2259,7 @@ fn main() {
             log_delivery_stage,
             write_to_session,
             resize_session,
+            get_session_screen,
             read_session_output,
             stop_session,
             list_sessions,

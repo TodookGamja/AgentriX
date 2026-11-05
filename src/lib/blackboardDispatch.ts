@@ -16,6 +16,12 @@ export function hasTaskResultMail(mails: { from: string; to: string; subject: st
   });
 }
 
+// 팀원이 PM에게 이미 결과 메일을 보낸 작업(`작업ID:담당ID`). 작업표 ✅ 자동 [완료 보고]와 같은 완료가 두 번 가지 않게 한다.
+export function resultMailTaskKeys(mails: { from: string; to: string; subject: string; body: string }[], tasks: BoardTask[], pmId: string): string[] {
+  return tasks.filter((t) => t.status === "start" || t.status === "done" || t.status === "closed")
+    .filter((t) => hasTaskResultMail(mails, t.taskId, t.agentId, pmId)).map((t) => `${t.taskId}:${t.agentId}`);
+}
+
 export function confirmedResultMail(mail: { from: string; to: string; subject: string; body: string }, tasks: BoardTask[], confirmedReports: string[], queue: string, pmId: string): boolean {
   return tasks.some((t) => (t.status === "done" || t.status === "closed") &&
     confirmedReports.includes(`${queue}|report:${t.taskId}:${t.agentId}`) &&
@@ -228,9 +234,38 @@ export function collabProtocol(agentId: string, agents: { id: string; name: stri
   return isPm ? `${boardProtocol(agents.filter((a) => a.id !== agentId))} ${mail}` : mail;
 }
 
+// 시스템 지시 미적용 세션의 첫 역할 브리핑: ROLE.md(역할+협업 규칙, 세션 시작 때 디스크 동기화)가 있으면 파일 참조 한 줄만, 없으면 기존 전문.
+export function roleBriefText(agent: { id: string; rolePrompt: string }, agents: { id: string; name: string; roleTitle: string }[], roleFileExists: boolean): string {
+  return roleFileExists
+    ? `.ai-agents/agents/${agent.id}/ROLE.md를 먼저 읽고 그 역할·협업 규칙을 따르세요. `
+    : `${agent.rolePrompt.replace(/[\r\n]+/g, " ").trim()} ${collabProtocol(agent.id, agents)} `;
+}
+
 // 작업표 일시 오독 방지: 팀원이 BLACKBOARD.md를 쓰는 도중 읽으면 🔥 행이 한 번 사라져 보일 수 있다.
 // 지난 읽기에서 🔥였던 행이 이번 읽기에서 🔥가 아니면 한 번은 아직 🔥로 간주한다(정리 판단 전용). 연속 2회 🔥가 아니어야 정리된다.
 export function keepRecentStarts(prevStarts: BoardTask[], tasks: BoardTask[]): BoardTask[] {
   const live = new Set(tasks.filter((t) => t.status === "start").map((t) => `${t.taskId}:${t.agentId}`));
   return [...tasks, ...prevStarts.filter((p) => p.status === "start" && !live.has(`${p.taskId}:${p.agentId}`))];
+}
+
+// 팀원이 새 세션으로 다시 떴을 때(재시작·릴레이·앱 재실행) 그 팀원의 🔥 착수 행을 한 번 더 전달하기 위한 판정.
+// 'sent' 기록은 팀원 기준이라 새 세션에는 다시 안 가므로, 팀원별로 마지막으로 본 세션 ID를 기록해 바뀌면 그 팀원의 start 키를 지운다.
+// 재개 세션(resumed)은 이미 받은 대화이므로 기록만 갱신하고 재전달하지 않는다. 같은 세션은 기록이 같아 다시 지우지 않는다(중복 0).
+export function newSessionResends(
+  sessions: { id: string; agentId?: string | null; resumed?: boolean }[],
+  seen: Record<string, string>,
+  startTasks: { taskId: string; agentId: string }[]
+): { seen: Record<string, string>; agents: string[]; keys: string[] } {
+  const next = { ...seen };
+  const agents: string[] = [];
+  // 팀원당 세션 1개만 본다(배정 루프의 find(agentId)와 동일=첫 세션). 동시에 여러 세션이면 서로 덮어 매 폴링 재전달 루프가 난다.
+  const seenAgent = new Set<string>();
+  for (const s of sessions) {
+    if (!s.agentId || seenAgent.has(s.agentId)) continue;
+    seenAgent.add(s.agentId);
+    if (next[s.agentId] === s.id) continue;
+    if (!s.resumed) agents.push(s.agentId);
+    next[s.agentId] = s.id;
+  }
+  return { seen: next, agents, keys: startTasks.filter((t) => agents.includes(t.agentId)).map((t) => `${t.taskId}:start:${t.agentId}`) };
 }

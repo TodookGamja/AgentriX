@@ -24,6 +24,8 @@ test('manual send distinguishes a successful body write from a write failure', (
   assert.ok(write >= 0 && bridge.indexOf('bodyWritten = true;', write) > write);
   assert.match(bridge, /if \(bodyWritten\) throw new SubmissionUnconfirmedError/);
   assert.match(pane, /error instanceof SubmissionUnconfirmedError/);
-  assert.match(pane, /disabled=\{it\.unconfirmed\}/);
+  // 미확인 항목도 '지금 보내기'는 활성, 대신 중복 위험 확인창(danger)을 거친다. 자동 재전송은 큐 쪽(nextUserItem=undefined)이 계속 막는다.
+  assert.doesNotMatch(pane, /disabled=\{it\.unconfirmed\}/);
+  assert.match(pane, /\?\.unconfirmed\s*&& !\(await confirmDialog\(\{[^}]*danger: true/);
   assert.match(pane, /sendingQueueRef\.current\.has\(id\)/);
 });

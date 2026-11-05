@@ -38,7 +38,7 @@ test("T15/②: Interrupted·빈 ❯·? for shortcuts 화면은 30초 quiet 후 f
   assert.equal(api.claudeIdleFallback("claude", open, ["Interrupted · What should Claude do instead?", "❯ draft", "? for shortcuts"], 200, 30_200), false);
   assert.equal(api.claudeIdleFallback("claude", open, interruptedScreen, null, 90_000), false);
   assert.equal(api.claudeIdleFallback("claude", { startedAt: 100, completedAt: 150 }, interruptedScreen, 200, 30_200), false);
-  assert.match(app, /claudeIdleFallback\(session\.cliId, ctx, readTerminalScreen/);
+  assert.match(app, /claudeIdleFallback\(session\.cliId, latest, screen\?\.lines/);
   assert.match(read("src/lib/deliveryGate.ts"), /\?\\s\+for shortcuts/);
 });
 
@@ -69,6 +69,6 @@ test("T15: Codex/agy/Cursor에 claudeIdleFallback 비누수 + App agy 조기 ret
   assert.equal(api.claudeIdleFallback("codex", open, interruptedScreen, 200, 60_000), false);
   assert.equal(api.claudeIdleFallback("antigravity", open, interruptedScreen, 200, 60_000), false);
   assert.equal(api.claudeIdleFallback("cursor", open, interruptedScreen, 200, 60_000), false);
-  const gt = app.slice(app.indexOf("getTurnContext"), app.indexOf("getTurnContext") + 3500);
+  const gt = app.slice(app.indexOf("const getTurnContext"), app.indexOf("const agyCompletedAttempt"));
   assert.ok(gt.indexOf('if (session.cliId === "antigravity") return ctx;') < gt.indexOf("claudeIdleFallback"));
 });

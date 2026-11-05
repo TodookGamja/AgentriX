@@ -131,3 +131,46 @@ test("T1793776116339_10: 팀 메일·PM 배정 전달문에 outbox 경로·형�
   const app = fs.readFileSync("src/App.tsx", "utf8");
   assert.ok(!app.includes("mailProtocol(session.agentId") && !app.includes("mailProtocol(t.agentId"));
 });
+
+test("T1793840117765_1: 첫 역할 브리핑 — ROLE.md가 있으면 200자 이하 파일 참조 한 줄, 없으면 기존 전문(역할+협업 규칙)", () => {
+  const agents = [{ id: "a1", name: "Pixel", roleTitle: "FE" }, { id: "pm", name: "PM", roleTitle: "PM" }];
+  const agent = { id: "a1", rolePrompt: "너는 프론트 담당\n입니다" };
+  const short = api.roleBriefText(agent, agents, true), full = api.roleBriefText(agent, agents, false);
+  assert.equal(short, ".ai-agents/agents/a1/ROLE.md를 먼저 읽고 그 역할·협업 규칙을 따르세요. ");
+  assert.ok(short.length <= 200 && !short.includes("outbox"));
+  assert.ok(full.startsWith("너는 프론트 담당 입니다 ") && full.includes(api.collabProtocol("a1", agents)));
+});
+
+test("T1793841150955_1: result mail marks the task so the ✅ auto report is skipped (mail first / none / ✅ first)", () => {
+  const mail = { from: "agent", to: "pm", subject: "T9_1 결과", body: "완료" };
+  const task = (taskId, status) => ({ taskId, status, agentId: "agent" });
+  // 메일 먼저(🔥 상태에서 이미 보냄) 또는 ✅ 먼저·메일 나중: 메일이 보이는 순간 키가 잡혀 보고 생략/대기열 제거
+  assert.deepEqual(api.resultMailTaskKeys([mail], [task("T9_1", "start")], "pm"), ["T9_1:agent"]);
+  assert.deepEqual(api.resultMailTaskKeys([mail], [task("T9_1", "done")], "pm"), ["T9_1:agent"]);
+  // 메일 없음: 키 없음 → 자동 보고 유지
+  assert.deepEqual(api.resultMailTaskKeys([], [task("T9_1", "done")], "pm"), []);
+  // T9_1 메일이 T9_10을 삼키지 않음
+  assert.deepEqual(api.resultMailTaskKeys([mail], [task("T9_10", "done")], "pm"), []);
+});
+
+test("T1793841150955_1: App skips report for mailed tasks and dedupes the queue", () => {
+  const app = fs.readFileSync("src/App.tsx", "utf8");
+  assert.match(app, /if \(mailSeen\.has\(`\$\{t\.taskId\}:\$\{t\.agentId\}`\)\)[\s\S]{0,300}markHandled\(`\$\{qk\}\|report:/);
+});
+
+test("T1793845112668_1: new session for an agent re-sends its 🔥 rows once; same/resumed session never", () => {
+  const starts = [{ taskId: "T1_1", agentId: "a" }, { taskId: "T1_2", agentId: "b" }];
+  const first = api.newSessionResends([{ id: "s1", agentId: "a" }, { id: "s2", agentId: "b" }], {}, starts);
+  assert.deepEqual([...first.keys], ["T1_1:start:a", "T1_2:start:b"]);
+  // 같은 세션 다음 폴링: 중복 0
+  assert.deepEqual([...api.newSessionResends([{ id: "s1", agentId: "a" }, { id: "s2", agentId: "b" }], first.seen, starts).keys], []);
+  // a만 새 세션(재시작·릴레이·앱 재실행): a의 행만
+  const re = api.newSessionResends([{ id: "s3", agentId: "a" }, { id: "s2", agentId: "b" }], first.seen, starts);
+  assert.deepEqual([...re.keys], ["T1_1:start:a"]);
+  // 재개 세션: 이미 받은 대화 → 재전달 0, 기록은 갱신
+  const resumed = api.newSessionResends([{ id: "s4", agentId: "a", resumed: true }], re.seen, starts);
+  assert.deepEqual([...resumed.keys], []);
+  assert.equal(resumed.seen.a, "s4");
+  // 에이전트 없는 세션 무시
+  assert.deepEqual([...api.newSessionResends([{ id: "x", agentId: null }], {}, starts).keys], []);
+});

@@ -191,7 +191,7 @@ test("T23: Codex launch encodes developer_instructions; Claude-only prompt-file;
   const pty = fs.readFileSync("src-tauri/src/pty.rs", "utf8");
   assert.match(pty, /fn codex_role_config\(role: &str\) -> Option<String>/);
   assert.match(pty, /developer_instructions=/);
-  assert.match(pty, /value\.len\(\) > 16_000/);
+  assert.match(pty, /value\.len\(\) > 6_000/);
   assert.match(pty, /cli_def\.id == "codex"/);
   assert.match(pty, /Some\(a\) if role_in_system && cli_def\.id == "claude"/);
   assert.match(pty, /codex_and_opencode_do_not_receive_role_at_launch/);

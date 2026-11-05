@@ -56,6 +56,7 @@ import {
   apiGetApiKeys,
   apiGetConfigBackups,
   apiGetProjectAgents,
+  apiReadFileAsBase64,
   apiGetProjectBlackboard,
   apiGetProjectDeepContext,
   apiGetProjectFolders,
@@ -81,6 +82,8 @@ import {
   apiSessionUserMessageSubmitted,
   apiAgyMessageSubmitted,
   apiGetSessionQuietSince,
+  apiGetSessionScreen,
+  refreshTerminalScreen,
   apiWindowMinimize,
   apiWindowToggleMaximize,
   apiWindowClose,
@@ -112,15 +115,15 @@ import { AiDeepTeamModal } from "./components/AiDeepTeamModal";
 import { MarkdownLite } from "./components/MarkdownLite";
 import { FolderPickerModal } from "./components/FolderPickerModal";
 import { AgentrixLogo } from "./components/AgentrixLogo";
-import { boardProtocol, collabProtocol, confirmedResultMail, forgetEndedStarts, keepRecentStarts, assignText, mailProtocol, parseBoardTasks, teamMailText } from "./lib/blackboardDispatch";
+import { hasTaskResultMail, boardProtocol, collabProtocol, confirmedResultMail, resultMailTaskKeys, newSessionResends, forgetEndedStarts, keepRecentStarts, roleBriefText, assignText, mailProtocol, parseBoardTasks, teamMailText } from "./lib/blackboardDispatch";
 import { getTeamMailDeliveries, pruneStaleDeliveries, pruneStaleMailDeliveries, removeTeamMailDelivery, reserveTeamMailDelivery, saveTeamMailDelivery } from "./lib/teamMailDelivery";
 import { clearDispatchNotes, findApproval, getApprovalMode, getDispatchNotes, setDispatchNote, upsertApproval } from "./lib/taskApproval";
 import { countNewChars } from "./lib/tokenEstimate";
-import { agyFirstPromptReady, claudeIdleFallback, codexInterruptedIdle, deliveryGate, logTurnStillBusy, tabIsActive, type PendingDelivery } from "./lib/deliveryGate";
+import { AGY_IDLE_FALLBACK_MS, agyFirstPromptReady, agyIdleFallback, idleScreenFallback, claudeIdleFallback, codexInterruptedIdle, deliveryGate, logTurnStillBusy, tabIsActive, type PendingDelivery } from "./lib/deliveryGate";
 import { DeliveryAttempt, withDeliveryDeadline } from "./lib/deliveryAttempt";
-import { CursorBusyError, readTerminalScreen, readTerminalTranscript, readCursorTurn } from "./lib/cursorScreen";
+import { CursorBusyError, forgetTerminalScreen, readTerminalScreen, readTerminalTranscript, readCursorTurn } from "./lib/cursorScreen";
 import { useSessionQueue, queueKey } from "./lib/sessionQueueStore";
-import { nextQueueItem, previewOf, queueReservation, settledAutoIds, revokedAssignIds, staleAssignRecordKeys, deliveredByScreen, staleMailIds, type QueueSource } from "./lib/sessionQueue";
+import { nextQueueItem, previewOf, queueReservation, settledAutoIds, endedQueueIds, revokedAssignIds, staleAssignRecordKeys, deliveredByScreen, staleMailIds, type QueueSource } from "./lib/sessionQueue";
 import { forgetSessionInput, getLastSubmission, getSubmissionVersion, getSessionInputHistory, hasPendingSessionInput, setInstructionKeyResolver } from "./lib/inputHistory";
 import { permissionLaunch } from "./lib/permissionSettings";
 import {
@@ -1016,7 +1019,7 @@ export const App: React.FC = () => {
 
       // 시스템 지시를 지원하지 않는 CLI는 준비 후 역할을 제출한다.
       if (agent.autoBrief && agent.rolePrompt.trim() && !session.roleInSystem) {
-        markRolePrefix(session.id, `${agent.rolePrompt.replace(/[\r\n]+/g, " ").trim()} ${collabProtocol(agent.id, projectAgents)} `);
+        markRolePrefix(session.id, roleBriefText(agent, projectAgents, Boolean(await apiReadFileAsBase64(`${agent.projectPath}/.ai-agents/agents/${agent.id}/ROLE.md`))));
       }
     } catch (err) {
       showToast(`에이전트 실행 실패: ${String(err)}`, "error");
@@ -1234,7 +1237,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
 
       newSession.name = newSessionName;
       if (relayAgent?.autoBrief && relayAgent.rolePrompt.trim() && !newSession.roleInSystem) {
-        markRolePrefix(newSession.id, `${relayAgent.rolePrompt.replace(/[\r\n]+/g, " ").trim()} ${collabProtocol(relayAgent.id, relayAgents)} `);
+        markRolePrefix(newSession.id, roleBriefText(relayAgent, relayAgents, Boolean(await apiReadFileAsBase64(`${targetSession.cwd}/.ai-agents/agents/${relayAgent.id}/ROLE.md`))));
       }
       if (tokenOptConfig.preserveRolePrompt && targetSession.rolePrompt) {
         newSession.rolePrompt = targetSession.rolePrompt;
@@ -1371,6 +1374,17 @@ ${recentSnippet || "진행 내역 기록 없음"}
 
   // 세션 탭 점 맥동용: 출력이 10초 넘게 멈추지 않은 세션 = 작업 중 (apiGetSessionQuietSince가 null)
   // 유휴 CLI가 재그리기·리사이즈로 한 번 내는 출력은 무시: 4초 창 안에 출력이 두 틱 연속 있어야 '출력 중'
+  // 백엔드 가상 화면 사본(숨김 탭·창 크기와 무관): 판정은 항상 이 화면을 읽는다
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      const ids = new Set(useAppStore.getState().sessions.map((s) => s.id));
+      ids.forEach((sid) => void refreshTerminalScreen(sid));
+      sessionsSeenForScreen.current.forEach((sid) => { if (!ids.has(sid)) forgetTerminalScreen(sid); });
+      sessionsSeenForScreen.current = ids;
+    }, 500);
+    return () => window.clearInterval(id);
+  }, []);
+  const sessionsSeenForScreen = useRef(new Set<string>());
   const [busySessionIds, setBusySessionIds] = useState<string>("");
   const tabOutputPrevRef = useRef(new Set<string>());
   useEffect(() => {
@@ -2068,13 +2082,39 @@ ${recentSnippet || "진행 내역 기록 없음"}
   // ponytail: claude는 권한 확인처럼 조용히 멈춘 상태를 턴 종료로 오인하지 않게 30초 무출력일 때만 대체, 오판이 보이면 로그 매칭을 고칠 것
   // 한 번도 제출받지 않은 새 세션(출근 브리핑 턴 없음, v1.0.5~)은 진행 중인 턴이 있을 수 없으므로 30초 규칙 없이 출력이 멈추면 바로 받는다.
   const getTurnContext = async (session: typeof currentProjectSessions[number], claimed: string[]) => {
+    await refreshTerminalScreen(session.id);
+    const agyUnresolved = () => {
+      const pending = pendingDeliveryRef.current[session.id];
+      return Boolean((pending && (!pending.started || pending.unconfirmed)) || useSessionQueue.getState().queues[queueKey(session)]?.some((item) => item.unconfirmed || item.stuck) || getTeamMailDeliveries().some((d) => d.sessionId === session.id && d.unconfirmed));
+    };
     if (session.cliId === "cursor") {
       const turn = readCursorTurn(session.id);
+      if (turn && !turn.completedAt && !agyUnresolved() && !hasPendingSessionInput(session.id)) {
+        const screen = await apiGetSessionScreen(session.id, 30).catch(() => null);
+        const quiet = await apiGetSessionQuietSince(session.id, AGY_IDLE_FALLBACK_MS).catch(() => null);
+        if (quiet !== null && quiet >= turn.startedAt && !hasPendingSessionInput(session.id) && idleScreenFallback(session.cliId, screen, quiet, getLastSubmission(session.id), agyUnresolved())) return { tokens: 0, window: null, source: `cursor-screen:${session.id}`, ...turn, completedAt: quiet, screenFallback: true };
+      }
       if (turn) return { tokens: 0, window: null, source: `cursor-screen:${session.id}`, ...turn };
       if (readTerminalScreen(session.id) && getLastSubmission(session.id) > 0) return null;
     }
     const ctx = await apiGetSessionContext(session, claimed).catch(() => null);
     const lastSubmit = getLastSubmission(session.id);
+    if (session.cliId === "antigravity" && (!ctx || ctx.source === "agy:ambiguous") && !agyUnresolved() && !hasPendingSessionInput(session.id)) {
+      const screen = await apiGetSessionScreen(session.id, 30).catch(() => null);
+      const latest = await apiGetSessionContext(session, claimed).catch(() => null);
+      const quiet = await apiGetSessionQuietSince(session.id, AGY_IDLE_FALLBACK_MS).catch(() => null);
+      if ((latest?.source ?? null) === (ctx?.source ?? null) && !hasPendingSessionInput(session.id) && idleScreenFallback(session.cliId, screen, quiet, getLastSubmission(session.id), agyUnresolved())) {
+        return { tokens: 0, window: null, source: ctx?.source ?? "agy:unavailable", startedAt: null, completedAt: quiet, sourceModifiedAt: null };
+      }
+    }
+    if ((session.cliId === "claude" || session.cliId === "codex") && !ctx && !agyUnresolved() && !hasPendingSessionInput(session.id)) {
+      const screen = await apiGetSessionScreen(session.id, 30).catch(() => null);
+      const latest = await apiGetSessionContext(session, claimed).catch(() => null);
+      const quiet = await apiGetSessionQuietSince(session.id, AGY_IDLE_FALLBACK_MS).catch(() => null);
+      if (!latest && !hasPendingSessionInput(session.id) && idleScreenFallback(session.cliId, screen, quiet, getLastSubmission(session.id), agyUnresolved())) {
+        return { tokens: 0, window: null, source: `screen:${session.cliId}:${session.id}`, startedAt: null, completedAt: quiet, sourceModifiedAt: null };
+      }
+    }
     if (session.cliId === "antigravity" && ctx?.source === "agy:no-log") {
       if (session.resumed || lastSubmit || hasPendingSessionInput(session.id)) return null;
       const quiet = await apiGetSessionQuietSince(session.id, 10_000).catch(() => null);
@@ -2091,6 +2131,14 @@ ${recentSnippet || "진행 내역 기록 없음"}
         agyBootstrapRef.current = null;
       }
     }
+    if (session.cliId === "antigravity" && ctx?.startedAt && !ctx.completedAt) {
+      if (!agyUnresolved() && !hasPendingSessionInput(session.id)) {
+        const screen = await apiGetSessionScreen(session.id, 30).catch(() => null);
+        const latest = await apiGetSessionContext(session, claimed).catch(() => null);
+        const quiet = await apiGetSessionQuietSince(session.id, AGY_IDLE_FALLBACK_MS).catch(() => null);
+        if (latest?.source === ctx.source && !hasPendingSessionInput(session.id) && agyIdleFallback(latest, screen, quiet, getLastSubmission(session.id), agyUnresolved())) return { ...latest, completedAt: quiet, screenFallback: true };
+      }
+    }
     if (ctx?.completedAt && ctx.completedAt > lastSubmit) {
       if (session.cliId === "claude" && !await apiGetSessionQuietSince(session.id, 3000).catch(() => null)) return null;
       if (session.cliId === "antigravity" && !await apiGetSessionQuietSince(session.id, 10_000).catch(() => null)) return null;
@@ -2102,15 +2150,19 @@ ${recentSnippet || "진행 내역 기록 없음"}
       if (session.cliId === "claude" && ctx?.startedAt && !ctx.completedAt) {
         const pending = pendingDeliveryRef.current[session.id];
         if (!pending || (!pending.unconfirmed && pending.started && ctx.startedAt > pending.at)) {
-          const quiet = await apiGetSessionQuietSince(session.id, 30_000).catch(() => null);
-          if (claudeIdleFallback(session.cliId, ctx, readTerminalScreen(session.id) ?? [], quiet)) return { ...ctx, completedAt: quiet };
+          const screen = await apiGetSessionScreen(session.id, 30).catch(() => null);
+          const latest = await apiGetSessionContext(session, claimed).catch(() => null);
+          const quiet = await apiGetSessionQuietSince(session.id, AGY_IDLE_FALLBACK_MS).catch(() => null);
+          if (latest?.source === ctx.source && latest.sourceModifiedAt && Date.now() - latest.sourceModifiedAt >= AGY_IDLE_FALLBACK_MS && !hasPendingSessionInput(session.id) && claudeIdleFallback(session.cliId, latest, screen?.lines ?? [], quiet) && idleScreenFallback(session.cliId, screen, quiet, getLastSubmission(session.id), agyUnresolved())) return { ...latest, completedAt: quiet, screenFallback: true };
         }
       }
       if (session.cliId === "codex" && ctx?.startedAt && !ctx.completedAt) {
         const pending = pendingDeliveryRef.current[session.id];
         if (!pending || (!pending.unconfirmed && pending.started && ctx.startedAt > pending.at)) {
-          const quiet = await apiGetSessionQuietSince(session.id, 10_000).catch(() => null);
-          if (codexInterruptedIdle(session.cliId, ctx, readTerminalScreen(session.id) ?? [], quiet)) return { ...ctx, completedAt: quiet };
+          const screen = await apiGetSessionScreen(session.id, 30).catch(() => null);
+          const latest = await apiGetSessionContext(session, claimed).catch(() => null);
+          const quiet = await apiGetSessionQuietSince(session.id, AGY_IDLE_FALLBACK_MS).catch(() => null);
+          if (latest?.source === ctx.source && latest.sourceModifiedAt && Date.now() - latest.sourceModifiedAt >= AGY_IDLE_FALLBACK_MS && !hasPendingSessionInput(session.id) && codexInterruptedIdle(session.cliId, latest, screen?.lines ?? [], quiet) && idleScreenFallback(session.cliId, screen, quiet, getLastSubmission(session.id), agyUnresolved())) return { ...latest, completedAt: quiet, screenFallback: true };
         }
       }
       return ctx;
@@ -2129,7 +2181,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
       `${d.kind === "task" ? "assign" : d.kind === "report" ? "report" : d.kind ? "goal" : "mail"}:${d.id}` === id);
     const at = attempt?.at ?? delivery?.submittedAt;
     const source = attempt?.source ?? ctx.source;
-    if (!at || (source !== "agy:no-log" && ctx.source !== source) || ctx.completedAt <= at) return false;
+    if (!at || (!source.startsWith("agy:") && ctx.source !== source) || ctx.completedAt <= at) return false;
     return apiAgyMessageSubmitted(session.id, attempt?.body ?? item.payload, at, claimed, ctx.source).catch(() => false);
   };
   const prevStartsRef = useRef<Record<string, ReturnType<typeof parseBoardTasks>>>({}); // 프로젝트별 지난 읽기의 🔥 행(오독 방지 2회 확인용)
@@ -2225,6 +2277,9 @@ ${recentSnippet || "진행 내역 기록 없음"}
       attempt.step("turn");
       const ctx = await getTurnContext(session, claimed);
       attempt.check();
+      const contextKind = !ctx ? "lookup_failed" : ctx.source === "agy:ambiguous" ? "multiple_candidates" : ctx.source === "agy:unavailable" || ctx.source.startsWith("screen:") ? "lookup_failed" : "screenFallback" in ctx && ctx.screenFallback ? "screen_idle" : "startedAt" in ctx && ctx.startedAt && !ctx.completedAt ? "active_log" : ctx.source.startsWith("agy:") ? "no_log" : "available";
+      const sourceId = ctx?.source.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i)?.[0] ?? "none";
+      attempt.step(`context_${contextKind}_${sourceId}`, ctx?.source);
       if (!ctx?.completedAt || ctx.completedAt <= getLastSubmission(session.id)) {
         logSig = `_ctx${ctx ? "1" : "0"}_s${(ctx as { startedAt?: number | null } | null)?.startedAt ? "1" : "0"}_c${ctx?.completedAt ? "1" : "0"}_${(ctx?.source ?? "none").startsWith("pty:") ? "pty" : "log"}`;
         return blocked("팀원이 응답 중(턴 종료 신호 대기)");
@@ -2237,7 +2292,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
       if (hasPendingSessionInput(session.id)) return blocked("입력창에 30초 안에 친 글이 남아 있음");
       if (!useAppStore.getState().sessions.some((s) => s.id === session.id)) return false;
       const pending = pendingDeliveryRef.current[session.id];
-      const logBased = !ctx.source.startsWith("pty:");
+      const logBased = !ctx.source.startsWith("pty:") && !ctx.source.startsWith("agy:") && !ctx.source.startsWith("screen:");
       const quiet = pending ? await apiGetSessionQuietSince(session.id).catch(() => 0) : 0;
       attempt.check();
       const action = deliveryGate(pending, logBased && ctx.completedAt > (pending?.at ?? 0), quiet, Date.now());
@@ -2258,8 +2313,11 @@ ${recentSnippet || "진행 내역 기록 없음"}
       let confirmed = false;
       let skipped = false;
         let agyAttempt: { body: string; at: number } | undefined;
+      let screenAttempt: { body: string; at: number } | undefined;
       const baseline = "startedAt" in ctx ? ctx.startedAt ?? 0 : 0;
       await apiWriteToSession(session.id, prompt, true, {
+        allowAgyRetry: !["agy:ambiguous", "agy:unavailable"].includes(ctx.source),
+        allowRetry: !ctx.source.startsWith("screen:"),
         hasStarted: async () => {
             if (session.cliId === "antigravity") {
               if (!agyAttempt) return false;
@@ -2274,6 +2332,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
               }
               return matched;
             }
+          if (ctx.source.startsWith("screen:")) return screenAttempt ? apiSessionUserMessageSubmitted(session.id, screenAttempt.body, screenAttempt.at).catch(() => false) : false;
           if (ctx.source.startsWith("cursor-screen:")) return (readCursorTurn(session.id)?.startedAt ?? 0) > baseline;
           if (ctx.source.startsWith("pty:")) return null;
           const current = await apiGetSessionContext(session, claimed);
@@ -2281,6 +2340,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
         },
         onResult: (result) => { confirmed = result; },
         onCommit: (body, at) => {
+          if (ctx.source.startsWith("screen:")) screenAttempt = { body, at };
           if (session.cliId === "antigravity") {
             agyAttempt = { body, at };
             if (ctx.source === "agy:no-log" && agyBootstrapRef.current?.sessionId === session.id) agyBootstrapRef.current = { sessionId: session.id, lockedAt: agyBootstrapRef.current.lockedAt, body, at: agyBootstrapRef.current.at ?? at };
@@ -2636,6 +2696,23 @@ ${recentSnippet || "진행 내역 기록 없음"}
       const boardTasks = tasks.length > 0 ? keepRecentStarts(prevStartsRef.current[project] ?? [], tasks) : tasks;
       if (tasks.length > 0) prevStartsRef.current[project] = tasks.filter((t) => t.status === "start");
       if (boardTasks.length > 0) forgetEndedStarts(sent, boardTasks);
+      // 새 세션으로 뜬 팀원에게 🔥 착수 행 1회 재전달(세션 기준 기록): sent 키·assign handled/resolved 기록을 지워 아래 배정 루프가 다시 보내게 한다
+      if (boardTasks.length > 0) {
+        const seenKey = `agentrix_bb_session_seen:${project}`;
+        const starts = boardTasks.filter((t) => t.status === "start");
+        const r = newSessionResends(projSessions, JSON.parse(localStorage.getItem(seenKey) ?? "{}"), starts);
+        if (JSON.stringify(r.seen) !== localStorage.getItem(seenKey)) localStorage.setItem(seenKey, JSON.stringify(r.seen));
+        if (r.keys.length) {
+          r.keys.forEach((k) => sent.delete(k));
+          const st = useSessionQueue.getState();
+          const re = new Set(r.keys);
+          st.unmark(starts.filter((t) => re.has(`${t.taskId}:start:${t.agentId}`)).flatMap((t) => {
+            const owner = projSessions.find((x) => x.agentId === t.agentId);
+            return owner ? [`${queueKey(owner)}|assign:${t.taskId}`] : [];
+          }));
+          localStorage.setItem(storeKey, JSON.stringify([...sent]));
+        }
+      }
       if (boardTasks.length > 0) clearDispatchNotes(project, (id) => boardTasks.some((t) => t.taskId === id && t.status === "start") || !/^(대기|전달)/.test(getDispatchNotes(project)[id] ?? "")); // 🔥가 아닌 작업의 지난 대기·전달 메모 정리
       // 이미 수행·보고된 자동 항목이 stuck/대기로 head를 막는 교착 해소: 보드 ✅가 된 assign, PM이 결과 메일을 받은 report를 대기열·예약에서 제거
       {
@@ -2660,7 +2737,17 @@ ${recentSnippet || "진행 내역 기록 없음"}
           );
           // 🔥에서 대기로 되돌림·삭제·담당 변경된 지난 배정도 제거(보드를 정상으로 읽은 경우에만 이 블록에 들어옴)
           const revoked = tasks.length === 0 ? [] : revokedAssignIds(list, new Set(boardTasks.filter((t) => t.status === "start" && t.agentId === s.agentId).map((t) => t.taskId)));
-          const ids = [...new Set([...settled, ...revoked])];
+          // 작업표와 연동: 끝난 작업(✅·취소·삭제)의 완료 보고·메일은 대기열에서 자동 제거(handled 기록 → 재등록 0), 메일은 확인 처리해 인박스에서도 뺀다
+          const ended = tasks.length === 0 ? [] : endedQueueIds(list, boardTasks, (mailId) => {
+            const m = mails?.find((x) => x.id === mailId && x.to === s.agentId);
+            return m && { subject: m.subject, body: m.body, isResult: tasks.some((t) => hasTaskResultMail([m], t.taskId, t.agentId, s.agentId!)) };
+          });
+          for (const id of ended) {
+            useSessionQueue.getState().markHandled(`${key}|${id}`);
+            if (id.startsWith("mail:")) await apiAcknowledgeTeamMail(project, s.agentId, id.slice(5)).catch(() => {});
+          }
+          if (ended.length) showToast(`끝난 작업 관련 대기 항목 ${ended.length}건을 정리했습니다.`, "info");
+          const ids = [...new Set([...settled, ...revoked, ...ended])];
           // 제출 확인은 실패했지만 대상 터미널 화면에 이미 찍힌 항목(메모리상 화면 기록만 사용)은 전달된 것으로 확정
           const onScreen = s.cliId === "antigravity" ? [] : deliveredByScreen(list, readTerminalTranscript(s.id));
             for (const item of list) {
@@ -2699,6 +2786,14 @@ ${recentSnippet || "진행 내역 기록 없음"}
         }
       }
       const doneTasks: typeof tasks = [];
+      // 결과 메일을 이미 보낸 작업은 자동 완료 보고 생략(메일이 먼저든 ✅가 먼저든). 메일은 ack되면 인박스에서 사라지므로 본 키를 저장해 둔다.
+      // ponytail: 같은 작업 ID를 다시 수행하면 키가 남아 자동 보고가 생략됨, 재작업 ID 재사용이 잦으면 🔥 전환 시 키 삭제
+      const mailSeenKey = `agentrix.resultMailSeen.${project}`;
+      const mailSeen = new Set<string>(JSON.parse(localStorage.getItem(mailSeenKey) ?? "[]"));
+      if (pmSession?.agentId && tasks.length > 0) {
+        const fresh = resultMailTaskKeys(await apiRouteTeamMail(project).catch(() => []), tasks, pmSession.agentId).filter((k) => !mailSeen.has(k));
+        if (fresh.length) { fresh.forEach((k) => mailSeen.add(k)); localStorage.setItem(mailSeenKey, JSON.stringify([...mailSeen].slice(-200))); }
+      }
       for (const t of tasks) {
         if (t.status === "wait" || t.status === "closed") continue;
         const key = `${t.taskId}:${t.status}:${t.agentId}`;
@@ -2727,6 +2822,12 @@ ${recentSnippet || "진행 내역 기록 없음"}
           if (useSessionQueue.getState().handled.includes(`${queueKey(pmSession)}|report:${t.taskId}:${t.agentId}`)) continue;
           if (getTeamMailDeliveries().some((d) => d.project === project && d.agentId === t.agentId && d.id === t.taskId && d.kind === "task")) continue;
           if (t.agentId === pmSession.agentId) continue; // PM 본인 행은 자기 자신에게 완료 보고를 만들지 않음
+          if (mailSeen.has(`${t.taskId}:${t.agentId}`)) { // 결과 메일이 이미 감: 자동 보고는 처리됨으로 기록하고 대기열 중복 제거
+            const qk = queueKey(pmSession);
+            useSessionQueue.getState().remove(qk, `report:${t.taskId}:${t.agentId}`);
+            useSessionQueue.getState().markHandled(`${qk}|report:${t.taskId}:${t.agentId}`);
+            continue;
+          }
       doneTasks.push(t);
           continue;
         }

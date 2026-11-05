@@ -56,7 +56,20 @@ pub fn submitted_user_message(content: &str, cli: &str, body: &str, after: i64) 
 
 #[cfg(test)]
 mod submission_tests {
-    use super::{antigravity, antigravity_turn, submitted_user_message};
+    use super::{antigravity, antigravity_turn, antigravity_with_agent, submitted_user_message};
+
+    #[test]
+    fn agy_prism_tool_done_does_not_by_itself_end_the_turn() {
+        // Sanitized shape and timestamps from Prism's 2026-11-05 transcript, steps 24–26.
+        let transcript = concat!(
+            "{\"step_index\":24,\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"created_at\":\"2026-11-05T01:42:33Z\",\"content\":\"message\"}\n",
+            "{\"step_index\":25,\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"created_at\":\"2026-11-05T01:42:33Z\",\"tool_calls\":[{}]}\n",
+            "{\"step_index\":26,\"type\":\"GENERIC\",\"status\":\"DONE\",\"created_at\":\"2026-11-05T01:42:50Z\"}"
+        );
+        let (started, completed) = antigravity_turn(transcript, true);
+        assert!(started.is_some());
+        assert!(completed.is_none());
+    }
     #[test]
     fn exact_message_after_attempt_only() {
         let claude = r#"{"type":"user","timestamp":"2026-11-04T00:41:16.746Z","message":{"content":"hello"}}"#;
@@ -132,9 +145,17 @@ mod submission_tests {
             std::fs::write(&path, line).unwrap();
             paths.push(path);
         }
-        assert!(antigravity(&root, started, &[]).is_none());
+        assert_eq!(antigravity(&root, started, &[]).unwrap().source, "agy:ambiguous");
         let claimed = vec![paths[0].to_string_lossy().into_owned()];
         assert_eq!(antigravity(&root, started, &claimed).unwrap().source, paths[1].to_string_lossy());
+        let first = serde_json::json!({"type":"USER_INPUT", "created_at":chrono::Utc::now().to_rfc3339(), "content":".ai-agents/agents/one/ROLE.md"}).to_string();
+        let second = serde_json::json!({"type":"USER_INPUT", "created_at":chrono::Utc::now().to_rfc3339(), "content":"# 🎨 Prism — UI/UX 디자이너"}).to_string();
+        std::fs::write(&paths[0], &first).unwrap();
+        std::fs::write(&paths[1], &second).unwrap();
+        assert_eq!(antigravity_with_agent(&root, started, &[], Some(("one", "Other"))).unwrap().source, paths[0].to_string_lossy());
+        assert_eq!(antigravity_with_agent(&root, started, &[], Some(("two", "Prism"))).unwrap().source, paths[1].to_string_lossy());
+        std::fs::write(&paths[1], &first).unwrap();
+        assert_eq!(antigravity_with_agent(&root, started, &[], Some(("one", "Other"))).unwrap().source, "agy:ambiguous");
         std::fs::remove_dir_all(root).unwrap();
     }
 }
@@ -150,6 +171,13 @@ pub struct ContextUsage {
     pub source: String,
     pub completed_at: Option<i64>,
     pub started_at: Option<i64>,
+    pub source_modified_at: Option<i64>,
+}
+
+fn file_modified_at(path: &Path) -> Option<i64> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()?
+        .duration_since(std::time::UNIX_EPOCH).ok()
+        .and_then(|d| i64::try_from(d.as_millis()).ok())
 }
 
 /// claimed: 다른 세션이 이미 잡은 source 목록
@@ -160,12 +188,18 @@ pub fn read_context(
     started_at: &str,
     claimed: &[String],
 ) -> Option<ContextUsage> {
+    read_context_with_agent(cli_id, session_id, cwd, started_at, claimed, None)
+}
+
+pub fn read_context_with_agent(
+    cli_id: &str, session_id: &str, cwd: &str, started_at: &str, claimed: &[String], agent: Option<(&str, &str)>,
+) -> Option<ContextUsage> {
     let started = DateTime::parse_from_rfc3339(started_at).ok()?.with_timezone(&Utc);
     let home = crate::cli::home_dir();
     match cli_id {
         "claude" => claude(&home.join(".claude").join("projects"), session_id),
         "codex" => codex(&home.join(".codex").join("sessions"), cwd, started, claimed),
-        "antigravity" => antigravity(&home.join(".gemini").join("antigravity-cli").join("brain"), started, claimed),
+        "antigravity" => antigravity_with_agent(&home.join(".gemini").join("antigravity-cli").join("brain"), started, claimed, agent),
         "opencode" => opencode(&home.join(".local").join("share").join("opencode").join("opencode.db"), cwd, started, claimed),
         _ => None,
     }
@@ -195,7 +229,7 @@ fn claude(projects: &Path, session_id: &str) -> Option<ContextUsage> {
         .find(|p| p.is_file())?;
     let content = std::fs::read_to_string(&file).ok()?;
     let tokens = claude_last_context(&content)?;
-    Some(ContextUsage { tokens, window: None, source: file.to_string_lossy().into(), completed_at: claude_completion(&content), started_at: turn_started(&content, "claude") })
+    Some(ContextUsage { tokens, window: None, source: file.to_string_lossy().into(), completed_at: claude_completion(&content), started_at: turn_started(&content, "claude"), source_modified_at: file_modified_at(&file) })
 }
 
 fn claude_local_user(v: &Value) -> bool {
@@ -340,7 +374,7 @@ fn codex(sessions: &Path, cwd: &str, started: DateTime<Utc>, claimed: &[String])
     }
     let (_, path, content) = best?;
     let (tokens, window) = codex_last_context(&content)?;
-    Some(ContextUsage { tokens, window, source: path.to_string_lossy().into(), completed_at: if matches == 1 { codex_completion(&content) } else { None }, started_at: if matches == 1 { turn_started(&content, "codex") } else { None } })
+    Some(ContextUsage { tokens, window, source: path.to_string_lossy().into(), completed_at: if matches == 1 { codex_completion(&content) } else { None }, started_at: if matches == 1 { turn_started(&content, "codex") } else { None }, source_modified_at: file_modified_at(&path) })
 }
 
 fn codex_last_context(content: &str) -> Option<(u64, Option<u64>)> {
@@ -381,7 +415,7 @@ pub fn saved_codex_log_in_use(sessions: &Path, cwd: &str, id: &str, started_at: 
 pub fn read_codex_session(path: &Path) -> Option<ContextUsage> {
     let content = std::fs::read_to_string(path).ok()?;
     let (tokens, window) = codex_last_context(&content)?;
-    Some(ContextUsage { tokens, window, source: path.to_string_lossy().into(), completed_at: codex_completion(&content), started_at: turn_started(&content, "codex") })
+    Some(ContextUsage { tokens, window, source: path.to_string_lossy().into(), completed_at: codex_completion(&content), started_at: turn_started(&content, "codex"), source_modified_at: file_modified_at(path) })
 }
 
 pub fn unique_codex_session_id(sessions: &Path, cwd: &str, started_at: &str, source: &str) -> Option<String> {
@@ -404,14 +438,21 @@ pub fn unique_codex_session_id(sessions: &Path, cwd: &str, started_at: &str, sou
 
 /// Antigravity: brain/<uuid>/.system_generated/logs/transcript.jsonl, 로그에 작업 폴더가 없어 시작 시각으로만 매칭
 // shortcut: 로그 후보가 여러 개면 보류하며, CLI가 cwd를 기록하면 폴더로 식별한다.
+#[cfg(test)]
 fn antigravity(brain: &Path, started: DateTime<Utc>, claimed: &[String]) -> Option<ContextUsage> {
+    antigravity_with_agent(brain, started, claimed, None)
+}
+
+fn antigravity_with_agent(brain: &Path, started: DateTime<Utc>, claimed: &[String], agent: Option<(&str, &str)>) -> Option<ContextUsage> {
     match std::fs::read_dir(brain) {
         Ok(_) => {},
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Some(ContextUsage { tokens: 0, window: None, source: "agy:no-log".into(), completed_at: None, started_at: None }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Some(ContextUsage { tokens: 0, window: None, source: "agy:no-log".into(), completed_at: None, started_at: None, source_modified_at: None }),
         Err(_) => return None,
     }
     let mut best: Option<(DateTime<Utc>, PathBuf, String)> = None;
     let mut matches = 0;
+    let mut identified = None;
+    let mut identified_count = 0;
     let mut recent = 0;
     for entry in walkdir::WalkDir::new(brain).max_depth(4) {
         let entry = entry.ok()?;
@@ -437,20 +478,36 @@ fn antigravity(brain: &Path, started: DateTime<Utc>, claimed: &[String]) -> Opti
             continue;
         }
         matches += 1;
+        if let Some((id, name)) = agent {
+            let first_user = content.lines().filter_map(|line| serde_json::from_str::<Value>(line).ok()).find(|v| v.get("type").and_then(Value::as_str) == Some("USER_INPUT"));
+            let text = first_user.as_ref().and_then(|v| v.get("content")).and_then(Value::as_str).unwrap_or("").replace('\\', "/");
+            let role_path = format!(".ai-agents/agents/{id}/ROLE.md");
+            let named_header = !name.is_empty() && text.lines().take(6).any(|line| {
+                line.trim_start().strip_prefix("# ").and_then(|s| s.split_once(" — ")).is_some_and(|(label, _)| {
+                    label == name || label.strip_suffix(name).is_some_and(|prefix| prefix.ends_with(char::is_whitespace))
+                })
+            });
+            if (!id.is_empty() && text.contains(&role_path)) || named_header {
+                identified_count += 1;
+                if identified_count == 1 { identified = Some((ts, path.clone(), content.clone())); }
+            }
+        }
         if best.as_ref().map(|b| ts < b.0).unwrap_or(true) {
             best = Some((ts, path, content));
         }
     }
     if matches == 0 {
-        return Some(ContextUsage { tokens: 0, window: None, source: "agy:no-log".into(), completed_at: None, started_at: None });
+        return Some(ContextUsage { tokens: 0, window: None, source: "agy:no-log".into(), completed_at: None, started_at: None, source_modified_at: None });
     }
-    if matches != 1 { return None; }
-    let (_, path, content) = best?;
+    let (_, path, content) = if matches == 1 { best? } else if identified_count == 1 { identified? } else {
+        return Some(ContextUsage { tokens: 0, window: None, source: "agy:ambiguous".into(), completed_at: None, started_at: None, source_modified_at: None });
+    };
     let tokens = antigravity_last_context(&content).unwrap_or(0);
-    let quiet = std::fs::metadata(&path).and_then(|m| m.modified()).ok()
-        .and_then(|t| t.elapsed().ok()).is_some_and(|elapsed| elapsed >= Duration::from_secs(10));
+    let modified = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+    let quiet = modified.and_then(|t| t.elapsed().ok()).is_some_and(|elapsed| elapsed >= Duration::from_secs(10));
+    let source_modified_at = modified.and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).and_then(|d| i64::try_from(d.as_millis()).ok());
     let (started_at, completed_at) = antigravity_turn(&content, quiet);
-    Some(ContextUsage { tokens, window: None, source: path.to_string_lossy().into(), completed_at, started_at })
+    Some(ContextUsage { tokens, window: None, source: path.to_string_lossy().into(), completed_at, started_at, source_modified_at })
 }
 
 fn antigravity_turn(content: &str, quiet: bool) -> (Option<i64>, Option<i64>) {
@@ -518,7 +575,7 @@ fn opencode(db: &Path, cwd: &str, started: DateTime<Utc>, claimed: &[String]) ->
         [&sid], |r| r.get(0),
     ).ok();
     let completed_at = latest.and_then(|data| serde_json::from_str::<Value>(&data).ok()).and_then(|v| opencode_completion(&v, matches));
-    Some(ContextUsage { tokens, window: None, source: format!("opencode:{sid}"), completed_at, started_at: None })
+    Some(ContextUsage { tokens, window: None, source: format!("opencode:{sid}"), completed_at, started_at: None, source_modified_at: None })
 }
 
 #[cfg(test)]

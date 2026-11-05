@@ -31,7 +31,7 @@ import {
 } from "../lib/tauriBridge";import { FilePickerModal } from "./FilePickerModal";
 import { isTerminalReport, shouldResizePty } from "../lib/terminalReplay";
 import { getRoleState, ROLE_STATE_EVENT } from "../lib/handoffRelay";
-import { readCursorTurn, registerTerminalScreen, registerTerminalTranscript } from "../lib/cursorScreen";
+import { readCursorTurn } from "../lib/cursorScreen";
 import { useSessionQueue, queueKey } from "../lib/sessionQueueStore";
 import { useAppStore } from "../lib/store";
 import { hasPendingSessionInput } from "../lib/inputHistory";
@@ -326,6 +326,9 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     if (!container) return;
 
     const term = new Terminal({
+      // 숨김 탭은 fit이 안 돼 PTY 시작 크기(pty.rs 110x30)와 달라지면 화면 기반 판정이 어긋남 → 같은 크기로 시작
+      cols: 110,
+      rows: 30,
       cursorBlink: true,
       cursorStyle: "block",
       fontSize: fontSize,
@@ -415,21 +418,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     });
 
     termRef.current = term;
-    const unregisterCursorScreen = ["cursor", "codex"].includes(session.cliId) ? registerTerminalScreen(session.id, () => {
-      const buffer = term.buffer.active;
-      const start = buffer.baseY + Math.max(0, term.rows - 10);
-      return Array.from({ length: Math.min(term.rows, 10) }, (_, i) => buffer.getLine(start + i)?.translateToString(true) ?? "");
-    }) : () => {};
-    const unregisterTranscript = registerTerminalTranscript(session.id, () => {
-      const buffer = term.buffer.active;
-      const lines: string[] = [];
-      for (let i = Math.max(0, buffer.length - 400); i < buffer.length; i++) {
-        const line = buffer.getLine(i);
-        const text = line?.translateToString(true) ?? "";
-        if (line?.isWrapped && lines.length) lines[lines.length - 1] += text; else lines.push(text);
-      }
-      return lines;
-    });
+    // 전달·준비 판정 화면은 백엔드 가상 화면(get_session_screen)에서 읽는다. xterm은 표시 전용.
     fitAddonRef.current = fitAddon;
     // 재마운트 시 버퍼 재생이 기본 80열로 그려져 줄이 겹치지 않도록, 보이는 상태면 재생 전에 크기부터 맞춘다.
     if (container.clientWidth > 0) {
@@ -533,8 +522,6 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       resizeObserver.disconnect();
       container.removeEventListener("paste", handlePaste);
       dataDisposable.dispose();
-      unregisterCursorScreen();
-      unregisterTranscript();
       term.dispose();
     };
   }, [session.id]);
@@ -625,7 +612,10 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     setPromptText("");
   };
   const sendQueuedNow = async (id: string, payload: string, auto = false) => {
-    if (sendingQueueRef.current.has(id) || useSessionQueue.getState().queues[qKey]?.find((item) => item.id === id)?.unconfirmed) return;
+    if (sendingQueueRef.current.has(id)) return;
+    // 전달 결과 미확인 항목: 자동 재전송은 없고, 사용자가 확인한 뒤에만 직접 다시 보낸다(이미 입력됐을 수 있어 중복 위험을 알림)
+    if (useSessionQueue.getState().queues[qKey]?.find((item) => item.id === id)?.unconfirmed
+      && !(await confirmDialog({ title: "전달 결과를 확인하지 못했습니다", message: "이미 입력창에 들어갔거나 처리 중일 수 있어요. 터미널을 확인한 뒤에도 다시 보내면 같은 내용이 중복될 수 있습니다.", confirmLabel: "그래도 지금 보내기", danger: true }))) return;
     // 자동 항목은 입력창·턴 관문을 건너뛰므로 쓰다 만 글이 있으면 먼저 확인
     if (auto && hasPendingSessionInput(session.id) && !(await confirmDialog({ title: "입력창에 쓰던 글이 있습니다", message: "그 뒤에 붙어 전달될 수 있어요. 그래도 지금 보낼까요?", confirmLabel: "지금 보내기" }))) return;
     sendingQueueRef.current.add(id);
@@ -1002,7 +992,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
                 <span className="flex-1 min-w-0 truncate text-slate-200" title={it.payload || it.preview}>{it.preview}</span>
                 {(it.stuck || it.reason) && (
                   <span className={`shrink-0 max-w-[40%] truncate text-[10px] ${it.stuck ? "text-amber-400 font-semibold" : "text-slate-400"}`} title={it.reason}>
-                  {it.unconfirmed ? "전송됨 · 확인 안 됨" : it.stuck ? "멈춤" : it.reason}
+                  {it.unconfirmed ? "전달 결과 미확인" : it.stuck ? "멈춤" : it.reason}
                   </span>
                 )}
                 {(
@@ -1011,7 +1001,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
                     <button type="button" disabled={i === 0} onClick={() => useSessionQueue.getState().move(qKey, it.id, -1)} className="p-0.5 rounded text-slate-400 hover:text-slate-100 disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500" title="위로" aria-label="위로"><ChevronUp className="w-3 h-3" /></button>
                     <button type="button" disabled={i === queued.length - 1} onClick={() => useSessionQueue.getState().move(qKey, it.id, 1)} className="p-0.5 rounded text-slate-400 hover:text-slate-100 disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500" title="아래로" aria-label="아래로"><ChevronDown className="w-3 h-3" /></button>
                     </>}
-                    <button type="button" disabled={it.unconfirmed} onClick={() => sendQueuedNow(it.id, it.payload, it.source !== "user")} className="px-1.5 py-0.5 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-[10px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300" title={it.unconfirmed ? "터미널에서 제출 여부를 확인해 주세요" : "대기를 건너뛰고 지금 바로 입력"}>지금 보내기</button>
+                    <button type="button" onClick={() => sendQueuedNow(it.id, it.payload, it.source !== "user")} className="px-1.5 py-0.5 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-[10px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300" title={it.unconfirmed ? "전달 결과 미확인: 터미널을 확인한 뒤 필요하면 다시 보내세요(중복 주의)" : "대기를 건너뛰고 지금 바로 입력"}>지금 보내기</button>
                     <button type="button" onClick={() => (it.source === "user" ? useSessionQueue.getState().remove(qKey, it.id) : useSessionQueue.getState().resolve(qKey, it.id))} className="p-0.5 rounded text-slate-400 hover:text-rose-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500" title={it.source === "user" ? "삭제" : "버리기(다시 대기열에 생기지 않음)"} aria-label="버리기"><X className="w-3 h-3" /></button>
                   </span>
                 )}

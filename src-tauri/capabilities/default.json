@@ -12,6 +12,7 @@
     "core:app:default",
     "core:window:allow-start-dragging",
     "allow-session-user-message-submitted",
+    "allow-get-session-screen",
     "allow-get-session-context",
     "allow-get-session-quiet-since",
     "allow-get-session-paste-mode",

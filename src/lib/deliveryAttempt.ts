@@ -10,9 +10,9 @@ export class DeliveryAttempt {
 
   constructor(readonly sessionId: string, readonly id: string) { this.step("lock"); }
 
-  step(stage: string): void {
+  step(stage: string, source?: string): void {
     this.stage = stage;
-    void invoke("log_delivery_stage", { sessionId: this.sessionId, attemptId: this.id, stage, elapsedMs: Date.now() - this.startedAt }).catch(() => {});
+    void invoke("log_delivery_stage", { sessionId: this.sessionId, attemptId: this.id, stage, elapsedMs: Date.now() - this.startedAt, source }).catch(() => {});
   }
 
   check(): void {

@@ -18,6 +18,7 @@ function setup(pasteMode = true, quiet = Date.now()) {
     if (name === "get_session_quiet_since") return quiet;
     if (name === "read_session_output") return { data: "prompt redraw", nextCursor: 0 };
     if (name === "write_to_session") { writes.push(args.data); if (args.data === "\r") enters++; return; }
+    if (name === "read_file_as_base64") throw new Error("ROLE.md 없음"); // 파일이 없으면 기존 전문 브리핑으로 대체
     throw new Error(`unexpected invoke: ${name}`);
   };
   const modules = {
@@ -29,7 +30,7 @@ function setup(pasteMode = true, quiet = Date.now()) {
   const load = (path, name) => {
     const js = ts.transpileModule(fs.readFileSync(path, "utf8"), { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText;
     const exports = {};
-    vm.runInNewContext(js, { exports, require: (id) => modules[id] ?? {}, window: { __TAURI_INTERNALS__: {} }, console: { info() {} }, setTimeout: (fn) => { fn(); return 0; }, Promise, Date, Map, Set });
+    vm.runInNewContext(js, { exports, require: (id) => modules[id] ?? {}, window: { __TAURI_INTERNALS__: {} }, console: { info() {}, warn() {} }, setTimeout: (fn) => { fn(); return 0; }, Promise, Date, Map, Set });
     modules[name] = exports;
     return exports;
   };
@@ -161,6 +162,7 @@ test("failed write restores role prefix for the next mail", async () => {
       if (args.data === "\r") enters++;
       return;
     }
+    if (name === "read_file_as_base64") throw new Error("ROLE.md 없음"); // 파일이 없으면 기존 전문 브리핑으로 대체
     throw new Error(`unexpected invoke: ${name}`);
   };
   const modules = {
@@ -172,7 +174,7 @@ test("failed write restores role prefix for the next mail", async () => {
   const load = (path, name) => {
     const js = ts.transpileModule(fs.readFileSync(path, "utf8"), { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText;
     const exports = {};
-    vm.runInNewContext(js, { exports, require: (id) => modules[id] ?? {}, window: { __TAURI_INTERNALS__: {} }, console: { info() {} }, setTimeout: (fn) => { fn(); return 0; }, Promise, Date, Map, Set });
+    vm.runInNewContext(js, { exports, require: (id) => modules[id] ?? {}, window: { __TAURI_INTERNALS__: {} }, console: { info() {}, warn() {} }, setTimeout: (fn) => { fn(); return 0; }, Promise, Date, Map, Set });
     modules[name] = exports;
     return exports;
   };

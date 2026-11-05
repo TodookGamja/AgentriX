@@ -46,8 +46,22 @@ export function registerTerminalScreen(id: string, read: () => string[]): () => 
   return () => { if (screens.get(id) === read) screens.delete(id); };
 }
 
+// 백엔드 가상 화면(get_session_screen) 사본: 탭 표시·xterm 마운트·창 크기와 무관한 판정 근거. 등록된 reader가 있으면(테스트) 그쪽 우선.
+const mirrored = new Map<string, string[]>();
+
+export function setTerminalScreen(id: string, lines: string[]): void {
+  mirrored.set(id, lines);
+}
+
+export function forgetTerminalScreen(id: string): void {
+  mirrored.delete(id);
+}
+
 export function readTerminalScreen(id: string): string[] | null {
-  return screens.get(id)?.() ?? null;
+  const read = screens.get(id);
+  if (read) return read();
+  const lines = mirrored.get(id);
+  return lines ? lines.slice(-10) : null;
 }
 
 export function readCursorTurn(id: string, quietSince?: number | null, output = false): CursorTurn | undefined {
@@ -67,5 +81,5 @@ export function registerTerminalTranscript(id: string, read: () => string[]): ()
 }
 
 export function readTerminalTranscript(id: string): string[] | null {
-  return transcripts.get(id)?.() ?? null;
+  return transcripts.get(id)?.() ?? mirrored.get(id) ?? null;
 }

@@ -10,14 +10,14 @@ export async function apiInstallNpmCliUpdate(packageName: string): Promise<void>
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { getUserInputVersion, recordSessionInput, recordSessionSubmission } from "./inputHistory";
 import { applyHandoffHint, getRoleState, markRolePrefix, restoreHandoffHint } from "./handoffRelay";
-import { collabProtocol } from "./blackboardDispatch";
+import { roleBriefText } from "./blackboardDispatch";
 import { useAppStore } from "./store";
 import { enterReady, needsEnterRetry, pasteWrap, queueSessionWrite, submissionStarted } from "./sessionWriteQueue";
 
 const AGY_FULL_BODY_RETRY_TIMEOUT_MS = 10_000;
 const agyFullBodyRetried = new Set<string>(); // 세션·본문별 retry_full_body 사용 기록(앱 실행 중 유지)
 import type { DeliveryAttempt } from "./deliveryAttempt";
-import { codexPastePending, CursorBusyError, cursorPastedSubmission, cursorTurnBusy, readCursorTurn, readTerminalScreen } from "./cursorScreen";
+import { codexPastePending, CursorBusyError, cursorPastedSubmission, cursorTurnBusy, readCursorTurn, readTerminalScreen, setTerminalScreen } from "./cursorScreen";
 import type {
   ApiKeyStatus,
   ApplyResult,
@@ -316,9 +316,20 @@ export class SubmissionUnconfirmedError extends Error {
   constructor() { super("보냈지만 제출을 확인하지 못했습니다."); this.name = "SubmissionUnconfirmedError"; }
 }
 
-export async function apiWriteToSession(sessionId: string, data: string, injected = false, verify?: { hasStarted: () => Promise<boolean | null>; onResult: (confirmed: boolean) => void; onlyPendingRole?: boolean; onSkip?: () => void; attempt?: DeliveryAttempt; onCommit?: (body: string, at: number) => void }, roleBriefing = false): Promise<void> {
+export function isRawUserKey(data: string, injected: boolean, verify?: unknown, roleBriefing = false): boolean {
+  return !injected && !verify && !roleBriefing && (data.length <= 1 || data.startsWith("\x1b"));
+}
+
+export async function apiWriteToSession(sessionId: string, data: string, injected = false, verify?: { hasStarted: () => Promise<boolean | null>; onResult: (confirmed: boolean) => void; onlyPendingRole?: boolean; onSkip?: () => void; attempt?: DeliveryAttempt; onCommit?: (body: string, at: number) => void; allowAgyRetry?: boolean; allowRetry?: boolean }, roleBriefing = false): Promise<void> {
   recordSessionInput(sessionId, data, injected, false);
   const inputVersion = getUserInputVersion(sessionId);
+  // 사용자가 직접 누른 키·방향키·휠(마우스 보고)은 진행 중인 팀 전달(agy는 최대 30초+재시도)의 쓰기 대기열 뒤에 서지 않는다:
+  // 줄 서면 agy 탭에서 스크롤·타이핑이 먹통처럼 보인다. 전달은 사용자 입력 버전이 바뀌면 Enter 전에 스스로 중단된다.
+  if (isRawUserKey(data, injected, verify, roleBriefing) && isTauriRuntime()) {
+    await invoke("write_to_session", { sessionId, data });
+    if (/[\r\n]/.test(data)) recordSessionSubmission(sessionId);
+    return;
+  }
   return queueSessionWrite(sessionId, async () => {
     verify?.attempt?.check();
     const session = useAppStore.getState().sessions.find((s) => s.id === sessionId);
@@ -331,7 +342,7 @@ export async function apiWriteToSession(sessionId: string, data: string, injecte
       const agents = await apiGetProjectAgents(session.cwd);
       const agent = agents.find((a) => a.id === session.agentId);
       if (agent?.autoBrief && agent.rolePrompt.trim()) {
-        markRolePrefix(sessionId, `${agent.rolePrompt.replace(/[\r\n]+/g, " ").trim()} ${collabProtocol(agent.id, agents)} `);
+        markRolePrefix(sessionId, roleBriefText(agent, agents, Boolean(await apiReadFileAsBase64(`${session.cwd}/.ai-agents/agents/${agent.id}/ROLE.md`))));
       }
     }
     const original = data;
@@ -372,6 +383,7 @@ export async function apiWriteToSession(sessionId: string, data: string, injecte
           return;
         }
       const sentAt = Date.now();
+      if (session && ["cursor", "codex"].includes(session.cliId)) await refreshTerminalScreen(sessionId);
       const cursorBefore = session?.cliId === "cursor" ? readTerminalScreen(sessionId) : null;
         const pasteMode = await invoke<boolean | null>("get_session_paste_mode", { sessionId }).catch(() => null);
       const cursorAtWrite = session?.cliId === "cursor" ? readTerminalScreen(sessionId) : null;
@@ -419,6 +431,7 @@ export async function apiWriteToSession(sessionId: string, data: string, injecte
           const chunk = endCursor === null ? null : await invoke<PtyOutputChunk>("read_session_output", { sessionId, cursor: endCursor }).catch(() => null);
           const output = chunk?.data ?? "";
           if (attempt === 0 && chunk && endCursor !== null) outputBytes = Math.max(0, chunk.nextCursor - endCursor);
+          if (session && ["cursor", "codex"].includes(session.cliId)) await refreshTerminalScreen(sessionId);
           const cursorNow = session?.cliId === "cursor" ? readTerminalScreen(sessionId) : null;
           const cursorConfirmed = cursorBefore !== null && cursorNow !== null &&
             ((!cursorTurnBusy(cursorBefore) && cursorTurnBusy(cursorNow)) || cursorPastedSubmission(cursorNow, cursorBefore));
@@ -428,7 +441,7 @@ export async function apiWriteToSession(sessionId: string, data: string, injecte
           verify.attempt?.check();
         // agy 본문 전체 재전송은 같은 세션·같은 본문에 평생 1회(시도마다 반복하면 입력창에 같은 지침이 쌓임)
         const retryKey = `${sessionId} ${body}`;
-        if (session?.cliId === "antigravity" && !confirmed && attempt === 0 && !agyFullBodyRetried.has(retryKey)) {
+        if (session?.cliId === "antigravity" && verify.allowAgyRetry !== false && !confirmed && attempt === 0 && !agyFullBodyRetried.has(retryKey)) {
           agyFullBodyRetried.add(retryKey);
           if (getUserInputVersion(sessionId) !== inputVersion) break;
           const retrySentAt = Date.now();
@@ -454,7 +467,7 @@ export async function apiWriteToSession(sessionId: string, data: string, injecte
           retries++;
           continue;
         }
-          if (session?.cliId === "antigravity" || !needsEnterRetry(confirmed, getUserInputVersion(sessionId) !== inputVersion) || attempt === 2) break;
+          if (session?.cliId === "antigravity" || verify.allowRetry === false || !needsEnterRetry(confirmed, getUserInputVersion(sessionId) !== inputVersion) || attempt === 2) break;
           if (getUserInputVersion(sessionId) !== inputVersion) break;
           await invoke("write_to_session", { sessionId, data: "\r" });
           retries++;
@@ -517,7 +530,7 @@ export async function apiAgyMessageSubmitted(sessionId: string, body: string, af
 export async function apiGetSessionContext(
   session: SessionInfo,
   claimed: string[]
-): Promise<{ tokens: number; window: number | null; source: string; completedAt: number | null; startedAt: number | null } | null> {
+): Promise<{ tokens: number; window: number | null; source: string; completedAt: number | null; startedAt: number | null; sourceModifiedAt: number | null } | null> {
   if (!isTauriRuntime()) return null;
   return invoke("get_session_context", {
     cliId: session.cliId,
@@ -531,6 +544,25 @@ export async function apiGetSessionContext(
 export async function apiGetSessionQuietSince(sessionId: string, quietMs?: number): Promise<number | null> {
   if (!isTauriRuntime()) return null;
   return invoke<number | null>("get_session_quiet_since", { sessionId, quietMs });
+}
+
+export interface PtyScreen {
+  lines: string[];
+  cursorRow: number;
+  cursorCol: number;
+  rows: number;
+  cols: number;
+}
+
+export async function apiGetSessionScreen(sessionId: string, lines?: number): Promise<PtyScreen | null> {
+  if (!isTauriRuntime()) return null;
+  return invoke<PtyScreen>("get_session_screen", { sessionId, lines });
+}
+
+// 판정 직전 백엔드 가상 화면을 사본에 반영(실패·미지원이면 이전 사본 유지)
+export async function refreshTerminalScreen(sessionId: string): Promise<void> {
+  const screen = await apiGetSessionScreen(sessionId, 30).catch(() => null);
+  if (Array.isArray(screen?.lines)) setTerminalScreen(sessionId, screen.lines);
 }
 
 export async function apiResizeSession(

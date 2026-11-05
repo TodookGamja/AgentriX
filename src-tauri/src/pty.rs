@@ -64,6 +64,16 @@ pub struct PtyOutputChunk {
     pub next_cursor: usize,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PtyScreen {
+    lines: Vec<String>,
+    cursor_row: u16,
+    cursor_col: u16,
+    rows: u16,
+    cols: u16,
+}
+
 pub struct PtySession {
     pub info: SessionInfo,
     pub resumed_cli_id: Option<String>,
@@ -106,7 +116,6 @@ fn is_terminal_control_only(data: &[u8]) -> bool {
 }
 
 /// 출력 버퍼. 커서는 세션 시작부터의 절대 바이트 위치라서 앞부분을 잘라내도 커서가 어긋나지 않는다.
-#[derive(Default)]
 pub struct OutputBuffer {
     /// data[0]의 절대 위치 (지금까지 잘라낸 바이트 수)
     start: usize,
@@ -115,6 +124,21 @@ pub struct OutputBuffer {
     last_output_ms: i64,
     paste_mode: bool,
     paste_prefix: Vec<u8>,
+    screen: vt100::Parser,
+}
+
+impl Default for OutputBuffer {
+    fn default() -> Self {
+        Self { start: 0, data: Vec::new(), last_output_ms: 0, paste_mode: false, paste_prefix: Vec::new(), screen: vt100::Parser::new(30, 110, 0) }
+    }
+}
+
+fn screen_snapshot(buffer: &OutputBuffer, lines: u16) -> PtyScreen {
+    let screen = buffer.screen.screen();
+    let (rows, cols) = screen.size();
+    let (cursor_row, cursor_col) = screen.cursor_position();
+    let lines = screen.rows(0, cols).skip(usize::from(rows.saturating_sub(lines))).collect();
+    PtyScreen { lines, cursor_row, cursor_col, rows, cols }
 }
 
 fn track_paste_mode(buffer: &mut OutputBuffer, bytes: &[u8]) {
@@ -380,6 +404,7 @@ impl PtyManager {
                         let chunk_bytes = &buf[..n];
                         {
                             let mut locked = buffer_clone.lock().unwrap();
+                            locked.screen.process(chunk_bytes);
                         track_paste_mode(&mut locked, chunk_bytes);
                             locked.data.extend_from_slice(chunk_bytes);
                             locked.last_output_ms = Utc::now().timestamp_millis();
@@ -503,15 +528,27 @@ impl PtyManager {
         let session = sessions
             .get_mut(session_id)
             .ok_or_else(|| "세션을 찾을 수 없습니다.".to_string())?;
+        let rows = rows.clamp(5, 500);
+        let cols = cols.clamp(20, 1000);
+        let mut buffer = session.output_buffer.lock().unwrap();
         session
             .master
             .resize(PtySize {
-                rows: rows.max(5),
-                cols: cols.max(20),
+                rows,
+                cols,
                 pixel_width: 0,
                 pixel_height: 0,
             })
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        buffer.screen.set_size(rows, cols);
+        Ok(())
+    }
+
+    pub fn screen(&self, session_id: &str, lines: u16) -> Result<PtyScreen, String> {
+        let sessions = self.sessions.lock().unwrap();
+        let session = sessions.get(session_id).ok_or_else(|| "세션을 찾을 수 없습니다.".to_string())?;
+        let buffer = session.output_buffer.lock().unwrap();
+        Ok(screen_snapshot(&buffer, lines))
     }
 
     pub fn read_output_from(&self, session_id: &str, cursor: usize) -> Result<PtyOutputChunk, String> {
@@ -1242,6 +1279,8 @@ mod tests {
         assert_eq!(mgr.list_sessions().len(), 2);
 
         mgr.resize_session(&s1.id, 120, 40).expect("resize should succeed");
+        let screen = mgr.screen(&s1.id, 2).expect("hidden session screen");
+        assert_eq!((screen.rows, screen.cols, screen.lines.len()), (40, 120, 2));
         mgr.write_to_session(&s1.id, b"echo READY\r\n")
             .expect("write should succeed");
 
@@ -1298,6 +1337,24 @@ fn read_from(buf: &OutputBuffer, cursor: usize) -> (String, usize) {
 #[cfg(test)]
 mod buffer_tests {
     use super::*;
+
+    #[test]
+    fn screen_tracks_stream_and_resize_without_a_mounted_terminal() {
+        let mut visible = OutputBuffer::default();
+        let mut hidden = OutputBuffer::default();
+        for buffer in [&mut visible, &mut hidden] {
+            buffer.screen.process(b"before\x1b[2J\x1b[H");
+            buffer.screen.set_size(5, 20);
+            buffer.screen.process(b"\x1b[4;1Hready\r\n> ");
+        }
+        let shown = screen_snapshot(&visible, 2);
+        let unmounted = screen_snapshot(&hidden, 2);
+        assert_eq!(unmounted.lines, ["ready", "> "]);
+        assert_eq!(shown.lines, unmounted.lines);
+        assert_eq!((unmounted.rows, unmounted.cols), (5, 20));
+        assert_eq!((unmounted.cursor_row, unmounted.cursor_col), (4, 2));
+        assert_eq!(screen_snapshot(&hidden, u16::MAX).lines.len(), 5);
+    }
 
     #[test]
     fn truncated_replay_starts_after_first_newline_not_mid_escape() {

@@ -43,6 +43,50 @@ export function agyFirstPromptReady(lines: string[]): boolean {
   const tail = lines.slice(prompt + 1).filter((line) => line.trim() && !/^[\s─━┄┈-]+$/.test(line));
   return tail.length === 1 && /^\s*\?\s+for shortcuts\b/i.test(tail[0]);
 }
+
+export const AGY_IDLE_FALLBACK_MS = 60_000;
+
+function screenShowsWork(lines: string[]): boolean {
+  return lines.slice(-6).some((line) => /esc\s+(?:to\s+)?(?:interrupt|cancel)|ctrl\+c\s+(?:to\s+)?(?:stop|cancel)|^\s*(?:thinking|working|running)(?:\s|\.|$)/i.test(line));
+}
+
+export function agyIdleScreen(
+  screen: { lines: string[]; rows: number; cursorRow: number; cursorCol: number } | null,
+  quietSince: number | null, lastSubmit: number, pending: boolean, now = Date.now(),
+): boolean {
+  if (pending || !screen || quietSince === null || quietSince <= lastSubmit || now - quietSince < AGY_IDLE_FALLBACK_MS) return false;
+  const row = screen.cursorRow - (screen.rows - screen.lines.length);
+  if (row < 0 || row >= screen.lines.length || !/^\s*[>›❯]\s*$/.test(screen.lines[row])) return false;
+  if (screenShowsWork(screen.lines)) return false;
+  const promptCol = screen.lines[row].search(/[>›❯]/);
+  return screen.cursorCol >= promptCol + 1 && screen.cursorCol <= promptCol + 2 && agyFirstPromptReady(screen.lines);
+}
+
+export function idleScreenFallback(
+  cliId: string, screen: { lines: string[]; rows: number; cursorRow: number; cursorCol: number } | null,
+  quietSince: number | null, lastSubmit: number, pending: boolean, now = Date.now(),
+): boolean {
+  if (cliId === "antigravity") return agyIdleScreen(screen, quietSince, lastSubmit, pending, now);
+  if (pending || !screen || screenShowsWork(screen.lines) || quietSince === null || quietSince <= lastSubmit || now - quietSince < AGY_IDLE_FALLBACK_MS) return false;
+  const row = screen.cursorRow - (screen.rows - screen.lines.length);
+  if (row < 0 || row >= screen.lines.length) return false;
+  const prompt = cliId === "claude" ? "❯" : cliId === "codex" ? "›" : cliId === "cursor" ? "→" : "";
+  if (!prompt || !new RegExp(`^\\s*${prompt}\\s*$`).test(screen.lines[row])) return false;
+  const col = screen.lines[row].indexOf(prompt);
+  if (screen.cursorCol < col + 1 || screen.cursorCol > col + 2) return false;
+  if (cliId === "claude") return claudeIdleFallback(cliId, { startedAt: 1 }, screen.lines, quietSince, now);
+  if (cliId === "codex") return codexInterruptedIdle(cliId, { startedAt: 1 }, screen.lines, quietSince, now);
+  return !screen.lines.slice(-5).some((line) => /ctrl\+c\s+to\s+stop|\brunning\b|\bapproval\b|\ballow\b/i.test(line));
+}
+
+export function agyIdleFallback(
+  ctx: { startedAt?: number | null; completedAt?: number | null; source: string; sourceModifiedAt?: number | null } | null,
+  screen: { lines: string[]; rows: number; cursorRow: number; cursorCol: number } | null,
+  quietSince: number | null, lastSubmit: number, pending: boolean, now = Date.now(),
+): boolean {
+  if (!ctx?.startedAt || ctx.completedAt || !ctx.sourceModifiedAt || now - ctx.sourceModifiedAt < AGY_IDLE_FALLBACK_MS || ctx.source.startsWith("agy:") || ctx.source.startsWith("pty:") || quietSince === null || quietSince < ctx.startedAt) return false;
+  return idleScreenFallback("antigravity", screen, quietSince, lastSubmit, pending, now);
+}
 export const STUCK_AFTER_MS = 15_000;
 export const ECHO_WINDOW_MS = 1_500;
 

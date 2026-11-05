@@ -154,7 +154,7 @@ test("T54: PM 본인 담당 행의 완료는 PM에게 자기 보고(doneTasks)�
   const src = require("node:fs").readFileSync("src/App.tsx", "utf8");
   const i = src.indexOf("doneTasks.push(t);");
   assert.ok(i > 0);
-  assert.match(src.slice(i - 200, i), /t\.agentId === pmSession\.agentId\) continue/);
+  assert.match(src.slice(i - 700, i), /t\.agentId === pmSession\.agentId\) continue/);
 });
 
 test("T58/T59: stuck 항목은 화면에 본문 끝까지 찍히고 입력창 영역 밖에 응답이 뒤따를 때만 전달 확정, 미제출 긴 입력은 유지", () => {
@@ -251,4 +251,21 @@ test("T1793752130651_7: 출력 없는 세션 안내·릴레이 복구 경로와 
   assert.ok(tp.includes("릴레이로 다시 열기"));
   const pty = fs.readFileSync("src-tauri/src/pty.rs", "utf8").replace(/\r/g, "");
   assert.ok(pty.includes("take(4096).position("));
+});
+
+test("T1793842681518_2: 끝난 작업의 report·mail만 제거(완료·취소·삭제·ID없음 4경우, _1≠_10, 진행 중 오삭제 0)", () => {
+  const sq = {};
+  require("node:vm").runInNewContext(require("typescript").transpileModule(require("node:fs").readFileSync("src/lib/sessionQueue.ts", "utf8"), { compilerOptions: { module: 1 } }).outputText, { exports: sq, require: () => ({}) });
+  const item = (id, source, extra = {}) => ({ id, source, preview: "", payload: "", createdAt: 0, ...extra });
+  const tasks = [{ taskId: "T100000_1", status: "done" }, { taskId: "T100000_2", status: "closed" }, { taskId: "T100000_3", status: "start" }, { taskId: "T100000_10", status: "start" }];
+  const mails = { m1: "T100000_1 확인", m2: "T100000_2 확인", m3: "T100000_9 확인", m4: "일반 안내", m5: "T100000_3 진행", m6: "T100000_1 확인 T100000_3", m7: "T100000_1 결과", m8: "T100000_1 확인" };
+  const mailOf = (id) => mails[id] && { subject: mails[id], body: "", isResult: id === "m7" };
+  const list = [
+    item("mail:m1", "mail"), item("mail:m2", "mail"), item("mail:m3", "mail"), item("mail:m4", "mail"), item("mail:m5", "mail"), item("mail:m6", "mail"), item("mail:m7", "mail"),
+    item("mail:m8", "mail", { stuck: true }),
+    item("report:T100000_1:a", "report"), item("report:T100000_2:a", "report"), item("report:T100000_3:a", "report"), item("report:T100000_7:a", "report"),
+  ];
+  assert.deepEqual([...sq.endedQueueIds(list, tasks, mailOf)], ["mail:m1", "mail:m2", "mail:m3", "report:T100000_2:a", "report:T100000_3:a", "report:T100000_7:a"]);
+  // _1 은 _10 과 구별
+  assert.deepEqual([...sq.endedQueueIds([item("mail:x", "mail")], tasks, () => ({ subject: "T100000_1", body: "T100000_10", isResult: false }))], []);
 });

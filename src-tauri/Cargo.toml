@@ -1,6 +1,6 @@
 [package]
 name = "ai-cli-manager"
-version = "1.0.34"
+version = "1.0.35"
 description = "Windows Multi-AI Coding CLI Manager (Claude Code, Codex, Cursor, Antigravity)"
 authors = ["AI CLI Manager Team"]
 edition = "2021"
@@ -15,6 +15,7 @@ rfd = "0.15"
 ureq = { version = "2.10", features = ["tls", "json"] }
 tauri = { version = "2.12.5", features = ["custom-protocol", "tray-icon"] }
 portable-pty = { version = "0.9.0", features = ["serde_support"] }
+vt100 = "0.15.2"
 rusqlite = { version = "0.31.0", features = ["bundled", "modern_sqlite"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
