@@ -1324,8 +1324,11 @@ async fn start_session(
             } else { a == "resume" });
         let _guard = if managed { Some(MANAGED_SESSION_LOCK.lock().map_err(|e| e.to_string())?) } else { None };
         let agent_id = agent_meta.as_ref().map(|agent| agent.id.clone());
-        if managed && !start_fresh.unwrap_or(false) && pty.list_sessions().iter().any(|s| s.agent_id == agent_id && s.cli_id == cli_def.id) {
-            return Err("이 에이전트의 세션이 이미 실행 중입니다. 새 대화로 시작하거나 기존 세션을 종료하세요.".into());
+        if managed && !start_fresh.unwrap_or(false) {
+            if let Some(existing) = pty.list_sessions().into_iter().find(|s| s.agent_id == agent_id && s.cli_id == cli_def.id) {
+                log_session_guard(agent_id.as_deref(), &cli_def.id, "active_agent", Some(&existing.id));
+                return Err("이 에이전트의 세션이 이미 실행 중입니다. 새 대화로 시작하거나 기존 세션을 종료하세요.".into());
+            }
         }
         let resume_session_id = if managed && !start_fresh.unwrap_or(false) {
             let conn = db.lock().map_err(|e| e.to_string())?;
@@ -1340,8 +1343,14 @@ async fn start_session(
                 }
             })
         } else { None };
-        if resume_session_id.as_ref().is_some_and(|id| pty.list_sessions().iter().any(|s| &s.id == id || pty.resumed_cli_id(&s.id).as_ref() == Some(id))) {
-            return Err("이 에이전트의 세션이 이미 실행 중입니다. 새 대화로 시작하거나 기존 세션을 종료하세요.".into());
+        let active = pty.list_sessions().into_iter().map(|s| {
+            let resumed = pty.resumed_cli_id(&s.id);
+            (s.id, resumed)
+        }).collect::<Vec<_>>();
+        let collision = resume_session_id.as_ref().and_then(|id| active.iter().find(|(session, resumed)| session == id || resumed.as_ref() == Some(id))).map(|(session, _)| session.clone());
+        let resume_session_id = available_resume(resume_session_id, &active);
+        if let Some(session) = collision.as_deref() {
+            log_session_guard(agent_id.as_deref(), &cli_def.id, "resume_collision_fresh", Some(session));
         }
         if managed && cli_def.id == "codex" {
             if let Some(last) = *LAST_CODEX_LAUNCH.lock().map_err(|e| e.to_string())? {
@@ -1377,6 +1386,21 @@ async fn start_session(
     }).await.map_err(|e| e.to_string())?
 }
 
+fn available_resume(candidate: Option<String>, sessions: &[(String, Option<String>)]) -> Option<String> {
+    candidate.filter(|id| !sessions.iter().any(|(session, resumed)| session == id || resumed.as_ref() == Some(id)))
+}
+
+fn log_session_guard(agent: Option<&str>, cli: &str, stage: &str, session: Option<&str>) {
+    use std::io::Write;
+    let Some(root) = dirs::data_dir() else { return };
+    let dir = root.join("AI_CLI_Manager");
+    if std::fs::create_dir_all(&dir).is_err() { return; }
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("delivery.log")) {
+        let clean = |s: &str| s.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').take(100).collect::<String>();
+        let _ = writeln!(file, "{} agent={} cli={} stage={} session={}", chrono::Utc::now().to_rfc3339(), clean(agent.unwrap_or("none")), clean(cli), clean(stage), clean(session.unwrap_or("none")));
+    }
+}
+
 fn resumable_claude_session(projects: &std::path::Path, id: &str) -> Option<String> {
     let id = uuid::Uuid::parse_str(id).ok()?.to_string();
     std::fs::read_dir(projects).ok()?.flatten()
@@ -1391,6 +1415,15 @@ fn headroom_command(command: Option<String>, enabled: bool) -> Option<String> {
 #[cfg(test)]
 mod headroom_launch_tests {
     use super::headroom_command;
+
+    #[test]
+    fn conflicting_resume_uses_fresh_session() {
+        let active = vec![("session-a".to_string(), Some("resume-a".to_string()))];
+        assert_eq!(super::available_resume(Some("resume-a".into()), &active), None);
+        assert_eq!(super::available_resume(Some("session-a".into()), &active), None);
+        assert_eq!(super::available_resume(Some("other".into()), &active), Some("other".into()));
+        assert_eq!(super::available_resume(None, &active), None);
+    }
 
     #[test]
     fn claude_resume_requires_uuid_and_existing_log() {

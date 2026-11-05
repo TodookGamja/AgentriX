@@ -116,7 +116,7 @@ import { MarkdownLite } from "./components/MarkdownLite";
 import { FolderPickerModal } from "./components/FolderPickerModal";
 import { AgentrixLogo } from "./components/AgentrixLogo";
 import { hasTaskResultMail, boardProtocol, collabProtocol, confirmedResultMail, resultMailTaskKeys, newSessionResends, forgetEndedStarts, keepRecentStarts, roleBriefText, assignText, mailProtocol, parseBoardTasks, teamMailText } from "./lib/blackboardDispatch";
-import { getTeamMailDeliveries, pruneStaleDeliveries, pruneStaleMailDeliveries, removeTeamMailDelivery, reserveTeamMailDelivery, saveTeamMailDelivery } from "./lib/teamMailDelivery";
+import { getTeamMailDeliveries, orphanReservation, pruneStaleDeliveries, pruneStaleMailDeliveries, removeTeamMailDelivery, reserveTeamMailDelivery, saveTeamMailDelivery } from "./lib/teamMailDelivery";
 import { clearDispatchNotes, findApproval, getApprovalMode, getDispatchNotes, setDispatchNote, upsertApproval } from "./lib/taskApproval";
 import { countNewChars } from "./lib/tokenEstimate";
 import { AGY_IDLE_FALLBACK_MS, agyFirstPromptReady, agyIdleFallback, idleScreenFallback, claudeIdleFallback, codexInterruptedIdle, deliveryGate, logTurnStillBusy, tabIsActive, type PendingDelivery } from "./lib/deliveryGate";
@@ -1022,6 +1022,25 @@ export const App: React.FC = () => {
         markRolePrefix(session.id, roleBriefText(agent, projectAgents, Boolean(await apiReadFileAsBase64(`${agent.projectPath}/.ai-agents/agents/${agent.id}/ROLE.md`))));
       }
     } catch (err) {
+      // 백엔드가 '이미 실행 중'이면 오류 대신 기존 세션 탭을 연다(숨은 탭·다른 분할 칸이어도 활성 세션 지정으로 배치됨)
+      if (String(err).includes("이미 실행 중")) {
+        const existing = useAppStore.getState().sessions.find((s) => s.agentId === agent.id && s.cliId === agent.cliId);
+        if (existing) {
+          setActiveNav("terminal");
+          setProjectSubView("session");
+          setActiveSessionId(existing.id);
+          setLastFocusedCliId(existing.cliId);
+          showToast(`${agent.name} 세션이 이미 실행 중이라 기존 탭을 열었습니다.`, "info");
+          return;
+        }
+        // 목록 불일치: 기존 세션을 찾지 못함 -> 앱 안 모달로 새 대화 시작을 제안한다
+        if (await confirmDialog({
+          title: `${agent.name} 세션을 찾을 수 없습니다`,
+          message: "백엔드에는 실행 중으로 남아 있지만 화면에서 세션을 찾지 못했습니다. 기존 대화를 버리고 새 대화로 시작할까요?",
+          confirmLabel: "새 대화로 시작",
+        })) await handleSpawnAgentSession(agent, true);
+        return;
+      }
       showToast(`에이전트 실행 실패: ${String(err)}`, "error");
     }
   };
@@ -2562,7 +2581,12 @@ ${recentSnippet || "진행 내역 기록 없음"}
           }
           const delivery = queueReservation(item, s, Date.now());
           if (!delivery) continue;
-          if (!reserveTeamMailDelivery(delivery)) continue;
+          if (!reserveTeamMailDelivery(delivery)) {
+            // 대응 항목 없는 고아 예약이 head를 영원히 막지 않게 정리하고 다음 주기에 전달한다
+            const orphan = orphanReservation(getTeamMailDeliveries(), delivery.project, delivery.agentId, new Set((useSessionQueue.getState().queues[key] ?? []).map((q) => q.id)), Date.now());
+            if (orphan && !teamDeliveryLocksRef.current.has(s.id)) removeTeamMailDelivery(orphan.project, orphan.agentId, orphan.id, orphan.kind);
+            continue;
+          }
           try {
             const sent = await sendToIdleTeamSession(s, item.payload, { id: item.id, source: item.source, preview: item.preview });
             if (sent) {

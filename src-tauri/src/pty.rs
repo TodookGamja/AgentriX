@@ -706,7 +706,8 @@ impl PtyManager {
     }
 
     pub fn list_sessions(&self) -> Vec<SessionInfo> {
-        let sessions = self.sessions.lock().unwrap();
+        let mut sessions = self.sessions.lock().unwrap();
+        sessions.retain(|_, session| !matches!(session.child.try_wait(), Ok(Some(_))));
         let mut list: Vec<SessionInfo> = sessions.values().map(|s| s.info.clone()).collect();
         list.sort_by(|a, b| a.started_at.cmp(&b.started_at));
         list
@@ -985,6 +986,25 @@ fn build_platform_command(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn exited_pty_is_removed_and_live_pty_stays_until_closed() {
+        let mgr = super::PtyManager::default();
+        let exited = mgr.start_session("powershell".into(), None, Default::default(), None, None).unwrap();
+        let live = mgr.start_session("powershell".into(), None, Default::default(), None, None).unwrap();
+        mgr.sessions.lock().unwrap().get_mut(&exited.id).unwrap().child.kill().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        while mgr.list_sessions().iter().any(|s| s.id == exited.id) && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let active = mgr.list_sessions();
+        assert!(!active.iter().any(|s| s.id == exited.id));
+        assert!(active.iter().any(|s| s.id == live.id));
+        mgr.stop_session(&live.id).unwrap();
+        assert!(mgr.list_sessions().is_empty());
+        let restarted = mgr.start_session("powershell".into(), None, Default::default(), None, None).unwrap();
+        assert!(mgr.list_sessions().iter().any(|s| s.id == restarted.id));
+        mgr.stop_session(&restarted.id).unwrap();
+    }
     #[test]
     fn folder_trust_requires_registration_and_preserves_existing_config() {
         let base = std::env::temp_dir().join(format!("forge-folder-trust-{}", uuid::Uuid::new_v4()));

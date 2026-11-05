@@ -53,3 +53,10 @@ export function pruneStaleDeliveries(project: string, liveSessionIds: string[]):
 export function shouldRedeliver(waitMin: number, quietSince: number | null, submittedAt: number, retries: number): boolean {
   return waitMin >= 2 && retries < 3 && quietSince !== null && quietSince <= submittedAt;
 }
+
+// 예약만 되고(unconfirmed) 대응하는 대기열 항목이 사라진 고아 기록: 같은 팀원의 뒤 항목을 영원히 '앞 전달 대기'로 막는다.
+// 전달 중일 수 있으므로 유예 시간이 지난 것만 대상으로 한다. 전달 확정(unconfirmed=false) 기록은 작업 수행 중 증거라 건드리지 않는다.
+export function orphanReservation(deliveries: TeamMailDelivery[], project: string, agentId: string, queueIds: ReadonlySet<string>, now: number, graceMs = 30_000): TeamMailDelivery | undefined {
+  return deliveries.find((d) => d.project === project && d.agentId === agentId && d.unconfirmed === true && now - d.submittedAt > graceMs
+    && !queueIds.has(`${d.kind === "task" ? "assign" : d.kind === "report" ? "report" : "mail"}:${d.id}`));
+}
