@@ -35,3 +35,8 @@ test("T24: 상한 후에도 5분→15분 간격으로 재알림, 3회째부터 P
   assert.deepEqual([...api.dueNudges(mem, k, true, 0)], []); // 일하는 중 알림 0
   assert.match(api.nudgeText(["T1"]), /이어서 끝까지/);
 });
+
+test("PM 본인 세션은 상태 확인 알림 대상에서 제외", () => {
+  const app = fs.readFileSync("src/App.tsx", "utf8");
+  assert.match(app, /if \(s\.id === pmOfProject\?\.id\) continue;/);
+});

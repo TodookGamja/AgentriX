@@ -439,6 +439,8 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       }
     });
 
+    // 이 효과는 세션이 바뀔 때마다 새 xterm을 만든다: 이전 세션의 읽기 위치를 이어 쓰면 새 세션 화면이 빈 채로 뜬다
+    cursorRef.current = 0;
     let active = true;
     // 마운트 직후 첫 청크는 기존 버퍼 재생일 수 있으므로 토큰 추정에서 제외 (화면 이동 시 재집계 → 불필요한 /compact 방지)
     let replayed = false;
@@ -480,6 +482,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       }
       try {
         fitAddon.fit();
+        term.refresh(0, term.rows - 1);
         if (term.cols > 0 && term.rows > 0) {
           sendPtySize(session.id, term.cols, term.rows);
         }
@@ -532,7 +535,8 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       const timer = setTimeout(() => {
         try {
           fitAddonRef.current?.fit();
-          if (termRef.current) sendPtySize(session.id, termRef.current.cols, termRef.current.rows);
+          // 숨김 상태에서 재생된 출력은 보이게 된 뒤에도 다시 그려지지 않아 빈 화면으로 남을 수 있다: 전체 행을 강제로 다시 그린다
+          if (termRef.current) { termRef.current.refresh(0, termRef.current.rows - 1); sendPtySize(session.id, termRef.current.cols, termRef.current.rows); }
         } catch {
           // ignore
         }

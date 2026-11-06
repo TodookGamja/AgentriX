@@ -1445,9 +1445,12 @@ ${recentSnippet || "진행 내역 기록 없음"}
             tasks = parseBoardTasks(board, agents.map((a) => a.id), Object.fromEntries(agents.map((a) => [a.id, a.name])));
             sent = JSON.parse(localStorage.getItem(`agentrix_bb_dispatched:${project}`) || "[]");
           } catch { continue; }
+          const pmOfProject = projSessions.find((x) => x.name.includes("PM") || x.agentRole?.includes("PM") || x.agentRole?.includes("리더")) ?? projSessions[0];
           for (const s of projSessions) {
             const busy = busyIds.includes(s.id);
             if (busy || idleSince[s.id] === undefined) idleSince[s.id] = now;
+            // PM 본인 행은 PM이 직접 관리한다: 자기에게 상태 확인을 시키면 토큰만 쓴다
+            if (s.id === pmOfProject?.id) continue;
             const mine = tasks.filter((t) => t.status === "start" && t.agentId === s.agentId && sent.includes(`${t.taskId}:start:${t.agentId}`));
             const keys = mine.map((t) => `${s.agentId}:${t.taskId}`);
             // 대기열·전달 처리 중이면 아직 전달 단계이므로 건드리지 않는다
@@ -1456,7 +1459,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
             if (!busy && !delivering && now - idleSince[s.id] >= 60_000) keys.forEach((k) => stale.add(k));
             if (due.length && await sendToIdleTeamSession(s, nudgeText(due.map((k) => k.slice(k.indexOf(":") + 1))))) due.forEach((k) => markNudged(mem, k));
             // 3회째 요청부터 PM에게도 1회 알린다(키당 1건, 대기열 id로 중복 방지). 팀원 본인이 PM이면 제외
-            const pm = projSessions.find((x) => x.name.includes("PM") || x.agentRole?.includes("PM") || x.agentRole?.includes("리더")) ?? projSessions[0];
+            const pm = pmOfProject;
             if (!busy && pm && pm.id !== s.id) {
               for (const k of pmNoticeDue(mem, keys)) {
                 const taskId = k.slice(k.indexOf(":") + 1);
