@@ -152,6 +152,7 @@ pub struct PtySession {
 }
 
 fn is_terminal_control_only(data: &[u8]) -> bool {
+    if data.len() == 6 && data.starts_with(b"\x1b[M") { return true; }
     let mut i = 0;
     while i < data.len() {
         if data.get(i) != Some(&0x1b) { return false; }
@@ -985,19 +986,19 @@ fn build_platform_command(
                 .map(|a| format!("'{}'", ps_escape_single_quoted(a)))
                 .collect::<Vec<_>>()
                 .join(" ");
-            let ps_script = format!(
-                "Set-Location -LiteralPath '{}'; {}Write-Host '[AI CLI Manager] 작업 폴더: {}' -ForegroundColor DarkCyan; {} {}{}",
-                escaped_cwd, agent_banner, escaped_cwd, exec_cmd, extra_args, auto_flags
+                let exit_notice = if cli_def.id == "claude" {
+                    "; Write-Host \"[AI CLI Manager] Claude CLI 종료 (코드: $LASTEXITCODE)\" -ForegroundColor Yellow"
+                } else {
+                    ""
+                };
+                let ps_script = format!(
+                    "Set-Location -LiteralPath '{}'; {}Write-Host '[AI CLI Manager] 작업 폴더: {}' -ForegroundColor DarkCyan; {} {}{}{}",
+                    escaped_cwd, agent_banner, escaped_cwd, exec_cmd, extra_args, auto_flags, exit_notice
             );
             let mut cmd = CommandBuilder::new("powershell.exe");
-            cmd.args([
-                "-NoLogo",
-                "-NoExit",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                &ps_script,
-            ]);
+                cmd.arg("-NoLogo");
+                if cli_def.id != "claude" { cmd.arg("-NoExit"); }
+                cmd.args(["-ExecutionPolicy", "Bypass", "-Command", &ps_script]);
             return (cmd, label);
         } else {
             let args = init_cmd.split_whitespace().map(|s| format!("'{}'", ps_escape_single_quoted(s))).collect::<Vec<_>>().join(" ");
@@ -1033,16 +1034,11 @@ fn build_platform_command(
             "Set-Location -LiteralPath '{}'; {}Write-Host '[AI CLI Manager] 작업 폴더: {}' -ForegroundColor DarkCyan; & '{}' {}{}",
             escaped_cwd, agent_banner, escaped_cwd, escaped_bin, extra_args, auto_flags
         );
-        let mut cmd = CommandBuilder::new("powershell.exe");
-        cmd.args([
-            "-NoLogo",
-            "-NoExit",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            &ps_script,
-        ]);
-        return (cmd, resolved.clone());
+            let mut cmd = CommandBuilder::new("powershell.exe");
+            cmd.arg("-NoLogo");
+            if cli_def.id != "claude" { cmd.arg("-NoExit"); }
+            cmd.args(["-ExecutionPolicy", "Bypass", "-Command", &ps_script]);
+            return (cmd, resolved.clone());
     }
 
     let mut cmd = CommandBuilder::new("powershell.exe");
@@ -1056,6 +1052,107 @@ fn build_platform_command(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn claude_wrapper_reports_exit_status() {
+        let mut cli = crate::cli::builtin_clis().into_iter().find(|c| c.id == "claude").unwrap();
+        cli.wrapper_binary = Some("hclaude.cmd".into());
+        let (command, _) = super::build_platform_command(&cli, Some("__WRAPPER__"), "C:\\temp", None, false);
+        let script = command.get_argv().last().unwrap().to_string_lossy();
+        assert!(script.contains("$LASTEXITCODE"));
+        assert!(script.contains("CLI 종료"));
+        assert!(!command.get_argv().iter().any(|arg| arg == "-NoExit"));
+        cli.resolved_binary = Some("claude.cmd".into());
+        let (direct, _) = super::build_platform_command(&cli, None, "C:\\temp", None, false);
+        assert!(!direct.get_argv().iter().any(|arg| arg == "-NoExit"));
+        cli.id = "codex".into();
+        let (other, _) = super::build_platform_command(&cli, Some("__WRAPPER__"), "C:\\temp", None, false);
+        assert!(other.get_argv().iter().any(|arg| arg == "-NoExit"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn exited_claude_does_not_leave_a_live_shell_session() {
+        let root = std::env::temp_dir().join(format!("agentrix-claude-exit-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let program = root.join("failed-claude.cmd");
+        std::fs::write(&program, "@exit /b 3\r\n").unwrap();
+        let mut cli = crate::cli::builtin_clis().into_iter().find(|c| c.id == "claude").unwrap();
+        cli.resolved_binary = Some(program.to_string_lossy().into_owned());
+        cli.args.clear();
+        let manager = super::PtyManager::default();
+        let session = manager.start_session_with_def(cli, Some(root.to_string_lossy().into_owned()), Default::default(), None, None, None, None, None).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        let mut cursor = 0;
+        while manager.list_sessions().iter().any(|s| s.id == session.id) && std::time::Instant::now() < deadline {
+            if let Ok(chunk) = manager.read_output_from(&session.id, cursor) {
+                cursor = chunk.next_cursor;
+                if chunk.data.contains("\x1b[6n") { manager.write_to_session(&session.id, b"\x1b[1;1R").unwrap(); }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(!manager.list_sessions().iter().any(|s| s.id == session.id));
+        let _ = std::fs::remove_dir_all(root);
+    }
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "isolated agy terminal mode diagnostic"]
+    fn agy_terminal_mode_probe() {
+        use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+        use std::io::{Read, Write};
+        use std::sync::mpsc;
+        use std::time::{Duration, Instant};
+
+        let root = std::env::temp_dir().join(format!("agentrix-agy-probe-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let claude = std::env::var_os("AGENTRIX_PROBE_CLAUDE").is_some();
+        let binary = std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap()).join("agy/bin/agy.exe");
+        let pair = native_pty_system().openpty(PtySize { rows: 30, cols: 110, pixel_width: 0, pixel_height: 0 }).unwrap();
+        let mut reader = pair.master.try_clone_reader().unwrap();
+        let mut writer = pair.master.take_writer().unwrap();
+        let mut command = if claude {
+            let role = root.join("ROLE.md");
+            std::fs::write(&role, "Test role").unwrap();
+            let wrapper = std::path::PathBuf::from(std::env::var_os("USERPROFILE").unwrap()).join(".local/bin/hclaude.cmd");
+            let mut command = CommandBuilder::new("cmd.exe");
+            command.args([std::ffi::OsStr::new("/d"), std::ffi::OsStr::new("/c"), wrapper.as_os_str(), std::ffi::OsStr::new("--append-system-prompt-file"), role.as_os_str()]);
+            command
+        } else {
+            CommandBuilder::new(binary)
+        };
+        command.cwd(&root);
+        command.env("HOME", &root);
+        command.env("USERPROFILE", &root);
+        command.env("APPDATA", &root);
+        command.env("LOCALAPPDATA", &root);
+        command.env("AGY_CLI_DISABLE_AUTO_UPDATE", "true");
+        let mut child = pair.slave.spawn_command(command).unwrap();
+        drop(pair.slave);
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut bytes = [0u8; 8192];
+            while let Ok(n) = reader.read(&mut bytes) {
+                if n == 0 || tx.send(bytes[..n].to_vec()).is_err() { break; }
+            }
+        });
+        let until = Instant::now() + Duration::from_secs(8);
+        let mut output = Vec::new();
+        let mut answered = false;
+        while Instant::now() < until {
+            if let Ok(bytes) = rx.recv_timeout(Duration::from_millis(300)) {
+                output.extend(bytes);
+                if !answered && output.windows(4).any(|w| w == b"\x1b[6n") {
+                    writer.write_all(b"\x1b[1;1R").unwrap();
+                    answered = true;
+                }
+            }
+        }
+        let result = format!("bytes={} cursor_query={} alt_screen={} mouse_reporting={} exited={}", output.len(), answered, output.windows(8).any(|w| w == b"\x1b[?1049h"), output.windows(7).any(|w| w == b"\x1b[?1000"), child.try_wait().unwrap().is_some());
+        println!("{result}");
+        if let Some(path) = std::env::var_os("AGENTRIX_PROBE_RESULT") { std::fs::write(path, result).unwrap(); }
+        let _ = child.kill();
+        drop(pair.master);
+        let _ = std::fs::remove_dir_all(root);
+    }
     #[test]
     fn agy_sessions_disable_background_updater() {
         let mut agy = portable_pty::CommandBuilder::new("agy");
@@ -1210,6 +1307,7 @@ mod tests {
     }
     #[test]
     fn first_input_tracking_ignores_only_complete_terminal_controls() {
+        assert!(super::is_terminal_control_only(b"\x1b[M\x60\xff\xfe"));
         assert!(super::is_terminal_control_only(b"\x1b[1;2R\x1b[?1;2c"));
         assert!(super::is_terminal_control_only(b"\x1b]11;rgb:ffff/ffff/ffff\x07"));
         assert!(!super::is_terminal_control_only(b"\x1b[1Dtyped"));

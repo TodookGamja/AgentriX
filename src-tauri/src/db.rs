@@ -676,6 +676,14 @@ pub fn cancel_project_blackboard_task(project_path: &str, task_id: &str) -> Resu
 }
 
 fn cancel_project_blackboard_task_with_hook(project_path: &str, task_id: &str, mut before_check: impl FnMut()) -> Result<()> {
+    update_project_blackboard_task_with_hook(project_path, task_id, false, &mut before_check)
+}
+
+pub fn start_project_blackboard_task(project_path: &str, task_id: &str) -> Result<()> {
+    update_project_blackboard_task_with_hook(project_path, task_id, true, || {})
+}
+
+fn update_project_blackboard_task_with_hook(project_path: &str, task_id: &str, start_task: bool, mut before_check: impl FnMut()) -> Result<()> {
     let norm = normalize_project_path(project_path);
     if norm.is_empty() || is_forbidden_system_dir(&norm) || task_id.trim().is_empty() {
         anyhow::bail!("유효한 프로젝트 또는 작업 ID가 아닙니다.");
@@ -707,8 +715,11 @@ fn cancel_project_blackboard_task_with_hook(project_path: &str, task_id: &str, m
     if ["✅", "완료", "done", "통합", "취소", "merged", "canceled", "cancelled"].iter().any(|s| status.starts_with(s)) {
         anyhow::bail!("이미 완료 또는 취소된 작업입니다.");
     }
-    let mut updated = board.clone();
-    updated.replace_range(start..end, " 취소 사용자 작업판에서 취소 ");
+        if start_task && !["⏳", "대기", "wait", "pending"].iter().any(|s| status.starts_with(s)) {
+            anyhow::bail!("대기 중인 작업만 시작할 수 있습니다.");
+        }
+        let mut updated = board.clone();
+        updated.replace_range(start..end, if start_task { " 🔥 착수 " } else { " 취소 사용자 작업판에서 취소 " });
     let temp = path.with_file_name(format!("BLACKBOARD.{}.tmp", uuid::Uuid::new_v4()));
     let result = (|| -> Result<bool> {
         std::fs::write(&temp, updated)?;
@@ -2224,6 +2235,20 @@ mod tests {
         assert!(super::cancel_project_blackboard_task(project.to_str().unwrap(), "T1").is_err());
         assert_eq!(std::fs::read(&path).unwrap(), duplicate);
         std::fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn start_blackboard_task_only_changes_waiting_status() {
+        let root = std::env::temp_dir().join(format!("agentrix-board-start-{}", uuid::Uuid::new_v4()));
+        let dir = root.join(".ai-agents");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("BLACKBOARD.md");
+        let original = "| ID | 상태 |\n| --- | --- |\n| T1 | ⏳ 대기 |\n| T2 | ✅ 완료 |\n";
+        std::fs::write(&path, original).unwrap();
+        super::start_project_blackboard_task(root.to_str().unwrap(), "T1").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original.replace("⏳ 대기", "🔥 착수"));
+        assert!(super::start_project_blackboard_task(root.to_str().unwrap(), "T2").is_err());
+        std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn effort_migration_preserves_agents_and_legacy_updates() {

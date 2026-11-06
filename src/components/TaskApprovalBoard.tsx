@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { apiCancelProjectBlackboardTask, apiGetProjectBlackboard } from "../lib/tauriBridge";
+import { apiCancelProjectBlackboardTask, apiGetProjectBlackboard, apiStartProjectBlackboardTask } from "../lib/tauriBridge";
 import { boardTaskColumn, boardTaskTitle, compareWaiting, parseBoardTasks, shortTaskTitle, type BoardTask } from "../lib/blackboardDispatch";
 import { getTeamMailDeliveries, removeTeamMailDelivery } from "../lib/teamMailDelivery";
 import { useSessionQueue } from "../lib/sessionQueueStore";
@@ -22,6 +22,7 @@ const FOCUS = "focus-visible:outline-none focus-visible:ring-2 focus-visible:rin
 interface Card {
   taskId: string;
   agentId: string;
+  status: BoardTask["status"];
   title: string;
   waitReason?: string;
   resting?: boolean;
@@ -35,6 +36,8 @@ interface TaskApprovalBoardProps {
 
 // PM 작업표의 작업을 승인 대기 / 진행 / 완료 / 반려 열로 보여주고, 수동 승인 모드에서 승인·반려를 처리
 export const TaskApprovalBoard: React.FC<TaskApprovalBoardProps> = ({ projectPath, agents }) => {
+  const queues = useSessionQueue((state) => state.queues);
+  const pendingItems = agents.flatMap((agent) => (queues[agent.id] ?? []).map((item) => ({ agent, item })));
   const [mode, setMode] = useState(() => getApprovalMode(projectPath));
   const [approvals, setApprovals] = useState<TaskApproval[]>([]);
   const [notes, setNotes] = useState<Record<string, string>>({});
@@ -188,6 +191,15 @@ export const TaskApprovalBoard: React.FC<TaskApprovalBoardProps> = ({ projectPat
         </button>
       </div>
 
+      <details open className="rounded-xl bg-slate-950/70 border border-slate-800 p-3 shrink-0">
+        <summary className="cursor-pointer text-xs font-semibold text-slate-200">터미널 대기열 ({pendingItems.length})</summary>
+        <div className="mt-2 max-h-40 overflow-y-auto space-y-1">
+          {pendingItems.length === 0 && <div className="text-xs text-slate-400">대기 항목이 없습니다.</div>}
+          {pendingItems.map(({ agent, item }) => <div key={`${agent.id}:${item.id}`} className="text-xs text-slate-300 break-words">
+            <span className="text-indigo-300">{agent.name}</span> · {item.preview} {item.reason && <span className="text-slate-400">· {item.reason}</span>}
+          </div>)}
+        </div>
+      </details>
       <div className="grid grid-cols-1 md:grid-cols-5 md:grid-rows-[minmax(0,1fr)] gap-3 flex-1 min-h-0">
         {column("승인 대기", "text-amber-300", pending, (c) =>
           rejecting === `${c.taskId}:${c.agentId}` ? (
@@ -224,7 +236,12 @@ export const TaskApprovalBoard: React.FC<TaskApprovalBoardProps> = ({ projectPat
             </div>
           )
         )}
-        {column("대기", "text-indigo-300", waiting, cancelButton)}
+        {column("대기", "text-indigo-300", waiting, (c) => <div className="flex gap-1.5">
+          {c.status === "wait" && !c.blockedBy?.length && <button type="button" onClick={() => {
+            void apiStartProjectBlackboardTask(projectPath, c.taskId).catch((error) => alertDialog(`작업 시작 실패: ${String(error)}`));
+          }} className={`px-2 py-1 bg-emerald-600 text-white font-semibold ${FOCUS}`}>시작</button>}
+          {cancelButton(c)}
+        </div>)}
         {column("진행 중", "text-sky-300", running, cancelButton)}
         {column("완료", "text-emerald-300", done, undefined, doneAll.length, (hiddenDone > 0 || showAllDone) && doneAll.length > 5 ? (
           <button onClick={() => setShowAllDone((v) => !v)} className={`w-full px-2 py-1 rounded bg-slate-800 text-slate-300 text-[11px] ${FOCUS}`}>

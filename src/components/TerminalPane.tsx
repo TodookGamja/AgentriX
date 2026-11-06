@@ -26,6 +26,7 @@ import {
   apiResizeSession,
   apiSaveClipboardImage,
   apiWriteToSession,
+  apiWriteTerminalBinary,
   apiOpenExternalUrl,
   SubmissionUnconfirmedError,
 } from "../lib/tauriBridge";import { FilePickerModal } from "./FilePickerModal";
@@ -438,6 +439,9 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
         onActivity();
       }
     });
+    const binaryDisposable = term.onBinary((data) => {
+      if (!replaying) void apiWriteTerminalBinary(session.id, data).catch(console.error);
+    });
 
     // 이 효과는 세션이 바뀔 때마다 새 xterm을 만든다: 이전 세션의 읽기 위치를 이어 쓰면 새 세션 화면이 빈 채로 뜬다
     cursorRef.current = 0;
@@ -451,6 +455,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       inFlight = true;
       try {
         const chunk = await apiReadSessionOutput(session.id, cursorRef.current);
+        if (!active) return;
         cursorRef.current = chunk.nextCursor;
         setSilentSession(!!session.resumed && chunk.nextCursor === 0 && Date.now() - Date.parse(session.startedAt) > SILENT_SESSION_MS);
         if (chunk.data && chunk.data.length > 0) {
@@ -505,7 +510,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
 
     container.addEventListener("paste", handlePaste);
 
-    setTimeout(() => {
+    const initialFitTimer = setTimeout(() => {
       // 숨김(hidden) 상태로 마운트된 경우 PTY를 기본 80x24로 줄이지 않는다 (CLI가 좁은 폭으로 다시 그려 줄이 늘어남)
       if (!containerRef.current || containerRef.current.clientWidth === 0) return;
       try {
@@ -521,10 +526,12 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
     return () => {
       active = false;
       window.clearInterval(pollInterval);
+      clearTimeout(initialFitTimer);
       window.clearTimeout(resizeTimer);
       resizeObserver.disconnect();
       container.removeEventListener("paste", handlePaste);
       dataDisposable.dispose();
+      binaryDisposable.dispose();
       term.dispose();
     };
   }, [session.id]);
@@ -591,11 +598,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({
       } else if (broadcastToSplit && splitActive && onBroadcastPrompt) {
         await onBroadcastPrompt(`${message}\r`);
       } else {
-        if (session.agentId) {
-          useSessionQueue.getState().upsert(qKey, { id: crypto.randomUUID(), source: "user", preview: previewOf(message), payload: `${message}\r`, createdAt: Date.now() });
-        } else {
-          await apiWriteToSession(session.id, `${message}\r`);
-        }
+        await apiWriteToSession(session.id, `${message}\r`);
       }
     } catch (error) {
       setPromptText((current) => [promptText, current].filter(Boolean).join("\n"));

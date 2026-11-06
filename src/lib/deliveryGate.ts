@@ -71,7 +71,7 @@ export function idleScreenFallback(
   const row = screen.cursorRow - (screen.rows - screen.lines.length);
   if (row < 0 || row >= screen.lines.length) return false;
   const prompt = cliId === "claude" ? "❯" : cliId === "codex" ? "›" : cliId === "cursor" ? "→" : "";
-  if (!prompt || !new RegExp(`^\\s*${prompt}\\s*$`).test(screen.lines[row])) return false;
+  if (!prompt || !(cliId === "codex" ? /^\s*›\s*(?:Ask Codex to do anything)?\s*$/i : new RegExp(`^\\s*${prompt}\\s*$`)).test(screen.lines[row])) return false;
   const col = screen.lines[row].indexOf(prompt);
   if (screen.cursorCol < col + 1 || screen.cursorCol > col + 2) return false;
   if (cliId === "claude") return claudeIdleFallback(cliId, { startedAt: 1 }, screen.lines, quietSince, now);

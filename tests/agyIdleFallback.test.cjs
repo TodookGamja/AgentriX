@@ -18,6 +18,13 @@ test("active transcript falls back only for a stable idle screen", () => {
   }
 });
 
+test("Codex placeholder is idle only without a working indicator", () => {
+  const screen = { lines: ["› Ask Codex to do anything", "GPT-6.1 Terra medium"], rows: 10, cursorRow: 8, cursorCol: 1 };
+  assert.equal(api.idleScreenFallback("codex", screen, 200, 150, false, 60_200), true);
+  assert.equal(api.idleScreenFallback("codex", { ...screen, lines: ["Working (esc to interrupt)", ...screen.lines], rows: 11, cursorRow: 9 }, 200, 150, false, 60_200), false);
+  assert.equal(api.idleScreenFallback("codex", { ...screen, cursorCol: 4 }, 200, 150, false, 60_200), false);
+});
+
 test("resumed agy without a transcript can fall back to a quiet idle screen", () => {
   const screen = { lines: ["> ", "? for shortcuts"], rows: 10, cursorRow: 8, cursorCol: 1 };
   assert.equal(api.agyMissingContextFallback("agy:unavailable_no_log", "agy:unavailable_no_log", screen, 200, 150, false, 60_200), true);

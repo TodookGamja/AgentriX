@@ -198,6 +198,11 @@ export async function apiCancelProjectBlackboardTask(projectPath: string, taskId
   return invoke("cancel_project_blackboard_task", { projectPath, taskId });
 }
 
+export async function apiStartProjectBlackboardTask(projectPath: string, taskId: string): Promise<void> {
+  if (!isTauriRuntime() || !projectPath.trim()) throw new Error("프로젝트 작업판을 사용할 수 없습니다.");
+  return invoke("start_project_blackboard_task", { projectPath, taskId });
+}
+
 export async function apiSaveSessionHandoff(
   projectPath: string,
   filename: string,
@@ -319,6 +324,11 @@ export class SubmissionUnconfirmedError extends Error {
 
 export function isRawUserKey(data: string, injected: boolean, verify?: unknown, roleBriefing = false): boolean {
   return !injected && !verify && !roleBriefing && (data.length <= 1 || data.startsWith("\x1b"));
+}
+
+export async function apiWriteTerminalBinary(sessionId: string, data: string): Promise<void> {
+  if (!isTauriRuntime()) return;
+  return invoke("write_to_session_bytes", { sessionId, data: Array.from(data, (char) => char.charCodeAt(0)) });
 }
 
 export async function apiWriteToSession(sessionId: string, data: string, injected = false, verify?: { hasStarted: () => Promise<boolean | null>; onResult: (confirmed: boolean) => void; onlyPendingRole?: boolean; onSkip?: () => void; attempt?: DeliveryAttempt; onCommit?: (body: string, at: number) => void; allowAgyRetry?: boolean; allowRetry?: boolean }, roleBriefing = false): Promise<void> {

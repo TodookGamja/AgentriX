@@ -555,6 +555,12 @@
           "markdownDescription": "Enables the set_app_theme_mode command without any pre-configured scope."
         },
         {
+          "description": "Enables the start_project_blackboard_task command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-start-project-blackboard-task",
+          "markdownDescription": "Enables the start_project_blackboard_task command without any pre-configured scope."
+        },
+        {
           "description": "Enables the start_session command without any pre-configured scope.",
           "type": "string",
           "const": "allow-start-session",
@@ -607,6 +613,12 @@
           "type": "string",
           "const": "allow-write-to-session",
           "markdownDescription": "Enables the write_to_session command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the write_to_session_bytes command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-write-to-session-bytes",
+          "markdownDescription": "Enables the write_to_session_bytes command without any pre-configured scope."
         },
         {
           "description": "Denies the acknowledge_team_mail command without any pre-configured scope.",
@@ -987,6 +999,12 @@
           "markdownDescription": "Denies the set_app_theme_mode command without any pre-configured scope."
         },
         {
+          "description": "Denies the start_project_blackboard_task command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-start-project-blackboard-task",
+          "markdownDescription": "Denies the start_project_blackboard_task command without any pre-configured scope."
+        },
+        {
           "description": "Denies the start_session command without any pre-configured scope.",
           "type": "string",
           "const": "deny-start-session",
@@ -1039,6 +1057,12 @@
           "type": "string",
           "const": "deny-write-to-session",
           "markdownDescription": "Denies the write_to_session command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the write_to_session_bytes command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-write-to-session-bytes",
+          "markdownDescription": "Denies the write_to_session_bytes command without any pre-configured scope."
         },
         {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",

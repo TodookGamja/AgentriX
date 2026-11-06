@@ -460,6 +460,11 @@ fn cancel_project_blackboard_task(project_path: String, task_id: String) -> Resu
 }
 
 #[tauri::command]
+fn start_project_blackboard_task(project_path: String, task_id: String) -> Result<(), String> {
+    db::start_project_blackboard_task(&project_path, &task_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn save_session_handoff(
     project_path: String,
     filename: Option<String>,
@@ -1604,6 +1609,16 @@ async fn write_to_session(
 }
 
 #[tauri::command]
+async fn write_to_session_bytes(state: State<'_, AppState>, session_id: String, data: Vec<u8>) -> Result<(), String> {
+    if data.len() != 6 || !data.starts_with(b"\x1b[M") {
+        return Err("유효하지 않은 마우스 입력입니다.".into());
+    }
+    let pty = state.pty.clone();
+    tokio::task::spawn_blocking(move || pty.write_to_session(&session_id, &data).map(|_| ()))
+        .await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 fn resize_session(
     state: State<'_, AppState>,
     session_id: String,
@@ -2404,6 +2419,7 @@ fn main() {
             acknowledge_team_mail,
             save_project_blackboard,
             cancel_project_blackboard_task,
+            start_project_blackboard_task,
             save_session_handoff,
             trust_project_folder,
             analyze_project_workspace,
@@ -2420,6 +2436,7 @@ fn main() {
             start_session,
             log_delivery_stage,
             write_to_session,
+            write_to_session_bytes,
             resize_session,
             get_session_screen,
             read_session_output,

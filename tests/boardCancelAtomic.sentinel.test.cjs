@@ -8,7 +8,7 @@ const read = (rel) => fs.readFileSync(path.join(ROOT, rel), "utf8");
 
 test("T30: cancel_project_blackboard_task는 정규화·금지경로 검사 후 프로젝트/.ai-agents/BLACKBOARD.md만 다룸", () => {
   const db = read("src-tauri/src/db.rs");
-  const fn = db.match(/fn cancel_project_blackboard_task_with_hook[\s\S]*?^}/m)?.[0] ?? "";
+  const fn = db.match(/fn update_project_blackboard_task_with_hook[\s\S]*?^}/m)?.[0] ?? "";
   assert.match(fn, /normalize_project_path\(project_path\)/);
   assert.match(fn, /is_forbidden_system_dir\(&norm\)/);
   assert.match(fn, /task_id\.trim\(\)\.is_empty\(\)/);
@@ -21,7 +21,7 @@ test("T30: cancel_project_blackboard_task는 정규화·금지경로 검사 후 
 
 test("T30: ID는 cells[1] 정확 일치만·0건/중복은 오류, 부분일치 경로 없음", () => {
   const db = read("src-tauri/src/db.rs");
-  const fn = db.match(/fn cancel_project_blackboard_task_with_hook[\s\S]*?^}/m)?.[0] ?? "";
+  const fn = db.match(/fn update_project_blackboard_task_with_hook[\s\S]*?^}/m)?.[0] ?? "";
   assert.match(fn, /cells\.get\(1\)\.is_some_and\(\|cell\| cell\.trim\(\) == task_id\)/);
   assert.match(fn, /if matches\.len\(\) != 1/);
   assert.doesNotMatch(fn, /starts_with\(task_id\)|contains\(task_id\)/);
@@ -43,7 +43,7 @@ test("T30: IPC 3중 등록 — build.rs · invoke_handler · capabilities · tau
 });
 
 test("T33: rename 직전 재읽고 변경 시 최대 세 번 재시도", () => {
-  const fn = (read("src-tauri/src/db.rs").match(/fn cancel_project_blackboard_task_with_hook[\s\S]*?^}/m) ?? [""])[0];
+  const fn = (read("src-tauri/src/db.rs").match(/fn update_project_blackboard_task_with_hook[\s\S]*?^}/m) ?? [""])[0];
   assert.match(fn, /let board = std::fs::read_to_string\(&path\)\?;/);
   assert.match(fn, /for _ in 0\.\.3/);
   assert.match(fn, /std::fs::read\(&path\)\? != board\.as_bytes\(\)/);

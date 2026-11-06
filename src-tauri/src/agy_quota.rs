@@ -374,7 +374,7 @@ mod tests {
     }
     #[test]
     fn parses_pm_failure_screen() {
-        let screen = include_str!("../tests/fixtures/agy_quota_failure.txt");
+        let screen = include_str!("../tests/fixtures/agy_quota_failure.fixture");
         let q = completed_screen(screen, false).unwrap();
         assert_eq!((q.remaining_percent_5h, q.remaining_percent_weekly), (100.0, 100.0));
         let groups = q.sub_groups.unwrap();

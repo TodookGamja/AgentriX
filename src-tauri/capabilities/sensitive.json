@@ -11,6 +11,7 @@
     "allow-install-npm-cli-update",
     "allow-perform-in-app-update",
     "allow-write-to-session",
+    "allow-write-to-session-bytes",
     "allow-start-session",
     "allow-stop-session",
     "allow-get-detected-cli-credentials",

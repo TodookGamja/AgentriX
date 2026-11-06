@@ -35,7 +35,7 @@
     "allow-route-team-mail",
     "allow-acknowledge-team-mail",
     "allow-save-project-blackboard",
-    "allow-cancel-project-blackboard-task",
+    "allow-cancel-project-blackboard-task","allow-start-project-blackboard-task",
     "allow-save-session-handoff",
     "allow-trust-project-folder",
     "allow-analyze-project-workspace",

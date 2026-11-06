@@ -10,6 +10,15 @@ const moduleExports = {};
 vm.runInNewContext(js, { exports: moduleExports, Promise, Map });
 const { queueSessionWrite } = moduleExports;
 
+test("send writes team chat immediately while queue button explicitly queues", () => {
+  const src = fs.readFileSync("src/components/TerminalPane.tsx", "utf8");
+  const send = src.slice(src.indexOf("const handleSendChatPrompt"), src.indexOf("const handleQueuePrompt"));
+  const queue = src.slice(src.indexOf("const handleQueuePrompt"), src.indexOf("const sendQueuedNow"));
+  assert.match(send, /await apiWriteToSession\(session\.id, `\$\{message\}\\r`\)/);
+  assert.doesNotMatch(send, /useSessionQueue\.getState\(\)\.upsert/);
+  assert.match(queue, /useSessionQueue\.getState\(\)\.upsert/);
+});
+
 test("chat clears before waiting for delivery and restores failed drafts", () => {
   const source = fs.readFileSync("src/components/TerminalPane.tsx", "utf8");
   const send = source.slice(source.indexOf("const handleSendChatPrompt"), source.indexOf("const handleQueuePrompt"));
