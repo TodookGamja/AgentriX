@@ -83,3 +83,13 @@ export function registerTerminalTranscript(id: string, read: () => string[]): ()
 export function readTerminalTranscript(id: string): string[] | null {
   return transcripts.get(id)?.() ?? mirrored.get(id) ?? null;
 }
+
+// 입력창이 아닌 메뉴 화면(슬래시 메뉴·설정·hooks·모델 선택·권한 확인): 하단에 닫기/뒤로/선택 안내가 있다. 이 화면에 쓰면 입력이 메뉴로 들어간다.
+// 'esc to interrupt'(작업 중)는 메뉴가 아니므로 포함하지 않는다.
+const MENU_FOOTER = /\besc(?:ape)?\b[^\n]{0,12}\b(?:back|cancel|close|exit)\b|\benter\b[^\n]{0,12}\b(?:select|confirm)\b|[↑↓]\s*\/?\s*[↑↓]?\s*(?:to\s+)?(?:select|navigate)/i;
+export function menuScreen(lines: string[] | null | undefined): boolean {
+  const bottom = (lines ?? []).filter((l) => l.trim()).slice(-4);
+  return bottom.some((l) => MENU_FOOTER.test(l));
+}
+export const MENU_BLOCK_REASON = "팀원 화면이 메뉴에 있음";
+export const MENU_ESC_RECOVER_MS = 120_000;

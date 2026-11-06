@@ -114,7 +114,7 @@ test("Claude local-command completion waits for output to settle and never overr
     AGY_IDLE_FALLBACK_MS: api.AGY_IDLE_FALLBACK_MS, idleScreenFallback: api.idleScreenFallback,
     hasPendingSessionInput: () => false, useSessionQueue: { getState: () => ({ queues: {} }) }, queueKey: () => "key", getTeamMailDeliveries: () => [],
     pendingDeliveryRef: { current: {} }, refreshTerminalScreen: async () => {}, readTerminalScreen: () => ["❯", "⏵⏵ bypass permissions on"],
-    claudeIdleFallback: api.claudeIdleFallback, logTurnStillBusy: api.logTurnStillBusy, Date };
+    claudeIdleFallback: api.claudeIdleFallback, activeLogIdleFallback: api.activeLogIdleFallback, logTurnStillBusy: api.logTurnStillBusy, Date };
   vm.runInNewContext(ts.transpileModule(`module.exports = ${expression}`, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, sandbox);
   const session = { id: "s", cliId: "claude" };
   assert.equal(await sandbox.module.exports(session, []), null);

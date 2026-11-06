@@ -229,16 +229,44 @@ fn completed_screen(output: &str, idle: bool) -> Option<CliQuotaStatus> {
     parse_screen(&clean, Utc::now())
 }
 
+struct QuotaHome(std::path::PathBuf);
+
+impl QuotaHome {
+    fn new() -> std::io::Result<Self> {
+        let path = std::env::temp_dir().join(format!("agentrix-agy-quota-{}", uuid::Uuid::new_v4()));
+        let home = Self(path);
+        let config = home.0.join(".gemini/antigravity-cli");
+        std::fs::create_dir_all(config.join("cache"))?;
+        std::fs::write(config.join("cache/onboarding.json"), r#"{"consumerOnboardingComplete":true,"enterpriseOnboardingComplete":false,"onboardingComplete":true}"#)?;
+        std::fs::write(config.join("settings.json"), serde_json::json!({"trustedWorkspaces": [home.0.to_string_lossy()]}).to_string())?;
+        Ok(home)
+    }
+
+    fn path(&self) -> &std::path::Path { &self.0 }
+}
+
+impl Drop for QuotaHome {
+    fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+}
+
+fn quota_command(bin: &std::path::Path, cwd: &std::path::Path) -> portable_pty::CommandBuilder {
+    let mut command = portable_pty::CommandBuilder::new(bin);
+    command.cwd(cwd);
+    for name in ["HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA"] { command.env(name, cwd); }
+    command.env("AGY_CLI_DISABLE_AUTO_UPDATE", "true");
+    command
+}
+
 pub fn fetch() -> Result<CliQuotaStatus, String> {
     let bin = crate::cli::home_dir().join("AppData").join("Local").join("agy").join("bin").join("agy.exe");
     let pair = portable_pty::native_pty_system().openpty(portable_pty::PtySize { rows: 100, cols: 120, pixel_width: 0, pixel_height: 0 }).map_err(|_| "PTY 생성 실패".to_string())?;
     let mut reader = pair.master.try_clone_reader().map_err(|_| "PTY 출력 연결 실패".to_string())?;
     let mut writer = pair.master.take_writer().map_err(|_| "PTY 입력 연결 실패".to_string())?;
-    let cwd = crate::cli::safe_helper_cwd();
+    let home = QuotaHome::new().map_err(|_| "쿼터 수집용 임시 폴더 생성 실패".to_string())?;
+    let cwd = home.path();
     if cwd.as_os_str().is_empty() { return Err("안전한 작업 폴더를 찾지 못했습니다".into()); }
-    crate::cli::log_auxiliary("agy_quota::fetch", &bin, &cwd);
-    let mut command = portable_pty::CommandBuilder::new(bin);
-    command.cwd(cwd);
+    crate::cli::log_auxiliary("agy_quota::fetch", &bin, cwd);
+    let command = quota_command(&bin, cwd);
     let mut child = pair.slave.spawn_command(command).map_err(|_| "agy 실행 실패".to_string())?;
     drop(pair.slave);
     let (tx, rx) = mpsc::channel();
@@ -266,6 +294,14 @@ pub fn fetch() -> Result<CliQuotaStatus, String> {
             if let Some(quota) = completed_screen(&text, true) { result = Some(quota); break; }
         }
     }
+    #[cfg(windows)]
+    if let (Some(pid), Ok(None)) = (child.process_id(), child.try_wait()) {
+        use std::os::windows::process::CommandExt;
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .creation_flags(0x08000000)
+            .output();
+    }
     let _ = child.kill();
     let _ = child.wait();
     #[cfg(test)]
@@ -279,6 +315,23 @@ pub fn fetch() -> Result<CliQuotaStatus, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn quota_command_disables_auto_updater() {
+        let command = super::quota_command(std::path::Path::new("agy.exe"), std::path::Path::new("test-home"));
+        assert_eq!(command.get_env("AGY_CLI_DISABLE_AUTO_UPDATE"), Some(std::ffi::OsStr::new("true")));
+    }
+    #[test]
+    fn quota_home_is_isolated_and_pretrusted() {
+        let home = super::QuotaHome::new().unwrap();
+        let root = home.path();
+        let settings: serde_json::Value = serde_json::from_slice(&std::fs::read(root.join(".gemini/antigravity-cli/settings.json")).unwrap()).unwrap();
+        assert_eq!(settings["trustedWorkspaces"][0], root.to_string_lossy().as_ref());
+        assert!(!root.join(".gemini/antigravity/mcp_config.json").exists());
+        assert!(!root.join(".gemini/config/mcp_config.json").exists());
+        let path = root.to_path_buf();
+        drop(home);
+        assert!(!path.exists());
+    }
     use super::*;
     #[test]
     fn failure_message_identifies_stage_without_echoing_output() {

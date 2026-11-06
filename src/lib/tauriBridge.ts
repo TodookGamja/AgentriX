@@ -17,7 +17,7 @@ import { enterReady, needsEnterRetry, pasteWrap, queueSessionWrite, submissionSt
 const AGY_FULL_BODY_RETRY_TIMEOUT_MS = 10_000;
 const agyFullBodyRetried = new Set<string>(); // 세션·본문별 retry_full_body 사용 기록(앱 실행 중 유지)
 import type { DeliveryAttempt } from "./deliveryAttempt";
-import { codexPastePending, CursorBusyError, cursorPastedSubmission, cursorTurnBusy, readCursorTurn, readTerminalScreen, setTerminalScreen } from "./cursorScreen";
+import { menuScreen, codexPastePending, CursorBusyError, cursorPastedSubmission, cursorTurnBusy, readCursorTurn, readTerminalScreen, setTerminalScreen } from "./cursorScreen";
 import { AGY_IDLE_FALLBACK_MS, idleScreenFallback } from "./deliveryGate";
 import type {
   ApiKeyStatus,
@@ -443,6 +443,8 @@ export async function apiWriteToSession(sessionId: string, data: string, injecte
           const logStarted = await verify.hasStarted().catch(() => false);
           const codexScreen = session?.cliId === "codex" ? readTerminalScreen(sessionId) : null;
           confirmed = cursorConfirmed || (session?.cliId === "cursor" ? logStarted === true : submissionStarted(output, logStarted, codexScreen !== null && codexPastePending(codexScreen)));
+          // 메뉴 화면에서는 입력이 입력창에 들어가지 않았으므로 로그가 옛 턴을 가리켜도 성공으로 치지 않는다
+          if (confirmed && await apiGetSessionScreen(sessionId, 30).then((sc) => menuScreen(sc?.lines)).catch(() => false)) confirmed = false;
           verify.attempt?.check();
         // agy 본문 전체 재전송은 같은 세션·같은 본문에 평생 1회(시도마다 반복하면 입력창에 같은 지침이 쌓임)
         const retryKey = `${sessionId} ${body}`;

@@ -347,10 +347,10 @@ export const AuthSettingsView: React.FC<AuthSettingsViewProps> = ({
           try {
             const updates = await apiCheckNpmCliUpdates();
             setCliUpdates(updates);
-            setCliUpdateStatus(Object.keys(updates).length ? "업데이트 가능한 npm CLI" : "업데이트 가능한 npm CLI가 없습니다.");
+            setCliUpdateStatus(Object.keys(updates).length ? "업데이트 가능한 CLI" : "업데이트 가능한 CLI가 없습니다.");
           } catch (err) { setCliUpdateStatus(`확인 실패: ${String(err)}`); }
-        }}>npm CLI 업데이트 확인</button>
-        <p className="mt-2 text-xs text-slate-400">npm 전역 설치된 Codex, Claude, OpenCode, Grok, Gemini만 확인합니다.</p>
+        }}>CLI 업데이트 확인</button>
+        <p className="mt-2 text-xs text-slate-400">설치된 CLI의 새 버전을 확인합니다. 목록에 나온 CLI만 업데이트할 수 있습니다.</p>
         {cliUpdateStatus && <p className="mt-2">{cliUpdateStatus}</p>}
         {cliUpdates && Object.entries(cliUpdates).map(([name, info]) => (
           <div key={name} className="mt-2 flex items-center gap-3 text-xs">

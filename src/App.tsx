@@ -119,11 +119,11 @@ import { hasTaskResultMail, boardProtocol, collabProtocol, confirmedResultMail, 
 import { getTeamMailDeliveries, orphanReservation, pruneStaleDeliveries, pruneStaleMailDeliveries, removeTeamMailDelivery, reserveTeamMailDelivery, saveTeamMailDelivery } from "./lib/teamMailDelivery";
 import { clearDispatchNotes, findApproval, getApprovalMode, getDispatchNotes, setDispatchNote, upsertApproval } from "./lib/taskApproval";
 import { countNewChars } from "./lib/tokenEstimate";
-import { AGY_IDLE_FALLBACK_MS, agyFirstPromptReady, agyIdleFallback, agyMissingContextFallback, idleScreenFallback, claudeIdleFallback, codexInterruptedIdle, deliveryGate, logTurnStillBusy, tabIsActive, type PendingDelivery } from "./lib/deliveryGate";
+import { AGY_IDLE_FALLBACK_MS, agyFirstPromptReady, activeLogIdleFallback, agyMissingContextFallback, idleScreenFallback, claudeIdleFallback, codexInterruptedIdle, deliveryGate, logTurnStillBusy, tabIsActive, type PendingDelivery } from "./lib/deliveryGate";
 import { DeliveryAttempt, withDeliveryDeadline } from "./lib/deliveryAttempt";
-import { CursorBusyError, forgetTerminalScreen, readTerminalScreen, readTerminalTranscript, readCursorTurn } from "./lib/cursorScreen";
+import { menuScreen, MENU_BLOCK_REASON, MENU_ESC_RECOVER_MS, CursorBusyError, forgetTerminalScreen, readTerminalScreen, readTerminalTranscript, readCursorTurn } from "./lib/cursorScreen";
 import { useSessionQueue, queueKey } from "./lib/sessionQueueStore";
-import { dueNudges, markNudged, nudgeText, idleStaleKeys, type NudgeMem } from "./lib/statusNudge";
+import { dueNudges, markNudged, markPmNotified, pmNoticeDue, nudgeText, idleStaleKeys, type NudgeMem } from "./lib/statusNudge";
 import { nextQueueItem, previewOf, queueReservation, settledAutoIds, endedQueueIds, revokedAssignIds, staleAssignRecordKeys, deliveredByScreen, staleMailIds, type QueueSource } from "./lib/sessionQueue";
 import { forgetSessionInput, getLastSubmission, getSubmissionVersion, getSessionInputHistory, hasPendingSessionInput, setInstructionKeyResolver } from "./lib/inputHistory";
 import { permissionLaunch } from "./lib/permissionSettings";
@@ -136,7 +136,6 @@ import {
 import {
   handoffContinuePrompt,
   confirmRestoredPrefix,
-  markHandoffHint,
   getRoleState,
   markRolePrefix,
   nextRelaySessionName,
@@ -1279,15 +1278,11 @@ ${recentSnippet || "진행 내역 기록 없음"}
 
       // 5. 새 세션에 md 파일 읽기 및 연속 작업 지침 자동 주입
       // 자동 릴레이는 주입 없이 첫 입력 때 안내 1줄만 붙인다 (새 세션마다 프롬프트가 또 들어가 토큰이 늘던 문제)
-      if (isManual) {
-        setTimeout(async () => {
-          try {
-            await apiWriteToSession(newSession.id, handoffContinuePrompt(true), true);
-          } catch {}
-        }, 6000);
-      } else {
-        markHandoffHint(newSession.id);
-      }
+      // 자동·수동 모두 기존 대기열 전달 경로(준비 대기·제출 확인·재시도)로 이어하기 지시를 1회 보낸다. 고정 지연 원시 쓰기 없음.
+      // 이 지시가 SESSION_HANDOFF.md 안내를 겸하므로 첫 입력 접두 안내(markHandoffHint)는 붙이지 않아 이중 전달이 없다.
+      try {
+        await sendToIdleTeamSession(newSession, handoffContinuePrompt(true), { id: `relay:${newSession.id}`, source: "user", preview: "릴레이 이어하기" });
+      } catch {}
 
       // 6. 🔥 핵심: 기존 세션 즉시 완전 종료 및 PC 메모리/자원 회수!
       if (tokenOptConfig.closeOldSession ?? true) {
@@ -1459,8 +1454,15 @@ ${recentSnippet || "진행 내역 기록 없음"}
             const delivering = (useSessionQueue.getState().queues[queueKey(s)]?.length ?? 0) > 0 || teamDeliveryLocksRef.current.has(s.id);
             const due = delivering ? [] : dueNudges(mem, keys, busy, now - idleSince[s.id]);
             if (!busy && !delivering && now - idleSince[s.id] >= 60_000) keys.forEach((k) => stale.add(k));
-            if (!due.length) continue;
-            if (await sendToIdleTeamSession(s, nudgeText(due.map((k) => k.slice(k.indexOf(":") + 1))))) due.forEach((k) => markNudged(mem, k));
+            if (due.length && await sendToIdleTeamSession(s, nudgeText(due.map((k) => k.slice(k.indexOf(":") + 1))))) due.forEach((k) => markNudged(mem, k));
+            // 3회째 요청부터 PM에게도 1회 알린다(키당 1건, 대기열 id로 중복 방지). 팀원 본인이 PM이면 제외
+            const pm = projSessions.find((x) => x.name.includes("PM") || x.agentRole?.includes("PM") || x.agentRole?.includes("리더")) ?? projSessions[0];
+            if (!busy && pm && pm.id !== s.id) {
+              for (const k of pmNoticeDue(mem, keys)) {
+                const taskId = k.slice(k.indexOf(":") + 1);
+                if (await sendToIdleTeamSession(pm, `[진행 정체] 팀원 ${s.name}이(가) 작업 ${taskId}을(를) 진행하지 않고 쉬는 중입니다(진행 요청 ${mem[k].count}회). .ai-agents/BLACKBOARD.md를 확인하고 필요하면 재지시하세요.`, { id: `stale:${k}`, source: "user", preview: `${s.name} ${taskId} 진행 정체` })) markPmNotified(mem, k);
+              }
+            }
           }
         }
         idleStaleKeys.clear();
@@ -2139,6 +2141,7 @@ ${recentSnippet || "진행 내역 기록 없음"}
   // ponytail: 3초 폴링, 지연이 문제되면 파일 감시로 교체
   const teamDeliveryLocksRef = useRef(new Set<string>());
   const sendBlockReasonRef = useRef<Record<string, string>>({}); // 전달 보류 사유(보드 카드 메모용)
+  const menuSinceRef = useRef<Record<string, { at: number; escaped: boolean }>>({}); // 메뉴 화면이 처음 관측된 시각(2분 후 Esc 1회 복구)
   const pendingDeliveryRef = useRef<Record<string, PendingDelivery>>({}); // 직전 전달의 턴 시작 확인 대기(deliveryGate)
   const agyBootstrapRef = useRef<{ sessionId: string; lockedAt: number; body?: string; at?: number } | null>(null);
   const startingTeamProjectsRef =useRef(new Set<string>());
@@ -2209,12 +2212,13 @@ ${recentSnippet || "진행 내역 기록 없음"}
         agyBootstrapRef.current = null;
       }
     }
-    if (session.cliId === "antigravity" && ctx?.startedAt && !ctx.completedAt) {
-      if (!agyUnresolved() && !hasPendingSessionInput(session.id)) {
+    if (["antigravity", "claude", "codex"].includes(session.cliId) && ctx?.startedAt && !ctx.completedAt) {
+      const pending = pendingDeliveryRef.current[session.id];
+      if (!agyUnresolved() && !hasPendingSessionInput(session.id) && (session.cliId === "antigravity" || !pending || (pending.started && ctx.startedAt > pending.at))) {
         const screen = await apiGetSessionScreen(session.id, 30).catch(() => null);
         const latest = await apiGetSessionContext(session, claimed).catch(() => null);
         const quiet = await apiGetSessionQuietSince(session.id, AGY_IDLE_FALLBACK_MS).catch(() => null);
-        if (latest?.source === ctx.source && !hasPendingSessionInput(session.id) && agyIdleFallback(latest, screen, quiet, getLastSubmission(session.id), agyUnresolved())) return { ...latest, completedAt: quiet, screenFallback: true };
+        if (latest?.source === ctx.source && !hasPendingSessionInput(session.id) && activeLogIdleFallback(session.cliId, latest, screen, quiet, getLastSubmission(session.id), agyUnresolved())) return { ...latest, completedAt: quiet, screenFallback: true };
       }
     }
     if (ctx?.completedAt && ctx.completedAt > lastSubmit) {
@@ -2374,6 +2378,14 @@ ${recentSnippet || "진행 내역 기록 없음"}
       }
       if (hasPendingSessionInput(session.id)) return blocked("입력창에 30초 안에 친 글이 남아 있음");
       if (!useAppStore.getState().sessions.some((s) => s.id === session.id)) return false;
+      // 메뉴 화면(슬래시·설정·hooks·모델·권한)에는 쓰지 않고 보류한다. 2분 넘게 지속되면 Esc 1회로 복구 후 다시 판정한다(최대 1회).
+      const menuLines = (await apiGetSessionScreen(session.id, 30).catch(() => null))?.lines;
+      if (menuScreen(menuLines)) {
+        const since = (menuSinceRef.current[session.id] ??= { at: Date.now(), escaped: false });
+        if (!since.escaped && Date.now() - since.at > MENU_ESC_RECOVER_MS) { since.escaped = true; await apiWriteToSession(session.id, "", true); }
+        return blocked(MENU_BLOCK_REASON);
+      }
+      delete menuSinceRef.current[session.id];
       const pending = pendingDeliveryRef.current[session.id];
       const logBased = !ctx.source.startsWith("pty:") && !ctx.source.startsWith("agy:") && !ctx.source.startsWith("screen:");
       const quiet = pending ? await apiGetSessionQuietSince(session.id).catch(() => 0) : 0;

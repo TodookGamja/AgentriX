@@ -88,13 +88,22 @@ export function agyMissingContextFallback(
     && agyIdleScreen(screen, quietSince, lastSubmit, pending, now);
 }
 
-export function agyIdleFallback(
+export function activeLogIdleFallback(
+  cliId: string,
   ctx: { startedAt?: number | null; completedAt?: number | null; source: string; sourceModifiedAt?: number | null } | null,
   screen: { lines: string[]; rows: number; cursorRow: number; cursorCol: number } | null,
   quietSince: number | null, lastSubmit: number, pending: boolean, now = Date.now(),
 ): boolean {
   if (!ctx?.startedAt || ctx.completedAt || !ctx.sourceModifiedAt || now - ctx.sourceModifiedAt < AGY_IDLE_FALLBACK_MS || ctx.source.startsWith("agy:") || ctx.source.startsWith("pty:") || quietSince === null || quietSince < ctx.startedAt) return false;
-  return idleScreenFallback("antigravity", screen, quietSince, lastSubmit, pending, now);
+  return idleScreenFallback(cliId, screen, quietSince, lastSubmit, pending, now);
+}
+
+export function agyIdleFallback(
+  ctx: Parameters<typeof activeLogIdleFallback>[1],
+  screen: Parameters<typeof activeLogIdleFallback>[2],
+  quietSince: number | null, lastSubmit: number, pending: boolean, now = Date.now(),
+): boolean {
+  return activeLogIdleFallback("antigravity", ctx, screen, quietSince, lastSubmit, pending, now);
 }
 export const STUCK_AFTER_MS = 15_000;
 export const ECHO_WINDOW_MS = 1_500;

@@ -160,7 +160,7 @@ mod submission_tests {
     }
 
     #[test]
-    fn agy_resumed_log_requires_unique_agent_identity() {
+    fn agy_old_log_is_not_identified_by_agent_name() {
         let root = std::env::temp_dir().join(format!("agentrix-agy-resume-{}", uuid::Uuid::new_v4()));
         let dir = root.join("log").join(".system_generated").join("logs");
         std::fs::create_dir_all(&dir).unwrap();
@@ -168,13 +168,13 @@ mod submission_tests {
         let first = serde_json::json!({"type":"USER_INPUT", "created_at":(chrono::Utc::now()-chrono::Duration::hours(1)).to_rfc3339(), "content":".ai-agents/agents/prism/ROLE.md"});
         std::fs::write(&path, format!("{first}\n")).unwrap();
         let started = chrono::Utc::now() - chrono::Duration::minutes(1);
-        assert_eq!(antigravity_with_agent(&root, started, &[], Some(("prism", "Prism"))).unwrap().source, path.to_string_lossy());
+        assert_eq!(antigravity_with_agent(&root, started, &[], Some(("prism", "Prism"))).unwrap().source, "agy:no-log");
         assert_eq!(antigravity_with_agent(&root, started, &[], Some(("other", "Other"))).unwrap().source, "agy:no-log");
         assert_eq!(antigravity_with_agent(&root, started, &[path.to_string_lossy().into_owned()], Some(("prism", "Prism"))).unwrap().source, "agy:no-log");
         let other_dir = root.join("other").join(".system_generated").join("logs");
         std::fs::create_dir_all(&other_dir).unwrap();
         std::fs::write(other_dir.join("transcript.jsonl"), format!("{first}\n")).unwrap();
-        assert_eq!(antigravity_with_agent(&root, started, &[], Some(("prism", "Prism"))).unwrap().source, "agy:ambiguous");
+        assert_eq!(antigravity_with_agent(&root, started, &[], Some(("prism", "Prism"))).unwrap().source, "agy:no-log");
         std::fs::remove_dir_all(root).unwrap();
     }
 }
@@ -216,7 +216,8 @@ pub fn read_context_with_agent(
     let started = DateTime::parse_from_rfc3339(started_at).ok()?.with_timezone(&Utc);
     let home = crate::cli::home_dir();
     match cli_id {
-        "claude" => claude(&home.join(".claude").join("projects"), session_id),
+        "claude" => claude(&home.join(".claude").join("projects"), session_id)
+            .filter(|context| !claimed.contains(&context.source)),
         "codex" => codex(&home.join(".codex").join("sessions"), cwd, started, claimed),
         "antigravity" => antigravity_with_agent(&home.join(".gemini").join("antigravity-cli").join("brain"), started, claimed, agent),
         "opencode" => opencode(&home.join(".local").join("share").join("opencode").join("opencode.db"), cwd, started, claimed),
@@ -224,7 +225,7 @@ pub fn read_context_with_agent(
     }
 }
 
-fn same_dir(a: &str, b: &str) -> bool {
+pub(crate) fn same_dir(a: &str, b: &str) -> bool {
     let norm = |s: &str| s.replace('/', "\\").trim_end_matches('\\').to_lowercase();
     norm(a) == norm(b)
 }
@@ -391,6 +392,7 @@ fn codex(sessions: &Path, cwd: &str, started: DateTime<Utc>, claimed: &[String])
             best = Some((ts, path, content));
         }
     }
+    if matches != 1 { return None; }
     let (_, path, content) = best?;
     let (tokens, window) = codex_last_context(&content)?;
     Some(ContextUsage { tokens, window, source: path.to_string_lossy().into(), completed_at: if matches == 1 { codex_completion(&content) } else { None }, started_at: if matches == 1 { turn_started(&content, "codex") } else { None }, source_modified_at: file_modified_at(&path) })
@@ -504,7 +506,7 @@ fn antigravity_with_agent(brain: &Path, started: DateTime<Utc>, claimed: &[Strin
             });
             (!id.is_empty() && text.contains(&role_path)) || named_header
         } else { false };
-        if ts < started - chrono::Duration::seconds(10) && !identified_agent { continue; }
+        if ts < started - chrono::Duration::seconds(10) { continue; }
         matches += 1;
         if identified_agent {
             identified_count += 1;
@@ -668,6 +670,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn codex_recently_modified_old_rollout_is_not_a_new_session() {
+        let root = std::env::temp_dir().join(format!("agentrix-old-rollout-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let now = Utc::now();
+        let old = (now - chrono::Duration::days(3)).to_rfc3339();
+        let path = root.join("old.jsonl");
+        let meta = serde_json::json!({"type":"session_meta","payload":{"cwd":"C:/project","timestamp":old}});
+        let usage = serde_json::json!({"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":42}}}});
+        std::fs::write(path, format!("{meta}\n{usage}\n")).unwrap();
+        assert!(codex(&root, "C:/project", now, &[]).is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn codex_busy_state_is_available_after_other_log_is_claimed() {
         let root = std::env::temp_dir().join(format!("agentrix-context-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
@@ -681,7 +697,7 @@ mod tests {
         let second = root.join("second.jsonl");
         std::fs::write(&first, &log).unwrap();
         std::fs::write(&second, &log).unwrap();
-        assert!(codex(&root, "C:/project", now, &[]).unwrap().started_at.is_none());
+    assert!(codex(&root, "C:/project", now, &[]).is_none());
         let result = codex(&root, "C:/project", now, &[first.to_string_lossy().into_owned()]).unwrap();
         assert!(result.started_at.is_some());
         assert!(result.completed_at.is_none());

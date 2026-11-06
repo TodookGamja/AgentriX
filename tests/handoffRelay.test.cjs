@@ -67,12 +67,12 @@ test("handoff continue prompts differ for manual vs auto relay", () => {
   assert.ok(auto.endsWith("\r"));
 });
 
-test("App remaps split slots; manual injects continue prompt, auto marks hint", () => {
+test("App remaps split slots; manual and auto send continue prompt via queue path", () => {
   const app = fs.readFileSync("src/App.tsx", "utf8");
   assert.match(app, /remapSplitSlotsAfterRelay\(prev, targetSession\.id, newSession\.id\)/);
   assert.match(app, /apiSaveSessionHandoff\(targetSession\.cwd, "SESSION_HANDOFF\.md"/);
-  assert.match(app, /apiWriteToSession\(newSession\.id, handoffContinuePrompt\(true\),\s*true\)/);
-  assert.match(app, /markHandoffHint\(newSession\.id\)/);
+  assert.match(app, /sendToIdleTeamSession\(newSession, handoffContinuePrompt\(true\)/);
+  assert.doesNotMatch(app, /markHandoffHint\(newSession\.id\)/);
   assert.match(fs.readFileSync("src/lib/tauriBridge.ts", "utf8"), /applyHandoffHint\(sessionId, data\)/);
 });
 

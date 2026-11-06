@@ -16,9 +16,76 @@ use uuid::Uuid;
 const HEADROOM_LAUNCH_INTERVAL: Duration = Duration::from_secs(2);
 const HEADROOM_PROXY_PORT: u16 = 8788;
 static LAST_HEADROOM_LAUNCH: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
+static HEADROOM_SUPERVISOR: OnceLock<()> = OnceLock::new();
 
 fn headroom_launch_delay(last: Option<Instant>, now: Instant) -> Duration {
-    last.map_or(Duration::ZERO, |last| HEADROOM_LAUNCH_INTERVAL.saturating_sub(now.saturating_duration_since(last)))
+    last.map_or(Duration::ZERO, |last| (last + HEADROOM_LAUNCH_INTERVAL).saturating_duration_since(now))
+}
+
+fn reserve_headroom_launch(lock: &Mutex<Option<Instant>>, now: Instant) -> Result<Duration, String> {
+    let mut guard = lock.lock().map_err(|e| e.to_string())?;
+    let delay = headroom_launch_delay(*guard, now);
+    *guard = Some(now + delay);
+    Ok(delay)
+}
+
+fn headroom_binary() -> Option<std::path::PathBuf> {
+    let local = crate::cli::home_dir().join(".local").join("bin").join(if cfg!(windows) { "headroom.exe" } else { "headroom" });
+    if local.is_file() { return Some(local); }
+    crate::cli::resolve_cli_binary("headroom", &[if cfg!(windows) { "headroom.exe" } else { "headroom" }.into()], &std::env::var("PATH").unwrap_or_default())
+}
+
+fn start_headroom_supervisor(binary: std::path::PathBuf) {
+    HEADROOM_SUPERVISOR.get_or_init(|| {
+        // shortcut: a supervised proxy can outlive app exit; add process-lifetime ownership when app shutdown is managed.
+        std::thread::spawn(move || supervise_headroom(binary, HEADROOM_PROXY_PORT, Arc::new(std::sync::atomic::AtomicBool::new(false))));
+    });
+}
+
+fn stop_headroom_child(mut process: std::process::Child) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let _ = std::process::Command::new("taskkill").args(["/PID", &process.id().to_string(), "/T", "/F"]).creation_flags(0x08000000).output();
+    }
+    let _ = process.kill();
+    let _ = process.wait();
+}
+
+fn supervise_headroom(binary: std::path::PathBuf, port: u16, stop: Arc<std::sync::atomic::AtomicBool>) {
+            let address = ([127, 0, 0, 1], port).into();
+            let mut child: Option<std::process::Child> = None;
+            let mut launched = Instant::now();
+            let mut ready = false;
+            let mut unavailable_since = None;
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                if !wait_for_headroom_proxy(address, Duration::from_millis(250)) {
+                    let unavailable = *unavailable_since.get_or_insert_with(Instant::now);
+                    if child.as_mut().is_some_and(|p| p.try_wait().ok().flatten().is_some()) { child = None; }
+                    if child.is_some() && ((!ready && launched.elapsed() >= Duration::from_secs(10)) || (ready && unavailable.elapsed() >= Duration::from_secs(2))) {
+                        if let Some(process) = child.take() { stop_headroom_child(process); }
+                    }
+                    if child.is_none() {
+                        let mut command = std::process::Command::new(&binary);
+                        command.args(["proxy", "--port", &port.to_string()])
+                            .current_dir(crate::cli::safe_helper_cwd())
+                            .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+                        #[cfg(windows)]
+                        {
+                            use std::os::windows::process::CommandExt;
+                            command.creation_flags(0x08000000);
+                        }
+                        child = command.spawn().ok();
+                        launched = Instant::now();
+                        ready = false;
+                    }
+                } else {
+                    ready = true;
+                    unavailable_since = None;
+                }
+                std::thread::sleep(Duration::from_millis(500));
+            }
+            if let Some(process) = child { stop_headroom_child(process); }
 }
 
 fn wait_for_headroom_proxy(address: SocketAddr, timeout: Duration) -> bool {
@@ -469,23 +536,22 @@ impl PtyManager {
                 env_injected_keys.push(k.clone());
             }
         }
+        configure_agy_updater(&mut cmd, &cli_def.id);
         env_injected_keys.sort();
 
-        let mut launch_guard = if initial_command.as_deref() == Some("__WRAPPER__") {
-            let guard = LAST_HEADROOM_LAUNCH.get_or_init(|| Mutex::new(None)).lock().map_err(|e| e.to_string())?;
-            if guard.is_some() && !wait_for_headroom_proxy(([127, 0, 0, 1], HEADROOM_PROXY_PORT).into(), Duration::from_secs(60)) {
-                return Err("Headroom 프록시가 60초 안에 준비되지 않아 세션을 시작하지 못했습니다.".into());
+        if initial_command.as_deref() == Some("__WRAPPER__") {
+            let binary = headroom_binary().ok_or("Headroom 실행 파일을 찾을 수 없습니다.")?;
+            start_headroom_supervisor(binary);
+            if !wait_for_headroom_proxy(([127, 0, 0, 1], HEADROOM_PROXY_PORT).into(), Duration::from_secs(8)) {
+                return Err("Headroom 프록시가 준비되지 않아 세션을 시작하지 못했습니다. 잠시 후 다시 시도해 주세요.".into());
             }
-            std::thread::sleep(headroom_launch_delay(*guard, Instant::now()));
-            Some(guard)
-        } else {
-            None
-        };
-        let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
-        if let Some(guard) = &mut launch_guard {
-            **guard = Some(Instant::now());
+            let delay = reserve_headroom_launch(LAST_HEADROOM_LAUNCH.get_or_init(|| Mutex::new(None)), Instant::now())?;
+            std::thread::sleep(delay);
+            if !wait_for_headroom_proxy(([127, 0, 0, 1], HEADROOM_PROXY_PORT).into(), Duration::from_secs(8)) {
+                return Err("Headroom 프록시 연결이 끊어져 세션을 시작하지 못했습니다. 잠시 후 다시 시도해 주세요.".into());
+            }
         }
-        drop(launch_guard);
+        let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
         drop(pair.slave);
 
         let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
@@ -730,6 +796,10 @@ fn is_claude_session_marker(key: &str) -> bool {
         "CLAUDE_CODE_MESSAGING_TOKEN",
         "CLAUDE_PID",
     ].iter().any(|marker| key.eq_ignore_ascii_case(marker))
+}
+
+fn configure_agy_updater(command: &mut CommandBuilder, cli_id: &str) {
+    if cli_id == "antigravity" { command.env("AGY_CLI_DISABLE_AUTO_UPDATE", "true"); }
 }
 
 fn configure_codex_resume(cli: &mut CliDefinition, resume_id: Option<&str>) {
@@ -986,6 +1056,16 @@ fn build_platform_command(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn agy_sessions_disable_background_updater() {
+        let mut agy = portable_pty::CommandBuilder::new("agy");
+        super::configure_agy_updater(&mut agy, "antigravity");
+        assert_eq!(agy.get_env("AGY_CLI_DISABLE_AUTO_UPDATE"), Some(std::ffi::OsStr::new("true")));
+        let mut other = portable_pty::CommandBuilder::new("other");
+        other.env_remove("AGY_CLI_DISABLE_AUTO_UPDATE");
+        super::configure_agy_updater(&mut other, "codex");
+        assert_eq!(other.get_env("AGY_CLI_DISABLE_AUTO_UPDATE"), None);
+    }
     #[test]
     fn exited_pty_is_removed_and_live_pty_stays_until_closed() {
         let mgr = super::PtyManager::default();
@@ -1338,6 +1418,33 @@ mod tests {
         assert_eq!(headroom_launch_delay(Some(now), now), HEADROOM_LAUNCH_INTERVAL);
         assert_eq!(headroom_launch_delay(Some(now), now + Duration::from_millis(750)), Duration::from_millis(1250));
         assert_eq!(headroom_launch_delay(Some(now), now + HEADROOM_LAUNCH_INTERVAL), Duration::ZERO);
+        assert_eq!(headroom_launch_delay(Some(now + HEADROOM_LAUNCH_INTERVAL), now), HEADROOM_LAUNCH_INTERVAL * 2);
+    }
+
+    #[test]
+    fn waiting_for_headroom_launch_does_not_hold_the_reservation_lock() {
+        let now = Instant::now();
+        let lock = Mutex::new(Some(now));
+        assert_eq!(reserve_headroom_launch(&lock, now).unwrap(), Duration::from_secs(2));
+        assert!(lock.try_lock().is_ok());
+        assert_eq!(reserve_headroom_launch(&lock, now).unwrap(), Duration::from_secs(4));
+    }
+
+    #[test]
+    #[ignore = "requires isolated Headroom installation and home"]
+    fn headroom_supervisor_recovers_when_existing_proxy_disappears() {
+        let binary = std::env::var_os("FORGE_TEST_HEADROOM").expect("test binary");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let thread_stop = stop.clone();
+        let supervisor = std::thread::spawn(move || super::supervise_headroom(binary.into(), addr.port(), thread_stop));
+        assert!(wait_for_headroom_proxy(addr, Duration::from_secs(1)));
+        drop(listener);
+        let recovered = wait_for_headroom_proxy(addr, Duration::from_secs(8));
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        supervisor.join().unwrap();
+        assert!(recovered, "proxy did not recover within the session startup timeout");
     }
 
     #[test]

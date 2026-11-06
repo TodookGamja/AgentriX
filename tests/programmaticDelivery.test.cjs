@@ -258,5 +258,5 @@ test("T23: workRestarted aborts relay before and after start_session; role prefi
   assert.match(app, /if \(workRestarted\(\)\) \{ relayedSessionsRef\.current\.delete\(sessionId\); return; \}/);
   assert.match(app, /if \(workRestarted\(\)\) \{\s*await apiStopSession\(newSession\.id\);/s);
   assert.match(app, /markRolePrefix\(newSession\.id/);
-  assert.match(app, /markHandoffHint\(newSession\.id\)/);
+  assert.match(app, /sendToIdleTeamSession\(newSession, handoffContinuePrompt\(true\)/);
 });

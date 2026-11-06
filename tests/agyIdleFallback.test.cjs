@@ -6,6 +6,36 @@ const ts = require("typescript");
 const api = {};
 vm.runInNewContext(ts.transpileModule(fs.readFileSync("src/lib/deliveryGate.ts", "utf8"), { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, { exports: api });
 
+test("active transcript falls back only for a stable idle screen", () => {
+  const ctx = { startedAt: 100, completedAt: null, source: "transcript.jsonl", sourceModifiedAt: 200 };
+  for (const [cli, lines] of [["antigravity", ["> ", "? for shortcuts   Gemini"]], ["claude", ["❯", "? for shortcuts"]], ["codex", ["›", "gpt-5.1-codex"]], ["cursor", ["→", "ready"]]]) {
+    const screen = { lines, rows: 10, cursorRow: 8, cursorCol: 1 };
+    assert.equal(api.activeLogIdleFallback(cli, ctx, screen, 200, 150, false, 60_200), true, cli);
+    assert.equal(api.activeLogIdleFallback(cli, { ...ctx, sourceModifiedAt: 201 }, screen, 200, 150, false, 60_200), false, cli);
+    assert.equal(api.activeLogIdleFallback(cli, ctx, screen, null, 150, false, 60_200), false, cli);
+    assert.equal(api.activeLogIdleFallback(cli, ctx, { ...screen, lines: ["Working...", ...lines], rows: 11, cursorRow: 9 }, 200, 150, false, 60_200), false, cli);
+    assert.equal(api.activeLogIdleFallback(cli, ctx, screen, 200, 150, true, 60_200), false, cli);
+  }
+});
+
+test("resumed agy without a transcript can fall back to a quiet idle screen", () => {
+  const screen = { lines: ["> ", "? for shortcuts"], rows: 10, cursorRow: 8, cursorCol: 1 };
+  assert.equal(api.agyMissingContextFallback("agy:unavailable_no_log", "agy:unavailable_no_log", screen, 200, 150, false, 60_200), true);
+  const app = fs.readFileSync("src/App.tsx", "utf8");
+  assert.match(app, /session\.resumed\)\).*agyUnresolved/s);
+  assert.match(app, /context_\$\{contextKind\}/);
+  assert.match(app, /"lookup_failed"/);
+});
+
+test("two codex sessions without attributable logs can use a quiet idle screen", () => {
+  const screen = { lines: ["›", "gpt-5.1-codex"], rows: 10, cursorRow: 8, cursorCol: 1 };
+  assert.equal(api.idleScreenFallback("codex", screen, 200, 150, false, 60_200), true);
+  assert.equal(api.idleScreenFallback("codex", screen, 200, 150, true, 60_200), false);
+  const app = fs.readFileSync("src/App.tsx", "utf8");
+  assert.match(app, /\["claude", "codex", "cursor"\]\.includes\(session\.cliId\) && !ctx/);
+  assert.match(app, /screen:\$\{session\.cliId\}:\$\{session\.id\}/);
+});
+
 test("missing agy context allows only a stable idle screen without unresolved delivery", () => {
   const screen = { lines: ["finished", "> ", "? for shortcuts"], rows: 20, cursorRow: 18, cursorCol: 2 };
   const ready = (source, latest, s = screen, pending = false) => api.agyMissingContextFallback(source, latest, s, 200, 150, pending, 60_200);

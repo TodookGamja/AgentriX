@@ -736,7 +736,13 @@ async fn check_npm_cli_updates() -> Result<serde_json::Value, String> {
             serde_json::from_slice(&output.stdout).map_err(|e| format!("npm 결과 확인 실패: {e}"))?
         };
         if let Some(error) = parsed.get("error") { return Err(format!("npm 오류: {error}")); }
-        Ok(npm_cli_updates(&parsed))
+        let mut updates = npm_cli_updates(&parsed);
+        if let Some(binary) = agy_update_binary() {
+            if let Some((current, latest)) = agy_available_update(&binary)? {
+                updates["agy"] = serde_json::json!({ "current": current, "latest": latest });
+            }
+        }
+        Ok(updates)
     }).await.map_err(|e| e.to_string())?
 }
 
@@ -744,6 +750,12 @@ const NPM_CLIS: [&str; 5] = ["@openai/codex", "@anthropic-ai/claude-code", "open
 
 #[tauri::command]
 async fn install_npm_cli_update(package: String) -> Result<(), String> {
+    if package == "agy" {
+        return tauri::async_runtime::spawn_blocking(|| {
+            let binary = agy_update_binary().ok_or("agy 실행 파일을 찾을 수 없습니다")?;
+            agy_update_command(&binary, "update").map(|_| ())
+        }).await.map_err(|e| e.to_string())?;
+    }
     if !NPM_CLIS.contains(&package.as_str()) {
         return Err("지원하지 않는 npm CLI입니다.".into());
     }
@@ -767,6 +779,67 @@ async fn install_npm_cli_update(package: String) -> Result<(), String> {
         }
         Ok(())
     }).await.map_err(|e| e.to_string())?
+}
+
+fn agy_update_binary() -> Option<String> {
+    cli::detect_clis().into_iter().find(|c| c.id == "antigravity")?.resolved_binary
+}
+
+fn agy_update_command(binary: &str, arg: &str) -> Result<String, String> {
+    let dir = std::env::temp_dir().join(format!("agentrix-agy-update-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let mut command = std::process::Command::new(binary);
+    command.arg(arg).current_dir(cli::safe_helper_cwd())
+        .env("HOME", &dir).env("USERPROFILE", &dir)
+        .env("AGY_CLI_DISABLE_AUTO_UPDATE", "true");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    let result = command.output().map_err(|e| e.to_string()).and_then(|out| {
+        if out.status.success() { Ok(String::from_utf8_lossy(&out.stdout).trim().to_string()) }
+        else { Err(format!("agy {arg} 실패: {}", String::from_utf8_lossy(&out.stderr))) }
+    });
+    let _ = std::fs::remove_dir_all(&dir);
+    result
+}
+
+fn agy_available_update(binary: &str) -> Result<Option<(String, String)>, String> {
+    let current = agy_update_command(binary, "--version")?;
+    let response = ureq::get("https://antigravity-cli-auto-updater-974169037036.us-central1.run.app")
+        .timeout(std::time::Duration::from_secs(10)).call().map_err(|e| e.to_string())?
+        .into_string().map_err(|e| e.to_string())?;
+    agy_update_from_response(current, &response)
+}
+
+fn agy_update_from_response(current: String, response: &str) -> Result<Option<(String, String)>, String> {
+    let latest = response.split("Stable Version: ").nth(1).and_then(|s| s.split_whitespace().next())
+        .map(|s| s.trim_end_matches('.')).ok_or("agy 최신 버전을 확인할 수 없습니다")?;
+    let parse = |version: &str| -> Option<Vec<u64>> {
+        let parts: Option<Vec<_>> = version.split('.').map(|part| part.parse().ok()).collect();
+        parts.filter(|p| p.len() == 3)
+    };
+    let installed = parse(&current).ok_or("agy 설치 버전을 확인할 수 없습니다")?;
+    let available = parse(latest).ok_or("agy 최신 버전 형식이 올바르지 않습니다")?;
+    Ok((available > installed).then(|| (current, latest.to_string())))
+}
+
+#[test]
+fn agy_update_checks_versions_and_rejects_unexpected_response() {
+    let response = "Antigravity CLI auto updater is running! Stable Version: 1.5.1. Rolled out to 100%";
+    assert_eq!(agy_update_from_response("1.5.0".into(), response).unwrap(), Some(("1.5.0".into(), "1.5.1".into())));
+    assert_eq!(agy_update_from_response("1.5.1".into(), response).unwrap(), None);
+    assert!(agy_update_from_response("1.5.1".into(), "service unavailable").is_err());
+}
+
+#[test]
+#[ignore = "manual isolated copy of agy required"]
+fn agy_update_isolated_probe() {
+    let binary = std::env::var("FORGE_T21_PROBE_AGY").expect("isolated agy copy");
+    assert!(!agy_update_command(&binary, "--version").unwrap().is_empty());
+    assert!(agy_available_update(&binary).is_ok());
+    assert!(!agy_update_command(&binary, "update").unwrap().is_empty());
 }
 
 fn npm_cli_updates(parsed: &serde_json::Value) -> serde_json::Value {
@@ -1133,7 +1206,6 @@ fn trust_project_folder(state: State<'_, AppState>, project_path: String) -> Res
 #[tauri::command]
 async fn session_user_message_submitted(state: State<'_, AppState>, session_id: String, body: String, after: i64, claimed: Option<Vec<String>>, expected_source: Option<String>) -> Result<bool, String> {
     let pty = state.pty.clone();
-    let db = state.db.clone();
     tokio::task::spawn_blocking(move || {
         let Some(session) = pty.list_sessions().into_iter().find(|s| s.id == session_id) else { return false; };
         let home = crate::cli::home_dir();
@@ -1142,16 +1214,20 @@ async fn session_user_message_submitted(state: State<'_, AppState>, session_id: 
                 let Ok(id) = uuid::Uuid::parse_str(&session.id) else { return false; };
                 let projects = home.join(".claude").join("projects");
                 std::fs::read_dir(projects).ok().and_then(|entries| entries.flatten().map(|e| e.path().join(format!("{id}.jsonl"))).find(|p| p.is_file()))
+                    .filter(|path| !claimed.as_deref().unwrap_or(&[]).contains(&path.to_string_lossy().into_owned()))
             }
             "codex" => {
                 let sessions = home.join(".codex").join("sessions");
-                let id = pty.resumed_cli_id(&session_id).or_else(|| {
-                    let agent_id = session.agent_id.as_ref()?;
-                    let conn = db.lock().ok()?;
-                    let saved = db::get_agent_cli_session(&conn, agent_id, "codex").ok()??;
-                    context::saved_codex_log_in_use(&sessions, &session.cwd, &saved, &session.started_at)
-                });
-                id.and_then(|id| context::codex_log_for_session(&sessions, &session.cwd, &id))
+                let claimed = claimed.as_deref().unwrap_or(&[]);
+                if let Some(id) = pty.resumed_cli_id(&session_id) {
+                    context::codex_log_for_session(&sessions, &session.cwd, &id)
+                        .filter(|path| !claimed.contains(&path.to_string_lossy().into_owned()))
+            } else if has_competing_session(&pty.list_sessions(), &session) {
+                None
+            } else {
+                    context::read_context("codex", &session_id, &session.cwd, &session.started_at, claimed)
+                        .map(|ctx| std::path::PathBuf::from(ctx.source))
+                }
             }
             "antigravity" => {
                 expected_source.and_then(|expected| context::read_context_with_agent("antigravity", &session_id, &session.cwd, &session.started_at, claimed.as_deref().unwrap_or(&[]), session.agent_id.as_deref().zip(session.agent_name.as_deref()))
@@ -1178,16 +1254,16 @@ async fn get_session_context(
     tokio::task::spawn_blocking(move || {
         let codex_dir = crate::cli::home_dir().join(".codex").join("sessions");
         let resumed = if cli_id == "codex" {
-            pty.resumed_cli_id(&session_id).or_else(|| {
-                let agent_id = pty.list_sessions().into_iter().find(|s| s.id == session_id)?.agent_id?;
-                let conn = db.lock().ok()?;
-                let saved = db::get_agent_cli_session(&conn, &agent_id, "codex").ok()??;
-                drop(conn);
-                context::saved_codex_log_in_use(&codex_dir, &cwd, &saved, &started_at)
-            })
+            pty.resumed_cli_id(&session_id)
         } else { None };
+        let current = pty.list_sessions().into_iter().find(|s| s.id == session_id);
+        let competing = current.as_ref().is_some_and(|s| has_competing_session(&pty.list_sessions(), s));
         let result = if let Some(id) = resumed {
-            context::codex_log_for_session(&codex_dir, &cwd, &id).and_then(|path| context::read_codex_session(&path))
+            context::codex_log_for_session(&codex_dir, &cwd, &id)
+                .filter(|path| !claimed.contains(&path.to_string_lossy().into_owned()))
+                .and_then(|path| context::read_codex_session(&path))
+        } else if cli_id == "codex" && competing {
+            None
         } else if cli_id == "antigravity" {
             let session = pty.list_sessions().into_iter().find(|s| s.id == session_id);
             let agent = session.as_ref().and_then(|s| s.agent_id.as_deref().zip(s.agent_name.as_deref()));
@@ -1219,6 +1295,11 @@ async fn get_session_context(
     })
         .await
         .map_err(|e| e.to_string())?
+}
+
+fn has_competing_session(sessions: &[SessionInfo], current: &SessionInfo) -> bool {
+    sessions.iter().any(|other| other.id != current.id && other.cli_id == current.cli_id
+        && context::same_dir(&other.cwd, &current.cwd))
 }
 
 /// 로그로 턴 종료를 못 읽는 CLI용: 터미널 출력이 10초 멈춘 시각 (팀 배정 유휴 판정)
@@ -1423,6 +1504,21 @@ fn headroom_command(command: Option<String>, enabled: bool) -> Option<String> {
 #[cfg(test)]
 mod headroom_launch_tests {
     use super::headroom_command;
+
+    #[test]
+    fn same_folder_codex_sessions_are_competing_even_before_a_second_log_exists() {
+        let session = |id: &str, cwd: &str, cli: &str| super::SessionInfo {
+            id: id.into(), cli_id: cli.into(), name: String::new(), binary_path: String::new(),
+            cwd: cwd.into(), status: String::new(), env_injected: vec![], started_at: String::new(),
+            agent_id: None, agent_name: None, agent_role: None, agent_emoji: None,
+            role_prompt: None, role_in_system: false, resumed: false,
+        };
+        let a = session("a", "C:/project", "codex");
+        let b = session("b", "c:\\project", "codex");
+        assert!(super::has_competing_session(&[a.clone(), b], &a));
+        assert!(!super::has_competing_session(&[a.clone(), session("b", "C:/other", "codex")], &a));
+        assert!(!super::has_competing_session(&[a.clone(), session("b", "C:/project", "claude")], &a));
+    }
 
     #[test]
     fn agy_missing_log_after_input_is_unavailable_not_a_fresh_session() {

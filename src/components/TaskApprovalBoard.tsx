@@ -12,7 +12,7 @@ import {
   upsertApproval,
   type TaskApproval,
 } from "../lib/taskApproval";
-import { idleStaleKeys } from "../lib/statusNudge";
+import { idleStaleKeys, nudgeCounts } from "../lib/statusNudge";
 import { recentDone } from "../lib/boardDone";
 import { alertDialog, confirmDialog } from "../lib/confirmDialog";
 import type { ProjectAgentRecord } from "../types/types";
@@ -151,7 +151,7 @@ export const TaskApprovalBoard: React.FC<TaskApprovalBoardProps> = ({ projectPat
               {notes[c.taskId]?.startsWith("대기:") ? notes[c.taskId] : c.waitReason}
             </div>
           )}
-          {c.resting && <div className="text-[11px] text-amber-300/80">팀원 쉬는 중 · 상태 미갱신</div>}
+          {c.resting && <div className="text-[11px] text-amber-300/80">팀원 쉬는 중 · 상태 미갱신{(nudgeCounts.get(`${c.agentId}:${c.taskId}`) ?? 0) > 0 && ` · 진행 요청 ${nudgeCounts.get(`${c.agentId}:${c.taskId}`)}회`}</div>}
           {tone.includes("rose") && (
             <div className="text-[11px] text-rose-300/80">
               사유: {approvals.find((a) => a.taskId === c.taskId && a.agentId === c.agentId)?.reason || "없음"}

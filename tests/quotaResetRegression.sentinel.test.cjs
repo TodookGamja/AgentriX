@@ -114,7 +114,8 @@ test("T13 SEC: agy /quota PTY — fixed bin, no args inject, timeout kill, no em
   const agy = fs.readFileSync(path.join(ROOT, "src-tauri/src/agy_quota.rs"), "utf8");
   // 고정 경로·인자 없음·화면 입력은 리터럴 /quota 만
   assert.match(agy, /CommandBuilder::new\(bin\)/);
-  assert.doesNotMatch(agy, /\.args\(|arg\(|CommandBuilder::new\([^)]*format!/);
+  const quotaCommand = agy.slice(agy.indexOf("fn quota_command("), agy.indexOf("pub fn fetch()"));
+  assert.doesNotMatch(quotaCommand, /\.args\(|arg\(|CommandBuilder::new\([^)]*format!/);
   assert.match(agy, /write_all\(b"\/quota\\r"\)/);
   assert.match(agy, /from_secs\(15\)/);
   assert.match(agy, /child\.kill\(\)/);

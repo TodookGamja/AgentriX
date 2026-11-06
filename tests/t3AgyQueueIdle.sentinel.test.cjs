@@ -130,7 +130,7 @@ test("T3/_4 Forge세부: USER_INPUT ROLE 고정·ambiguous 1회·미확인 UI·d
   assert.match(ctxRs, /antigravity_with_agent/);
   assert.match(ctxRs, /agy:ambiguous/);
   assert.match(app, /allowAgyRetry:\s*!\["agy:ambiguous", "agy:unavailable"\]\.includes\(ctx\.source\)/);
-  assert.match(app, /agyIdleFallback\(/);
+  assert.match(app, /activeLogIdleFallback\(/);
   assert.match(app, /idleScreenFallback\(session\.cliId/);
   // 미확인 수동 전송·삭제
   assert.match(pane, /전달 결과를 확인하지 못했습니다/);

@@ -184,7 +184,8 @@ test("SEC: helper/PTY/agy processes pin safe_helper_cwd; System32 startup is gua
   assert.match(tools, /crate::cli::safe_helper_cwd\(\)/);
   assert.match(usage, /crate::cli::safe_helper_cwd\(\)/);
   assert.match(agy, /command\.cwd\(cwd\)/);
-  assert.match(agy, /crate::cli::safe_helper_cwd\(\)/);
+  assert.match(agy, /let home = QuotaHome::new\(\)/);
+  assert.match(agy, /let cwd = home\.path\(\)/);
   assert.doesNotMatch(agy, /println!\([^)]*access_token|eprintln!\([^)]*Bearer|eprintln!\([^)]*access_token/);
 });
 

@@ -217,10 +217,10 @@ test("T4: 전달 보류는 delivery.log에 CLI·사유·로그 시작/종료 유
   assert.ok(src.includes("logSig = `_ctx${ctx ?"));
 });
 
-test("T8: resumed id 없는 Codex 세션도 저장된 대화 id의 로그로 ctx를 읽는다", () => {
+test("새 Codex 세션은 저장된 이전 대화 id로 폴백하지 않는다", () => {
   const src = require("node:fs").readFileSync("src-tauri/src/main.rs", "utf8").replace(/\r/g, "");
-  assert.ok(src.includes("pty.resumed_cli_id(&session_id).or_else("));
-  assert.ok(src.includes('context::saved_codex_log_in_use(&codex_dir, &cwd, &saved, &started_at)'));
+  assert.ok(!src.includes("pty.resumed_cli_id(&session_id).or_else("));
+  assert.ok(!src.includes('context::saved_codex_log_in_use(&codex_dir, &cwd, &saved, &started_at)'));
 });
 
 test("터미널 URL 클릭은 xterm 기본 경고 대신 외부 브라우저 열기를 쓴다", () => {
